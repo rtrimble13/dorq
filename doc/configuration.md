@@ -75,6 +75,33 @@ cohort_min_series = 3 # DQ303                          (global only)
 cohort_max_tail = 1e-06                              # (global only)
 confident_density = 0.95                             # (global only)
 
+[price]               # DQ2xx; see doc/checks/DQ201.md for the model
+candidate_tail_prob = 0.001  # score a bar whose return is this improbable,
+floor_move = 0.5      # and every move of 50% or more either way
+revert_max_bars = 5   # the longest bad print
+volume_window = 40    # bars either side for volume levels
+ratio_tolerance = 0.01
+split_ratios = ["2:1", "3:1", "3:2", "4:1", "5:1", "5:4", "8:1", "10:1", "15:1", "20:1",
+                "1:2", "1:3", "1:4", "1:5", "1:8", "1:10", "1:15", "1:20", "1:25", "1:30",
+                "1:40", "1:50", "1:100"]
+provisional_bars = 3  # fewer bars after one than this: provisional, at most warn
+segment_gap = 60      # DQ205
+volatility_discount = 0.97
+tail_dof = 4
+jump_prob = 0.03
+jump_scale = 6
+min_price = 1e-05     # prices outside [min_price, max_price] are implausible
+max_price = 1000000
+
+[priors]              # each explanation's prior weight for a scored bar
+market_move = 0.9
+bad_print = 0.05
+bad_close = 0.01
+unreported_split = 0.02
+scale_error = 0.02
+tick_move = 0.01
+history_segment = 0.05
+
 [severity]            # p_error -> severity, for the probabilistic checks
 info = 0.2            # below this, nothing is reported
 warn = 0.6
@@ -109,8 +136,8 @@ integrity = { positive_point_series = true }
 ```
 
 A profile's `select` and `ignore` entries are **added** to the global lists. Its
-`integrity` and `coverage` settings replace the global ones for the series it
-matches. The run-wide coverage keys (`report` and the cohort settings) can't be
+`integrity`, `coverage`, `price` and `priors` settings replace the global ones
+for the series it matches. The run-wide coverage keys (`report` and the cohort settings) can't be
 set per profile. When two
 profiles match the same series, they are applied in name order, so where they
 disagree the later name wins.
@@ -129,7 +156,8 @@ The options with the same meaning as a key above are `--select`, `--extend-selec
 - `--extend-select` and `--ignore` add to their lists.
 - A `--columns` field replaces that field's column.
 
-`--show-info` is `--min-severity info`. `--exit-zero` always exits 0. `--as-of
+`--show-info` is `--min-severity info`. `--show-evidence` adds each violation's
+suggested action, hypotheses and evidence to text output (doc/output.md). `--exit-zero` always exits 0. `--as-of
 DATE` sets the date DQ304 judges staleness against; by default it is the latest
 session with a bar anywhere in the input.
 

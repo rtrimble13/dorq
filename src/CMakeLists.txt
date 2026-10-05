@@ -22,6 +22,7 @@ add_library(
   checks/coverage.cpp
   checks/coverage_model.cpp
   checks/integrity.cpp
+  checks/price.cpp
   checks/registry.cpp
   cli/app.cpp
   config/config.cpp
@@ -39,8 +40,14 @@ add_library(
   io/reader.cpp
   engine/cross_section.cpp
   engine/engine.cpp
+  price/features.cpp
+  price/model.cpp
+  price/tick.cpp
   stats/hmm2.cpp
+  stats/nig.cpp
+  stats/robust.cpp
   stats/special.cpp
+  stats/student_t.cpp
   output/writer.cpp
   "${DORQ_BUILD_INFO_CPP}"
   "${DORQ_CHECK_DOCS_CPP}")

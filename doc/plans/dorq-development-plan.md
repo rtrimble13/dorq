@@ -1,7 +1,7 @@
 # Plan: dorq, a Bayesian data-quality linter for financial time series
 
 - Status: **accepted** (2026-10-05). The defaults in §10 are confirmed, and Q9 is answered. M0 is done
-  (PR #1), M1 is done (PR #2), and M2 is implemented and awaiting merge.
+  (PR #1), M1 is done (PR #2), M2 is done (PR #3), and M3 is implemented and awaiting merge.
 - Scope: this repository (the C++ CLI), plus one milestone of integration work in `rtrimble13/fafnir` (M7).
 - Status legend: ⬜ planned · 🔄 in progress · ✅ done (PR #) · ⏭ carried over · ✖ dropped (reason)
 
@@ -262,6 +262,26 @@ Every model below uses closed-form or online inference that costs O(n) per serie
 - Tick size, taken from `--meta` if given, otherwise inferred from the price level and date (1/16
   before 2001, then 0.01, then 0.0001 below $1).
 
+**As built in M3** (doc/checks/DQ201.md is the reference):
+
+- **The class prior is applied within the series.** A pre-pass across series
+  needs the input read twice, which stdin and streaming rule out. The class
+  default (by price level and dollar volume) is a fixed table, combined with the
+  series' own robust scale (the MAD of its returns), weighted as ten returns.
+  `dorq calibrate` (M6) will fit the table.
+- **Carry bars are not prices.** A zero-volume bar repeating the last close
+  records that nothing traded; the next trade's return spans all the sessions
+  since the last real one. Counting carry bars as zero returns understated thin
+  names' volatility and made their next trade look like a jump.
+- **Every ordinary move includes the bid-ask bounce**, 0.7 steps of the price
+  grid. The grid is the exchange's tick or the coarser grid most prices are
+  written on (a sub-dime stock quoted in cents). Without it, a one-tick move and
+  its bounce back on a 2-cent stock looked exactly like a bad print.
+- **Volatility is estimated both ways** (a forward and a backward discounted NIG,
+  clipped at 4 standard deviations), and a bar is judged against both sides,
+  leaving out the bar and the few after it. Ordinary returns are Student t with 4
+  degrees of freedom, scaled to the estimated variance.
+
 ### 4.2 Coverage: a two-state hidden Markov model (DQ301–DQ305)
 
 Take the calendar sessions in a series' window, from its first bar to its last (or to `--as-of` for
@@ -311,6 +331,14 @@ model:
   so results are held until the input ends and written in input order then (§5.3). Without them,
   output streams as before.
 
+**Changed in M3**, found by dorq-synth: the volume floor applies only where the
+counts already show a bar on 90% or more of nearby sessions (a thin name's
+2,000-share print is one trade, not two, and the floor had claimed thin names
+trade daily); EM starts from that same floored density rather than from volume
+alone; and a DQ301 run is downgraded for a cohort only when every session in it
+is a cohort date (a 222-session gap containing one failed-load date had been
+hidden).
+
 **Frequency** is inferred from the lower-quartile gap between dates, not the median. A daily name
 trading on a third of its sessions has a median gap of about five days, which read as weekly and
 flooded DQ305.
@@ -349,6 +377,40 @@ MILK, MSEP, NODE).
 **Default priors** (per candidate, before calibration): market_move 0.90, bad_print 0.05,
 unreported_split 0.02, scale_error 0.02, tick_move 0.01. With `--actions` present, explained_split is
 given 0.10, taken from market_move. `dorq calibrate` replaces these (§6).
+
+**As built in M3** (doc/checks/DQ201.md is the reference). Synthetic data
+(DR-0308) drove these changes:
+
+- **Two more hypotheses.** `bad_close` (only the close field is wrong; DQ204)
+  and `history_segment` (after `segment_gap` sessions without a bar; DQ205), each
+  with its own prior.
+- **The bars after a move are a term of every hypothesis.** A bad print's block
+  ends with a return that undoes it. A real move stirs volatility up (half the
+  time, by a quarter of its size, about √α of a GARCH model); a split, a scale
+  error or a bad print leaves the next bars calm. This replaced the plan's "level
+  holds" fraction, and took earnings-gap reversals off the false positives.
+- **A split's ratio prior depends on the price.** Companies split forward from
+  high prices and reverse-split from low ones: the share of forward splits rises
+  log-linearly from 5% at $5 to 95% at $40. Ratios are weighted by how often US
+  companies use them (2:1 most; 1:10, 1:5 and 1:20 among reverse splits). A split
+  or scale error is the clean ratio plus an ordinary return, with
+  `ratio_tolerance` (0.01, not 0.03) as slack.
+- **A scale error is a power of ten.** Its fallback for other ratios is weighted
+  0.001; an implausible price level carries that case through the
+  `plausible_level` term.
+- **Volume on the day rises with how surprising a real move is**, from none at 2
+  standard deviations to e times at 6, so a tick move on a quiet day is not
+  evidence of an error. The volume shift after a move uses the sampling noise of
+  the two medians, and the same drift (0.5 on the log scale) for every hypothesis
+  but a split (0.3); only their centres differ.
+- **Screening** also takes every bar after a gap of `segment_gap` sessions, and
+  every close outside a range that holds its open.
+- **DQ209** is a scored bar whose `p_error` is below the info threshold. Between
+  info and warn, the bar is reported at info under its error's code.
+- **Two opposite scale shifts** (both with `p_error` ≥ 0.5) are one DQ202 era.
+- **Configuration**: `hold_window` became `volume_window`, `clean_ratios` became
+  `split_ratios` (as "2:1" strings), and the priors table adds `bad_close` and
+  `history_segment`.
 
 ### 4.4 Stale values (DQ501)
 
@@ -389,7 +451,7 @@ frequency model for DQ305.
   | Number parsing | fast_float. libc++ (macOS) did not implement `std::from_chars` for floating point until LLVM 20, so it can't be relied on across the platforms dorq releases for |
   | JSON input and output | Neither library. Input records are flat objects of scalars, so a ~250-line parser (`src/io/json.cpp`, fuzzed) does the job, streams JSON Lines, and keeps each number's raw text so its written precision survives (DQ106 needs it). A library's DOM would have discarded that text. Output is written directly. *(Changed in M1; the plan had simdjson and nlohmann/json.)* |
   | TOML config | toml++, pinned past v3.4.0 to the commit fixing marzer/tomlplusplus#305 (undefined behaviour on some non-ASCII input), which dorq's config fuzzer found |
-  | Special functions (the t CDF, lgamma, incomplete beta) | Boost.Math, in its standalone header-only form |
+  | Special functions (the t CDF, lgamma, incomplete beta) | dorq's own (`src/stats/`): M2 needed the incomplete beta and gamma anyway, one implementation keeps results independent of the platform, and the C library's `lgamma` is not thread-safe. *(Changed in M2–M3; the plan had Boost.Math.)* |
   | Formatting | `std::to_chars` (shortest round-trip), with the macOS deployment target set to 13.3, the first release whose libc++ provides it. No {fmt}. *(Changed in M1.)* |
   | Tests and benchmarks | doctest, Google Benchmark |
 
@@ -405,8 +467,8 @@ dorq/
     cli/                   # main.cpp, subcommands, option parsing, exit codes
     io/                    # csv/jsonl readers, schema sniffing, column mapping; writers/{text,json,jsonl,csv,fafnir}
     core/                  # Series (structure of arrays), Calendar (XNYS rules + file), Config, Profile, Violation
-    stats/                 # student_t, nig_discounted, beta_binomial, hmm2, hampel, clean_ratio_mixture
-    features/              # per-series shared features (§4.1)
+    stats/                 # special, student_t, nig, robust, hmm2
+    price/                 # per-series features (§4.1), the price model (§4.3), tick sizes
     checks/                # registry.cpp + integrity/, price/, coverage/, volume/, stale/, cross/, actions/, point/
     engine/                # streaming runner, thread pool, two-pass cross-sectional coordinator, deterministic sort
   tests/  unit/  golden/  property/
@@ -474,9 +536,9 @@ error = 0.90
 candidate_tail_prob = 1e-3
 floor_move = 0.5               # always screen moves ≥ 50%, so dorq never misses what the old check caught
 revert_max_bars = 5
-hold_window = 40
-ratio_tolerance = 0.03
-clean_ratios = [2, 3, 4, 5, 8, 10, 15, 20, 25, 50, 100, 1.5, 1.25]
+volume_window = 40
+ratio_tolerance = 0.01
+split_ratios = ["2:1", "3:1", "3:2", "4:1", "1:5", "1:10", "1:20"]   # and more by default
 
 [tool.dorq.priors]             # replaced wholesale by `dorq calibrate` output via `include`
 market_move = 0.90
@@ -588,7 +650,7 @@ this plan depends on that timing.
 
 **Evaluation harness** (M6): `dorq-synth` together with the §6 label set.
 
-- `dorq-synth` generates t-GARCH and jump-diffusion series of realistic lengths and liquidity classes,
+- `dorq-synth` (built in M3; tools/synth/README.md) generates t-GARCH and jump-diffusion series of realistic lengths and liquidity classes,
   then injects labelled faults: spikes, scale eras, unreported and misdated splits, doubled splits,
   outages, stale runs, date shifts, precision shifts, and inherited ticker histories. It also injects
   "hard negatives" that should *not* be reported: earnings gaps, crash days, thin names, tick moves on
@@ -644,11 +706,11 @@ output formats, and the determinism test passes.
 ### M2: Calendar and coverage (v0.2.0)
 | ID | Item | Size | Status |
 |---|---|---|---|
-| DR-0201 | Built-in calendars (`XNYS` with NYSE holiday rules, MLK Day from 1998 and the unscheduled closures; `weekdays`; `24x7`). An optional reference file (`--calendar-file`, fafnir's `ref.trading_calendar` shape) decides within its span, and the built-in calendar answers outside it. `--calendar-exchange`. Tested year by year against fafnir's calendar for 1990–2035 | M | 🔄 awaiting merge |
-| DR-0202 | DQ105 (non-session bar; one summary violation past ten), DQ206 (date shift: multinomial weekday likelihood, shift ±1 vs aligned) | M | 🔄 awaiting merge |
-| DR-0203 | `stats/special` (log-gamma, incomplete beta and gamma, Beta quantile, Poisson tail, normal CDF) and `stats/hmm2` (forward-backward in log space), tested against SciPy values and brute-force path enumeration | M | 🔄 awaiting merge |
-| DR-0204 | DQ301 missing-run, DQ302 sparse-series, DQ304 stale-feed (publication lag; NAV lag via a profile), DQ305 frequency gap; frequency inferred per series | L | 🔄 awaiting merge |
-| DR-0205 | Cross-sectional pass: results held until the input ends; per-day expected/missing/healthy-miss accumulators; DQ303 cohort-gap by Poisson tail; members' DQ301/DQ304 downgraded and linked; series that stop count on their first missing session | M | 🔄 awaiting merge |
+| DR-0201 | Built-in calendars (`XNYS` with NYSE holiday rules, MLK Day from 1998 and the unscheduled closures; `weekdays`; `24x7`). An optional reference file (`--calendar-file`, fafnir's `ref.trading_calendar` shape) decides within its span, and the built-in calendar answers outside it. `--calendar-exchange`. Tested year by year against fafnir's calendar for 1990–2035 | M | ✅ PR #3 |
+| DR-0202 | DQ105 (non-session bar; one summary violation past ten), DQ206 (date shift: multinomial weekday likelihood, shift ±1 vs aligned) | M | ✅ PR #3 |
+| DR-0203 | `stats/special` (log-gamma, incomplete beta and gamma, Beta quantile, Poisson tail, normal CDF) and `stats/hmm2` (forward-backward in log space), tested against SciPy values and brute-force path enumeration | M | ✅ PR #3 |
+| DR-0204 | DQ301 missing-run, DQ302 sparse-series, DQ304 stale-feed (publication lag; NAV lag via a profile), DQ305 frequency gap; frequency inferred per series | L | ✅ PR #3 |
+| DR-0205 | Cross-sectional pass: results held until the input ends; per-day expected/missing/healthy-miss accumulators; DQ303 cohort-gap by Poisson tail; members' DQ301/DQ304 downgraded and linked; series that stop count on their first missing session | M | ✅ PR #3 |
 
 **Done when:** on a synthetic universe with thin names, liquid names, and one injected failed load
 date, DQ303 fires once, thin names produce no DQ301, and a single missing day on a liquid name does.
@@ -656,17 +718,23 @@ date, DQ303 fires once, thin names produce no DQ301, and a single missing day on
 ### M3: The price action model (v0.3.0), the core milestone
 | ID | Item | Size | Status |
 |---|---|---|---|
-| DR-0301 | `stats/student_t` (Boost.Math), `stats/nig_discounted`, `stats/hampel`, tick-size inference | M | ⬜ |
-| DR-0302 | Shared feature pass (§4.1), including class hyperpriors by empirical Bayes (the pre-pass) | L | ⬜ |
-| DR-0303 | Candidate screening with a floor at the old 50% rule | S | ⬜ |
-| DR-0304 | Hypothesis scoring: market_move, bad_print (k ≤ K), tick_move; the evidence-term API with log Bayes factors | L | ⬜ |
-| DR-0305 | The clean-ratio mixture, unreported_split vs scale_error with the inverse-volume evidence, the plausibility gate | L | ⬜ |
-| DR-0306 | DQ201–DQ205, DQ209; provisional handling of the newest bars; `suggested_action` | M | ⬜ |
-| DR-0307 | `--show-evidence` rendering in text; the `hypotheses` and `evidence` objects in JSON | S | ⬜ |
-| DR-0308 | `dorq-synth` v1 (faults used by M2 and M3) and a CI gate on minimum precision and recall per check | L | ⬜ |
+| DR-0301 | `stats/student_t` (dorq's own, over M2's incomplete beta; not Boost.Math), `stats/nig` (discounted Normal-Inverse-Gamma), `stats/robust` (median, MAD), tick size by era and price plus the grid prices are written on | M | 🔄 awaiting merge |
+| DR-0302 | Shared feature pass (§4.1): bars without carry bars, session-scaled returns, forward and backward volatility; the class prior combined with the series' own scale (within the series, not a cross-series pre-pass; see §4.1) | L | 🔄 awaiting merge |
+| DR-0303 | Candidate screening: tail probability, the 50% floor, long gaps, a close outside a range that holds the open | S | 🔄 awaiting merge |
+| DR-0304 | Hypothesis scoring: market_move, tick_move, bad_print (k ≤ K), bad_close, history_segment; evidence terms with log Bayes factors | L | 🔄 awaiting merge |
+| DR-0305 | The clean-ratio mixture (weighted by frequency and by price level), unreported_split vs scale_error by the volume shift, plausible price levels | L | 🔄 awaiting merge |
+| DR-0306 | DQ201–DQ205, DQ209; provisional handling of the newest bars; `suggested_action`; scale eras reported once | M | 🔄 awaiting merge |
+| DR-0307 | `--show-evidence` in text; `hypotheses`, `evidence`, `suggested_action` and `provisional` on every JSON record | S | 🔄 awaiting merge |
+| DR-0308 | `dorq-synth` v1 (faults used by M2 and M3, and hard negatives) and a CTest gate on precision and recall per check (`tools/synth/gates.txt`, seeds 1 and 2) | L | 🔄 awaiting merge |
 
 **Done when:** on `dorq-synth` data, DQ201 and DQ203 each reach precision ≥ 0.9 at `warn`, and the
 hard-negative set (earnings gaps, crash days, tick moves) produces no `warn`.
+
+**Result:** on seeds 1 and 2 (the CTest gate) DQ201 precision is 1.0 and 0.94,
+DQ203 1.0 and 1.0, with recall 1.0 and 0.94 or better; DQ202, DQ204 and DQ205 are
+at 1.0. No earnings gap or crash day is reported at warn on seeds 1–14, and one
+tick-series move on one seed (a penny stock's +51%/−49% over two bars). Thin
+names' spike-and-revert trades remain the ambiguous case: up to two per universe.
 
 ### M4: Volume, stale values, point series (v0.4.0)
 | ID | Item | Size | Status |

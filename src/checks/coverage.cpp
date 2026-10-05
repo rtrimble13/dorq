@@ -50,6 +50,9 @@ std::string format_probability(double p) {
   if (p > 0.995) {
     return ">0.99";
   }
+  if (p < 0.005) {
+    return "<0.01";
+  }
   const double rounded = std::round(p * 100.0) / 100.0;
   std::string text = format_number(rounded);
   if (text.find('.') == std::string::npos) {

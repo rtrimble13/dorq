@@ -86,8 +86,10 @@ class Engine {
   struct Settings {
     IntegritySettings integrity;
     CoverageSettings coverage;
+    PriceSettings price;
     std::vector<const Check*> checks;  // per-series checks to run
     bool coverage_model = false;       // a DQ30x check needs the coverage analysis
+    bool price_model = false;          // a DQ2xx price check needs the price analysis
     bool cohort = false;               // DQ303 enabled
     bool stale = false;                // DQ304 enabled
   };

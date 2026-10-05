@@ -20,17 +20,20 @@ data-quality process.
 
 ## Status
 
-**Pre-alpha: milestone M2 (calendar and coverage).** dorq reads CSV, TSV, JSON Lines
-and JSON arrays, and reports in five formats. It runs:
+**Pre-alpha: milestone M3 (the price action model).** dorq reads CSV, TSV, JSON
+Lines and JSON arrays, and reports in five formats. It runs:
 
 - the deterministic integrity checks (DQ1xx);
+- the Bayesian price action checks (DQ2xx): for each suspicious bar, a bad print,
+  a scale error, an unreported split, a bad close field, a new history after a
+  gap, or a real move;
 - the date-shift check (DQ206);
-- the first Bayesian checks: coverage (DQ3xx).
+- the Bayesian coverage checks (DQ3xx), which judge a missing session by how often
+  *this* series trades and report a failed load once rather than once per series.
 
-Coverage judges a missing session by how often *this* series trades, and reports
-a failed load once rather than once per series. The price-action models arrive
-in M3. The [development plan](doc/plans/dorq-development-plan.md) sets out what
-comes when.
+The volume, stale-value and point-series checks arrive in M4, and corporate
+actions, metadata and a market reference in M5. The
+[development plan](doc/plans/dorq-development-plan.md) sets out what comes when.
 
 ```console
 $ dorq tests/data/bad_bars.csv
@@ -58,6 +61,23 @@ The thin names' ordinary gaps aren't reported (`--show-info` shows them as
 DQ302 sparse-series notes). The 20 members of the failed load are downgraded to
 info, pointing at the cohort.
 
+On [dorq-synth](tools/synth/README.md)'s synthetic market, with faults injected
+among earnings gaps, a crash day, penny stocks moving a tick at a time and thin
+names:
+
+```console
+$ dorq --select DQ2 bars.csv
+LIQ01  2019-06-26  DQ201 error  bad-print  close 341.36 between 151.4 and 150.2 (×2.255, then back on the next bar); P(error) = >0.99  (line 1129)
+LIQ03  2022-01-07  DQ203 error  unreported-split  close 199.99→67 (×0.335 ≈ a 3:1 split), volume ×3.087 after; P(error) = >0.99  (line 5768)
+LIQ06  2020-08-24  DQ204 error  ohlc-close-mismatch  close 2.1 outside the bar's range 20.95..21.47, whose open 20.99 held the prior close 20.86; P(error) = >0.99  (line 11414)
+LIQ13  2020-04-30..2021-02-08  DQ202 error  scale-shift  closes 2020-04-30..2021-02-08 are ×0.0009734 the level either side (×0.001): an era at the wrong scale; P(error) = >0.99  (line 25323)
+THN02  2018-06-01  DQ205 error  history-segment  after 250 sessions without a bar, close 4.26→25 (×5.869): another security's history may continue here; P(error) = >0.99  (line 181756)
+...
+```
+
+`--show-evidence` adds the suggested repair, the competing explanations and the
+evidence for each: see [doc/output.md](doc/output.md).
+
 ## Usage
 
 ```bash
@@ -67,6 +87,7 @@ dorq --format jsonl --select DQ1 --ignore DQ106 a.csv b.jsonl
 dorq --show-info --statistics prices.csv     # info too, then counts per check
 dorq --calendar-file sessions.csv prices.csv # a reference calendar (default: built-in XNYS)
 dorq --as-of 2026-10-05 prices.csv           # judge staleness (DQ304) against a date
+dorq --show-evidence prices.csv              # repairs, hypotheses and evidence too
 dorq list-checks                             # every check, its severity and what it needs
 dorq explain DQ106                           # a check's full documentation
 dorq config show                             # the effective settings and their hash
@@ -92,7 +113,13 @@ including the `fafnir` format that maps onto `ops.data_quality_flag`.
 | [DQ105](doc/checks/DQ105.md) | non-session-bar | a bar on a day the calendar has no session |
 | [DQ106](doc/checks/DQ106.md) | precision-shift | computed (e.g. back-adjusted) prices among quoted ones |
 | [DQ107](doc/checks/DQ107.md) | zero-range-with-volume | a flat bar on the series' typical volume |
+| [DQ201](doc/checks/DQ201.md) | bad-print | a wrong bar, or block of up to five, that the series reverts from |
+| [DQ202](doc/checks/DQ202.md) | scale-shift | a level change by a power of ten (an era at the wrong scale) |
+| [DQ203](doc/checks/DQ203.md) | unreported-split | a level change by a split ratio, with volume moving inversely |
+| [DQ204](doc/checks/DQ204.md) | ohlc-close-mismatch | a wrong close in a bar whose open, high and low held the level |
+| [DQ205](doc/checks/DQ205.md) | history-segment | after a long gap, another security's history continuing |
 | [DQ206](doc/checks/DQ206.md) | date-shift | a history dated a day early or late |
+| [DQ209](doc/checks/DQ209.md) | large-move | info: a move that is probably real |
 | [DQ301](doc/checks/DQ301.md) | missing-run | sessions with no bar that look like a feed outage, given how the series trades |
 | [DQ302](doc/checks/DQ302.md) | sparse-series | info: a series that trades on few of its sessions |
 | [DQ303](doc/checks/DQ303.md) | cohort-gap | many series missing the same session: a failed load |
@@ -123,7 +150,7 @@ archives, plus a `SHA256SUMS` file:
 | `dorq-<version>-macos-arm64.tar.gz` | macOS on Apple silicon |
 
 ```bash
-version=0.2.0
+version=0.3.0
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/dorq-${version}-linux-x86_64.tar.gz"
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
@@ -144,7 +171,7 @@ Clang 18+).
 ```bash
 sudo apt-get install -y build-essential cmake ninja-build git
 git clone https://github.com/rtrimble13/dorq.git && cd dorq
-git checkout v0.2.0                        # or stay on main for the latest
+git checkout v0.3.0                        # or stay on main for the latest
 cmake --workflow --preset release          # configure, build, run the tests
 sudo cmake --install build/release --prefix /opt/dorq
 /opt/dorq/bin/dorq version                 # names the commit it was built from
@@ -178,6 +205,7 @@ cmake --workflow --preset dev        # configure + build + test
 ctest --preset dev -R cli.           # just the command-line contract tests
 scripts/format.sh                    # clang-format 18, in place (--check to verify)
 scripts/tidy.sh build/dev            # clang-tidy 18 over our sources
+ctest --preset dev -R synth          # precision and recall on synthetic data
 ```
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
@@ -187,7 +215,10 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 - [Configuration](doc/configuration.md): the config file, profiles, columns, input
 - [Calendars](doc/calendar.md): built-in calendars and reference calendar files
 - [Output formats](doc/output.md): text, json, jsonl, csv, fafnir
-- [Checks](doc/checks/): one page per check, also printed by `dorq explain`
+- [Checks](doc/checks/): one page per check, also printed by `dorq explain`;
+  [DQ201](doc/checks/DQ201.md) describes the price model
+- [dorq-synth](tools/synth/README.md): synthetic data with labelled faults, and the
+  precision and recall gate
 - [Development plan](doc/plans/dorq-development-plan.md): goals, checks, models, milestones
 - [Architecture decisions](doc/adr/)
 - [Contributing](CONTRIBUTING.md): conventions, tests, dependencies, releasing

@@ -60,6 +60,11 @@ For a given binary, input and configuration, dorq's output is fixed
   `tests/unit/`. Command-line contract tests run the real binary and live in
   `tests/CMakeLists.txt`; use them for anything a script would depend on, such as
   exit codes and machine-readable output.
+- **A Bayesian check is held to precision and recall** on synthetic data:
+  `ctest -R synth` runs [dorq-synth](tools/synth/README.md) and the gate in
+  `tools/synth/gates.txt`. A model change that moves a number there should say so
+  in the pull request; a new Bayesian check adds its faults to the generator and
+  its bounds to the gate.
 - Run at least `cmake --workflow --preset dev` and `cmake --workflow --preset asan`
   before pushing. The sanitizer preset needs the compiler's sanitizer runtime: GCC
   ships it; for Clang on Ubuntu, install `libclang-rt-18-dev`.

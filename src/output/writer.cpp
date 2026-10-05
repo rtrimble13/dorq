@@ -1,5 +1,6 @@
 #include "output/writer.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <memory>
@@ -7,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 #include "core/text.hpp"
 #include "dorq/number.hpp"
@@ -32,6 +34,66 @@ void append_detail_value(std::string& out, const DetailValue& value) {
   } else if (const auto* flag = std::get_if<bool>(&value)) {
     out += *flag ? "true" : "false";
   }
+}
+
+void append_fields(std::string& out, const std::vector<DetailField>& fields) {
+  out += '{';
+  for (std::size_t i = 0; i < fields.size(); ++i) {
+    if (i > 0) {
+      out += ',';
+    }
+    append_json_string(out, fields[i].key);
+    out += ':';
+    append_detail_value(out, fields[i].value);
+  }
+  out += '}';
+}
+
+// The model's view of a violation: hypotheses, evidence, a suggested action, and
+// whether it is provisional. Every record has these keys, empty when a check does
+// not compare explanations.
+void append_model(std::string& out, const Violation& v) {
+  out += R"(,"hypotheses":{)";
+  for (std::size_t i = 0; i < v.hypotheses.size(); ++i) {
+    if (i > 0) {
+      out += ',';
+    }
+    append_json_string(out, v.hypotheses[i].name);
+    out += ':';
+    append_json_number(out, v.hypotheses[i].probability);
+  }
+  out += R"(},"evidence":[)";
+  for (std::size_t i = 0; i < v.evidence.size(); ++i) {
+    const Evidence& e = v.evidence[i];
+    out += i > 0 ? "," : "";
+    out += R"({"feature":)";
+    append_json_string(out, e.feature);
+    out += R"(,"value":)";
+    append_detail_value(out, e.value);
+    out += R"(,"log_bf":)";
+    append_json_number(out, std::round(e.log_bf * 1000.0) / 1000.0);
+    if (!e.note.empty()) {
+      out += R"(,"note":)";
+      append_json_string(out, e.note);
+    }
+    out += '}';
+  }
+  out += R"(],"suggested_action":)";
+  if (v.suggested_action) {
+    out += R"({"kind":)";
+    append_json_string(out, v.suggested_action->kind);
+    for (const DetailField& field : v.suggested_action->fields) {
+      out += ',';
+      append_json_string(out, field.key);
+      out += ':';
+      append_detail_value(out, field.value);
+    }
+    out += '}';
+  } else {
+    out += "null";
+  }
+  out += R"(,"provisional":)";
+  out += v.provisional ? "true" : "false";
 }
 
 void append_record_key(std::string& out, const Violation& v) {
@@ -82,16 +144,10 @@ void append_record(std::string& out, const SeriesResult& series, const Violation
   out += R"(,"classification":")" + std::string{to_string(v.classification)} + "\"";
   out += R"(,"message":)";
   append_json_string(out, v.message);
-  out += R"(,"detail":{)";
-  for (std::size_t i = 0; i < v.detail.size(); ++i) {
-    if (i > 0) {
-      out += ',';
-    }
-    append_json_string(out, v.detail[i].key);
-    out += ':';
-    append_detail_value(out, v.detail[i].value);
-  }
-  out += R"(},"record_key":)";
+  out += R"(,"detail":)";
+  append_fields(out, v.detail);
+  append_model(out, v);
+  out += R"(,"record_key":)";
   append_record_key(out, v);
   out += R"(,"dorq":{"version":)";
   append_json_string(out, options.version);
@@ -171,11 +227,79 @@ class TextWriter final : public Writer {
         line += "  (line " + std::to_string(v.line) + ")";
       }
       line += '\n';
+      if (options_.show_evidence) {
+        append_explanation(line, v);
+      }
       out_ << line;
     }
   }
 
  private:
+  // Indented lines under a violation: what to do, which explanations compete,
+  // and the evidence for the reported one.
+  static void append_explanation(std::string& line, const Violation& v) {
+    constexpr std::string_view kIndent = "      ";
+    if (v.suggested_action) {
+      line += kIndent;
+      line += "→ " + v.suggested_action->text + "\n";
+    }
+    if (!v.hypotheses.empty()) {
+      std::vector<HypothesisProbability> sorted = v.hypotheses;
+      std::stable_sort(sorted.begin(), sorted.end(),
+                       [](const auto& a, const auto& b) { return a.probability > b.probability; });
+      line += kIndent;
+      line += "hypotheses:";
+      for (const auto& h : sorted) {
+        line += " " + std::string{h.name} + " " + probability_text(h.probability);
+      }
+      line += '\n';
+    }
+    if (!v.evidence.empty()) {
+      line += kIndent;
+      line += "evidence (log Bayes factor against market_move):";
+      for (const Evidence& e : v.evidence) {
+        line += "\n";
+        line += kIndent;
+        line += "  " + e.feature + " " + value_text(e.value);
+        if (!e.note.empty()) {
+          line += " (" + e.note + ")";
+        }
+        const double rounded = std::round(e.log_bf * 10.0) / 10.0;
+        line += rounded >= 0.0 ? "  +" : "  ";
+        line += format_number(rounded == 0.0 ? 0.0 : rounded);
+      }
+      line += '\n';
+    }
+  }
+
+  static std::string probability_text(double p) {
+    if (p >= 0.9995) {
+      return ">0.999";
+    }
+    if (p < 0.0005) {
+      return "<0.001";
+    }
+    return format_number(std::round(p * 1000.0) / 1000.0);
+  }
+
+  static std::string value_text(const DetailValue& value) {
+    if (const auto* text = std::get_if<std::string>(&value)) {
+      return *text;
+    }
+    if (const auto* number = std::get_if<double>(&value)) {
+      const double magnitude = *number == 0.0 ? 0.0 : std::floor(std::log10(std::fabs(*number)));
+      const double scale = std::pow(10.0, 3.0 - magnitude);
+      return format_number(std::isfinite(*number) ? std::round(*number * scale) / scale : *number);
+    }
+    if (const auto* integer = std::get_if<std::int64_t>(&value)) {
+      return std::to_string(*integer);
+    }
+    if (const auto* flag = std::get_if<bool>(&value)) {
+      return *flag ? "yes" : "no";
+    }
+    return {};
+  }
+
   [[nodiscard]] std::string colored(Severity severity) const {
     std::string word{to_string(severity)};
     if (!options_.color) {

@@ -11,6 +11,7 @@
 
 #include "checks/coverage_model.hpp"
 #include "dorq/frequency.hpp"
+#include "price/model.hpp"
 
 namespace dorq {
 namespace {
@@ -86,6 +87,7 @@ const Engine::Settings& Engine::settings_for(const Series& series) {
     slot = std::make_unique<Settings>();
     slot->integrity = config_.integrity;
     slot->coverage = config_.coverage;
+    slot->price = config_.price;
     std::vector<std::string> select = concat(config_.select, config_.extend_select);
     std::vector<std::string> ignore = config_.ignore;
     for (const Profile& profile : config_.profiles) {
@@ -94,6 +96,7 @@ const Engine::Settings& Engine::settings_for(const Series& series) {
         ignore.insert(ignore.end(), profile.ignore.begin(), profile.ignore.end());
         profile.integrity.apply_to(slot->integrity);
         profile.coverage.apply_to(slot->coverage);
+        profile.price.apply_to(slot->price);
       }
     }
     const Selection selection(select, ignore);
@@ -109,6 +112,9 @@ const Engine::Settings& Engine::settings_for(const Series& series) {
       }
       if (info.code == "DQ301" || info.code == "DQ302" || info.cross_sectional) {
         slot->coverage_model = true;
+      }
+      if (info.code.starts_with("DQ2") && info.code != "DQ206") {
+        slot->price_model = true;
       }
       if (info.cross_sectional ||
           (info.applies == Applies::kOhlcvOnly && series.kind != SeriesKind::kOhlcv)) {
@@ -142,15 +148,21 @@ Engine::Processed Engine::process(Work& work) const {
     analysis =
         analyze_coverage(series, calendar_, settings.coverage, config_.cohort.confident_density);
   }
+  std::optional<PriceAnalysis> price;
+  if (settings.price_model) {
+    price = analyze_prices(series, calendar_, settings.price);
+  }
   const SeriesContext context{
       .series = series,
       .integrity = settings.integrity,
       .coverage = settings.coverage,
       .calendar = calendar_,
       .thresholds = config_.severity,
+      .price = settings.price,
       .frequency = frequency,
       .analysis = analysis ? &*analysis : nullptr,
       .gap_report = config_.gap_report,
+      .price_analysis = price ? &*price : nullptr,
   };
   for (const Check* check : settings.checks) {
     check->run(context, result.violations);

@@ -24,7 +24,8 @@ struct Summary {
 };
 
 struct WriterOptions {
-  bool color = false;  // text only
+  bool color = false;          // text only
+  bool show_evidence = false;  // text only: action, hypotheses and evidence lines
   std::string version;
   std::string config_hash;
   std::string fafnir_table = "core.daily_price";

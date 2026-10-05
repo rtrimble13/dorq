@@ -29,6 +29,7 @@ std::vector<dorq::Violation> run_check(const dorq::Check& check, const dorq::Ser
   static const dorq::Calendar kCalendar;
   static const dorq::CoverageSettings kCoverage;
   static const dorq::SeverityThresholds kThresholds;
+  static const dorq::PriceSettings kPrice;
   std::vector<dorq::Violation> out;
   const dorq::SeriesContext context{
       .series = series,
@@ -36,6 +37,7 @@ std::vector<dorq::Violation> run_check(const dorq::Check& check, const dorq::Ser
       .coverage = kCoverage,
       .calendar = kCalendar,
       .thresholds = kThresholds,
+      .price = kPrice,
       .frequency = dorq::infer_frequency(series.date),
   };
   check.run(context, out);

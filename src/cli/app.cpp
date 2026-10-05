@@ -78,6 +78,7 @@ struct CheckOptions {
   std::vector<std::string> ignore;
   std::string min_severity;
   bool show_info = false;
+  bool show_evidence = false;
   std::string fail_on;
   bool exit_zero = false;
   std::string since;
@@ -266,6 +267,7 @@ int run_check(const CheckOptions& options, CLI::App& cmd, Io& io) {
   writer_options.version = std::string{kVersion};
   writer_options.config_hash = config_hash(config);
   writer_options.fafnir_table = config.fafnir_table;
+  writer_options.show_evidence = options.show_evidence;
   const std::unique_ptr<Writer> writer = make_writer(config.format, io.out, writer_options);
   Report report(*writer);
   {
@@ -416,6 +418,9 @@ int run(std::span<const char* const> args, Io& io) {
   check->add_option("--min-severity", check_options.min_severity, "Lowest severity to report")
       ->check(CLI::IsMember({"info", "warn", "error"}));
   check->add_flag("--show-info", check_options.show_info, "Report info too (--min-severity info)");
+  check->add_flag("--show-evidence", check_options.show_evidence,
+                  "In text output, show each violation's suggested action, hypotheses and "
+                  "evidence");
   check->add_option("--fail-on", check_options.fail_on, "Lowest severity that fails the run")
       ->check(CLI::IsMember({"info", "warn", "error", "never"}));
   check->add_flag("--exit-zero", check_options.exit_zero, "Exit 0 even when violations are found");

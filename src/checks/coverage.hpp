@@ -57,7 +57,7 @@ class FrequencyGap final : public Check {
   void run(const SeriesContext& context, std::vector<Violation>& out) const override;
 };
 
-// "0.97", or ">0.99" when rounding would claim certainty.
+// "0.97"; ">0.99" or "<0.01" when rounding would claim certainty.
 [[nodiscard]] std::string format_probability(double p);
 
 }  // namespace dorq

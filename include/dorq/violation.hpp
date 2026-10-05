@@ -48,6 +48,29 @@ struct DetailField {
   DetailValue value;
 };
 
+// A hypothesis's posterior probability, for the checks that compare explanations.
+struct HypothesisProbability {
+  std::string_view name;
+  double probability = 0.0;
+};
+
+// One term of the evidence behind a violation: a feature, its value, and its log
+// Bayes factor for the reported explanation against the innocent one.
+struct Evidence {
+  std::string feature;
+  DetailValue value;
+  double log_bf = 0.0;
+  std::string note;  // e.g. "nearest split 4:1"; empty when there is nothing to add
+};
+
+// What the caller could do about a violation: dorq never changes data itself
+// (doc/adr/0001). `kind` is e.g. "delete_bars", "add_split", "rescale".
+struct SuggestedAction {
+  std::string kind;
+  std::vector<DetailField> fields;
+  std::string text;  // for people: "add split 4:1 ex 2020-08-31"
+};
+
 struct Violation {
   const CheckInfo* check = nullptr;
   Severity severity = Severity::kError;
@@ -59,6 +82,12 @@ struct Violation {
   std::uint32_t line = 0;        // the source line, when one row is at fault
   std::string message;
   std::vector<DetailField> detail;
+  // Judged with fewer bars after it than the model needs; re-evaluated on a
+  // later run (plan section 4.3, "the newest bars").
+  bool provisional = false;
+  std::vector<HypothesisProbability> hypotheses;
+  std::vector<Evidence> evidence;
+  std::optional<SuggestedAction> suggested_action;
 };
 
 }  // namespace dorq

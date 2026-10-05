@@ -193,6 +193,83 @@ CoveragePatch read_coverage(const toml::table& table, const std::string& where,
   return patch;
 }
 
+// Reads [price] keys.
+void read_price(const toml::table& table, const std::string& where, const std::string& prefix,
+                PricePatch& patch) {
+  for (const auto& [key_node, node] : table) {
+    const std::string_view key = key_node.str();
+    const std::string path = key_path(prefix, key);
+    if (key == "candidate_tail_prob") {
+      patch.candidate_tail_prob = read_double(node, where, path, 0.0, 1.0);
+    } else if (key == "floor_move") {
+      patch.floor_move = read_double(node, where, path, 0.01, 1e6);
+    } else if (key == "revert_max_bars") {
+      patch.revert_max_bars = read_int(node, where, path, 1, 20);
+    } else if (key == "volume_window") {
+      patch.volume_window = read_int(node, where, path, 5, 1000);
+    } else if (key == "ratio_tolerance") {
+      patch.ratio_tolerance = read_double(node, where, path, 1e-4, 1.0);
+    } else if (key == "split_ratios") {
+      std::vector<SplitRatio> ratios;
+      for (const std::string& text : read_string_list(node, where, path)) {
+        const auto ratio = parse_split_ratio(text);
+        if (!ratio) {
+          fail(where, node,
+               "\"" + path + "\" entries must be ratios like \"2:1\" or \"1:10\", not \"" + text +
+                   "\"");
+        }
+        ratios.push_back(*ratio);
+      }
+      patch.split_ratios = std::move(ratios);
+    } else if (key == "provisional_bars") {
+      patch.provisional_bars = read_int(node, where, path, 0, 100);
+    } else if (key == "segment_gap") {
+      patch.segment_gap = read_int(node, where, path, 2, 100000);
+    } else if (key == "volatility_discount") {
+      patch.volatility_discount = read_double(node, where, path, 0.5, 0.9999);
+    } else if (key == "tail_dof") {
+      patch.tail_dof = read_double(node, where, path, 2.5, 1000.0);
+    } else if (key == "jump_prob") {
+      patch.jump_prob = read_double(node, where, path, 1e-6, 0.5);
+    } else if (key == "jump_scale") {
+      patch.jump_scale = read_double(node, where, path, 1.0, 100.0);
+    } else if (key == "min_price") {
+      patch.min_price = read_double(node, where, path, 0.0, 1e12);
+    } else if (key == "max_price") {
+      patch.max_price = read_double(node, where, path, 0.0, 1e15);
+    } else {
+      fail(where, node, "unknown key \"" + path + "\"");
+    }
+  }
+}
+
+// Reads [priors] keys: each hypothesis's prior weight.
+void read_priors(const toml::table& table, const std::string& where, const std::string& prefix,
+                 PricePatch& patch) {
+  for (const auto& [key_node, node] : table) {
+    const std::string_view key = key_node.str();
+    const std::string path = key_path(prefix, key);
+    const double value = read_double(node, where, path, 0.0, 1e6);
+    if (key == "market_move") {
+      patch.market_move = value;
+    } else if (key == "bad_print") {
+      patch.bad_print = value;
+    } else if (key == "bad_close") {
+      patch.bad_close = value;
+    } else if (key == "unreported_split") {
+      patch.unreported_split = value;
+    } else if (key == "scale_error") {
+      patch.scale_error = value;
+    } else if (key == "tick_move") {
+      patch.tick_move = value;
+    } else if (key == "history_segment") {
+      patch.history_segment = value;
+    } else {
+      fail(where, node, "unknown key \"" + path + "\"");
+    }
+  }
+}
+
 Profile read_profile(std::string name, const toml::table& table, const std::string& where) {
   Profile profile;
   profile.name = std::move(name);
@@ -228,6 +305,10 @@ Profile read_profile(std::string name, const toml::table& table, const std::stri
       profile.integrity = read_integrity(read_table(node, where, path), where, path);
     } else if (key == "coverage") {
       profile.coverage = read_coverage(read_table(node, where, path), where, path, nullptr);
+    } else if (key == "price") {
+      read_price(read_table(node, where, path), where, path, profile.price);
+    } else if (key == "priors") {
+      read_priors(read_table(node, where, path), where, path, profile.price);
     } else {
       fail(where, node, "unknown key \"" + path + "\"");
     }
@@ -332,6 +413,14 @@ void read_root(const toml::table& root, const std::string& where, Config& config
       read_integrity(read_table(node, where, key), where, key).apply_to(config.integrity);
     } else if (key == "coverage") {
       read_coverage(read_table(node, where, key), where, key, &config).apply_to(config.coverage);
+    } else if (key == "price") {
+      PricePatch patch;
+      read_price(read_table(node, where, key), where, key, patch);
+      patch.apply_to(config.price);
+    } else if (key == "priors") {
+      PricePatch patch;
+      read_priors(read_table(node, where, key), where, key, patch);
+      patch.apply_to(config.price);
     } else if (key == "severity") {
       read_severity(read_table(node, where, key), node, where, config.severity);
     } else if (key == "calendar") {
@@ -493,6 +582,85 @@ void append_coverage_patch(std::string& out, const CoveragePatch& patch) {
   }
 }
 
+PricePatch full_patch(const PriceSettings& settings) {
+  PricePatch full;
+  full.candidate_tail_prob = settings.candidate_tail_prob;
+  full.floor_move = settings.floor_move;
+  full.revert_max_bars = settings.revert_max_bars;
+  full.volume_window = settings.volume_window;
+  full.ratio_tolerance = settings.ratio_tolerance;
+  full.split_ratios = settings.split_ratios;
+  full.provisional_bars = settings.provisional_bars;
+  full.segment_gap = settings.segment_gap;
+  full.volatility_discount = settings.volatility_discount;
+  full.tail_dof = settings.tail_dof;
+  full.jump_prob = settings.jump_prob;
+  full.jump_scale = settings.jump_scale;
+  full.min_price = settings.min_price;
+  full.max_price = settings.max_price;
+  full.market_move = settings.priors.market_move;
+  full.bad_print = settings.priors.bad_print;
+  full.bad_close = settings.priors.bad_close;
+  full.unreported_split = settings.priors.unreported_split;
+  full.scale_error = settings.priors.scale_error;
+  full.tick_move = settings.priors.tick_move;
+  full.history_segment = settings.priors.history_segment;
+  return full;
+}
+
+void append_number(std::string& out, const char* key, const std::optional<double>& value) {
+  if (value) {
+    out += key;
+    out += " = ";
+    out += format_number(*value);
+    out += '\n';
+  }
+}
+
+void append_integer(std::string& out, const char* key, const std::optional<int>& value) {
+  if (value) {
+    out += key;
+    out += " = ";
+    out += std::to_string(*value);
+    out += '\n';
+  }
+}
+
+void append_price_patch(std::string& out, const PricePatch& patch) {
+  append_number(out, "candidate_tail_prob", patch.candidate_tail_prob);
+  append_number(out, "floor_move", patch.floor_move);
+  append_integer(out, "revert_max_bars", patch.revert_max_bars);
+  append_integer(out, "volume_window", patch.volume_window);
+  append_number(out, "ratio_tolerance", patch.ratio_tolerance);
+  if (patch.split_ratios) {
+    std::vector<std::string> ratios;
+    for (const SplitRatio& ratio : *patch.split_ratios) {
+      ratios.push_back(ratio.to_string());
+    }
+    out += "split_ratios = ";
+    append_toml_list(out, ratios);
+    out += '\n';
+  }
+  append_integer(out, "provisional_bars", patch.provisional_bars);
+  append_integer(out, "segment_gap", patch.segment_gap);
+  append_number(out, "volatility_discount", patch.volatility_discount);
+  append_number(out, "tail_dof", patch.tail_dof);
+  append_number(out, "jump_prob", patch.jump_prob);
+  append_number(out, "jump_scale", patch.jump_scale);
+  append_number(out, "min_price", patch.min_price);
+  append_number(out, "max_price", patch.max_price);
+}
+
+void append_priors_patch(std::string& out, const PricePatch& patch) {
+  append_number(out, "market_move", patch.market_move);
+  append_number(out, "bad_print", patch.bad_print);
+  append_number(out, "bad_close", patch.bad_close);
+  append_number(out, "unreported_split", patch.unreported_split);
+  append_number(out, "scale_error", patch.scale_error);
+  append_number(out, "tick_move", patch.tick_move);
+  append_number(out, "history_segment", patch.history_segment);
+}
+
 // The settings that decide what is reported (config_hash): the effective
 // configuration as TOML, with the keys that only change presentation, speed or
 // the exit status held at their defaults.
@@ -589,6 +757,67 @@ void CoveragePatch::apply_to(CoverageSettings& settings) const {
   if (publication_lag) {
     settings.publication_lag = *publication_lag;
   }
+}
+
+void PricePatch::apply_to(PriceSettings& settings) const {
+  const auto set = [](auto& target, const auto& value) {
+    if (value) {
+      target = *value;
+    }
+  };
+  set(settings.candidate_tail_prob, candidate_tail_prob);
+  set(settings.floor_move, floor_move);
+  set(settings.revert_max_bars, revert_max_bars);
+  set(settings.volume_window, volume_window);
+  set(settings.ratio_tolerance, ratio_tolerance);
+  set(settings.split_ratios, split_ratios);
+  set(settings.provisional_bars, provisional_bars);
+  set(settings.segment_gap, segment_gap);
+  set(settings.volatility_discount, volatility_discount);
+  set(settings.tail_dof, tail_dof);
+  set(settings.jump_prob, jump_prob);
+  set(settings.jump_scale, jump_scale);
+  set(settings.min_price, min_price);
+  set(settings.max_price, max_price);
+  set(settings.priors.market_move, market_move);
+  set(settings.priors.bad_print, bad_print);
+  set(settings.priors.bad_close, bad_close);
+  set(settings.priors.unreported_split, unreported_split);
+  set(settings.priors.scale_error, scale_error);
+  set(settings.priors.tick_move, tick_move);
+  set(settings.priors.history_segment, history_segment);
+}
+
+std::string SplitRatio::to_string() const {
+  return std::to_string(shares_after) + ":" + std::to_string(shares_before);
+}
+
+std::optional<SplitRatio> parse_split_ratio(std::string_view text) noexcept {
+  text = trim(text);
+  const auto colon = text.find(':');
+  if (colon == std::string_view::npos) {
+    return std::nullopt;
+  }
+  const auto read = [](std::string_view part) -> std::optional<int> {
+    part = trim(part);
+    if (part.empty() || part.size() > 6) {
+      return std::nullopt;
+    }
+    int value = 0;
+    for (const char ch : part) {
+      if (ch < '0' || ch > '9') {
+        return std::nullopt;
+      }
+      value = value * 10 + (ch - '0');
+    }
+    return value > 0 ? std::optional<int>{value} : std::nullopt;
+  };
+  const auto after = read(text.substr(0, colon));
+  const auto before = read(text.substr(colon + 1));
+  if (!after || !before || *after == *before) {
+    return std::nullopt;
+  }
+  return SplitRatio{*after, *before};
 }
 
 std::optional<Severity> SeverityThresholds::for_probability(double p) const noexcept {
@@ -713,6 +942,12 @@ std::string to_toml(const Config& config) {
   out += "\ncohort_max_tail = " + format_number(config.cohort.max_tail);
   out += "\nconfident_density = " + format_number(config.cohort.confident_density) + "\n";
 
+  const PricePatch price = full_patch(config.price);
+  out += "\n[price]\n";
+  append_price_patch(out, price);
+  out += "\n[priors]\n";
+  append_priors_patch(out, price);
+
   out += "\n[severity]\ninfo = " + format_number(config.severity.info);
   out += "\nwarn = " + format_number(config.severity.warn);
   out += "\nerror = " + format_number(config.severity.error) + "\n";
@@ -767,6 +1002,16 @@ std::string to_toml(const Config& config) {
       out += section;
       out += ".coverage]\n";
       out += coverage;
+    }
+    std::string price_keys;
+    append_price_patch(price_keys, profile.price);
+    if (!price_keys.empty()) {
+      out += "\n[" + section + ".price]\n" + price_keys;
+    }
+    std::string priors;
+    append_priors_patch(priors, profile.price);
+    if (!priors.empty()) {
+      out += "\n[" + section + ".priors]\n" + priors;
     }
   }
   return out;
@@ -844,6 +1089,33 @@ report = "run"                # DQ301: one violation per run, or per "session"
 cohort_min_series = 3         # DQ303: fewest missing series that make a cohort
 cohort_max_tail = 1e-06       # DQ303: Poisson tail probability at or below which
 confident_density = 0.95      # DQ303: a series counts as expected above this density
+
+[price]
+# DQ2xx: how suspicious bars are found and judged (doc/checks/DQ201.md).
+candidate_tail_prob = 0.001   # score a bar whose return is this improbable as ordinary,
+floor_move = 0.5              # and every move of 50% or more, either way
+revert_max_bars = 5           # the longest bad print, in bars
+volume_window = 40            # bars either side for volume levels
+ratio_tolerance = 0.01        # slack on a clean ratio, on the log scale
+split_ratios = ["2:1", "3:1", "3:2", "4:1", "5:1", "5:4", "8:1", "10:1", "15:1", "20:1", "1:2", "1:3", "1:4", "1:5", "1:8", "1:10", "1:15", "1:20", "1:25", "1:30", "1:40", "1:50", "1:100"]
+provisional_bars = 3          # fewer bars after a bar than this: provisional, at most warn
+segment_gap = 60              # DQ205: sessions without a bar before a new history
+volatility_discount = 0.97    # volatility follows about 1 / (1 - discount) returns
+tail_dof = 4                  # degrees of freedom of ordinary returns (Student t)
+jump_prob = 0.03              # a real move's chance of being a jump,
+jump_scale = 6                # and a jump's size, in ordinary returns
+min_price = 1e-05             # prices outside [min_price, max_price] are implausible
+max_price = 1000000
+
+[priors]
+# Each explanation's prior weight for a suspicious bar, normalized over those that apply.
+market_move = 0.9
+bad_print = 0.05
+bad_close = 0.01
+unreported_split = 0.02
+scale_error = 0.02
+tick_move = 0.01
+history_segment = 0.05
 
 [severity]
 # p_error at or above which a probabilistic check reports info, warn or error.
