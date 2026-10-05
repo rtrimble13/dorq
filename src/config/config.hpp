@@ -31,6 +31,9 @@ struct IntegritySettings {
   int precision_high_sig_figs = 5;
   int precision_min_segment = 20;       // rows on each side of a regime change
   double precision_min_contrast = 0.8;  // difference in the high-precision share
+  // DQ107: a flat bar is expected where the bars nearby usually span this many
+  // steps of the price grid or fewer (see doc/checks/DQ107.md).
+  double flat_bar_steps = 3.0;
 };
 
 // A partial IntegritySettings: what one config table sets.
@@ -40,6 +43,7 @@ struct IntegrityPatch {
   std::optional<int> precision_high_sig_figs;
   std::optional<int> precision_min_segment;
   std::optional<double> precision_min_contrast;
+  std::optional<double> flat_bar_steps;
 
   void apply_to(IntegritySettings& settings) const;
 };

@@ -10,6 +10,7 @@
 #include "checks/integrity.hpp"
 #include "config/config.hpp"
 #include "io/reader.hpp"
+#include "test_support.hpp"
 
 namespace {
 
@@ -70,6 +71,99 @@ TEST_CASE("the registry: codes and names unique, in code order, every one docume
   }
   CHECK(dorq::find_check("dq101") != nullptr);
   CHECK(dorq::find_check("nope") == nullptr);
+}
+
+namespace {
+
+// A bar row "date,open,high,low,close,volume" from 2024-01-02 on, day d.
+std::string bar_row(int d, double open, double high, double low, double close, double volume,
+                    int decimals = 2) {
+  const dorq::Date date = dorq::Date::from_days(dorq::Date::from_ymd(2024, 1, 2).days() + d);
+  std::ostringstream out;
+  out.setf(std::ios::fixed);
+  out.precision(decimals);
+  out << date.to_string() << ',' << open << ',' << high << ',' << low << ',' << close << ',';
+  out.precision(0);
+  out << volume;
+  return out.str();
+}
+
+}  // namespace
+
+TEST_CASE("DQ107: a coarse grid makes flat bars ordinary") {
+  // A sub-dime stock quoted in cents: bars span a tick or two, and some are flat on
+  // ordinary volume.
+  std::vector<std::string> penny;
+  penny.reserve(60);
+  for (int d = 0; d < 60; ++d) {
+    const double c = d % 3 == 0 ? 0.04 : 0.05;
+    if (d % 7 == 3) {
+      penny.push_back(bar_row(d, c, c, c, c, 500000 + 1000 * d));  // flat, busy
+    } else {
+      penny.push_back(bar_row(d, c, c + 0.01, c - 0.01, c, 400000 + 1000 * d));
+    }
+  }
+  CHECK(run_check(dorq::ZeroRangeWithVolume{}, one_series(bars(penny))).empty());
+
+  // An adjusted history on a 0.0009 lattice, written with four decimals: its bars
+  // span one or two lattice steps.
+  std::vector<std::string> lattice;
+  lattice.reserve(60);
+  for (int d = 0; d < 60; ++d) {
+    const double c = 0.0036;
+    const double hi = d % 4 == 0 ? c : c + 0.0009;
+    const double lo = d % 3 == 0 ? c - 0.0009 : c;
+    lattice.push_back(
+        bar_row(d, c, d % 5 == 2 ? c : hi, d % 5 == 2 ? c : lo, c, 30000 + 100 * d, 4));
+  }
+  CHECK(run_check(dorq::ZeroRangeWithVolume{}, one_series(bars(lattice))).empty());
+}
+
+TEST_CASE("DQ107: the range lost on a liquid name is still reported") {
+  // Bars spanning a dollar on a $50 stock; the close copied into open, high and
+  // low on a busy day, then a three-day run of the same.
+  std::vector<std::string> rows;
+  rows.reserve(80);
+  for (int d = 0; d < 80; ++d) {
+    const double c = 50.0 + 0.07 * (d % 9);
+    if (d == 30 || (d >= 60 && d < 63)) {
+      rows.push_back(bar_row(d, c, c, c, c, 3000000));
+    } else {
+      rows.push_back(
+          bar_row(d, c - 0.31, c + 0.53 + 0.01 * (d % 5), c - 0.48, c, 2000000 + 1000 * d));
+    }
+  }
+  const auto found = run_check(dorq::ZeroRangeWithVolume{}, one_series(bars(rows)));
+  REQUIRE(found.size() == 4);
+  CHECK(dorq::test::contains(found[0].message, "where the bars nearby span a median 10"));
+
+  // A stretch where every bar is flat, with no ranged bar nearby to say flat is
+  // normal (fafnir's price_scale_collapse): reported. Next to the boundary, the
+  // ranged bars' moves round away at the collapsed price, so a flat bar there is
+  // ordinary; DQ202 reports the shift itself.
+  std::vector<std::string> collapsed;
+  collapsed.reserve(80);
+  for (int d = 0; d < 80; ++d) {
+    collapsed.push_back(d < 25 ? bar_row(d, 1.93, 2.11, 1.82, 2.0 + 0.01 * (d % 3), 1000000)
+                               : bar_row(d, 0.0001, 0.0001, 0.0001, 0.0001, 2000000, 4));
+  }
+  const auto collapse = run_check(dorq::ZeroRangeWithVolume{}, one_series(bars(collapsed)));
+  CHECK(collapse.size() >= 30);
+  CHECK(dorq::test::contains(collapse.back().message, "with no bar nearby that has a range"));
+}
+
+TEST_CASE("DQ107: flat_bar_steps sets what a coarse grid is") {
+  std::vector<std::string> rows;
+  rows.reserve(60);
+  for (int d = 0; d < 60; ++d) {
+    const double c = 1.00 + 0.01 * (d % 3);
+    rows.push_back(d == 30 ? bar_row(d, c, c, c, c, 900000)
+                           : bar_row(d, c, c + 0.02, c - 0.02, c, 500000 + 100 * d));
+  }
+  const dorq::Series series = one_series(bars(rows));
+  // Bars span 4 cents: more than the default 3 steps.
+  CHECK(run_check(dorq::ZeroRangeWithVolume{}, series).size() == 1);
+  CHECK(run_check(dorq::ZeroRangeWithVolume{}, series, {.flat_bar_steps = 4.0}).empty());
 }
 
 TEST_CASE("selection: the most specific entry wins, as in flake8") {

@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <numbers>
 #include <optional>
@@ -166,13 +167,12 @@ class Scorer {
     for (const SplitRatio& ratio : settings.split_ratios) {
       splits_.emplace_back(ratio, split_weight(ratio) / total);
     }
-    std::vector<int> decimals;
+    std::vector<std::uint8_t> decimals;
     decimals.reserve(n_);
     for (std::size_t i = 0; i < n_; ++i) {
       decimals.push_back(series.close_decimals[f.row[i]]);
     }
-    std::sort(decimals.begin(), decimals.end());
-    written_grid_ = std::pow(10.0, -decimals[decimals.size() * 9 / 10]);
+    written_grid_ = written_grid(std::move(decimals));
   }
 
   [[nodiscard]] double close(std::size_t bar) const { return series_.close[f_.row[bar]]; }

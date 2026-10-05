@@ -31,8 +31,9 @@ market factor with one crash day (a fall of 10-15%, then a volatile aftermath).
 Volume follows an AR(1) level, rises with the size of each day's move, and surges
 3-10 times on earnings days. Liquid and mid names have two to four earnings
 reactions of 8-35%. Bars open between the previous close and the close, with
-highs and lows around them, rounded to the price grid; on a coarse grid the
-bid-ask bounce spans a tick most days.
+highs and lows around them, rounded to the price grid. A traded day's prints land
+on both sides of the spread, so the range spans at least a tick on most days; on
+a coarse grid that is most of the range.
 
 ## Labels
 
@@ -51,6 +52,7 @@ would be wrong under).
 | `history_gap` | DQ301 | the gap before each of those |
 | `outage` | DQ301 | 8 runs of 1-8 sessions missing from liquid names |
 | `failed_load` | DQ303 | one session missing from 70% of the liquid names |
+| `flat_bar` | DQ107 | 8 liquid bars with the close copied into open, high and low, on 1.2-3 times the median volume |
 | `series_ended` | DQ304 | the 1/16 names, which stop in 2000 |
 | `hn_earnings` | - | each earnings reaction |
 | `hn_crash` | - | the crash day, every series |
@@ -80,6 +82,11 @@ misses for the codes the gates judge.
 [gates.txt](gates.txt) holds the minimum precision and recall per check and the
 most hard-negative hits per kind. At M3 the bar is the plan's: DQ201 and DQ203 at
 precision 0.9 or better, and no earnings gap, crash day or tick move reported at
-warn. Across seeds 1-14 the gates hold on 13; one seed reports one penny stock's
-+51%/-49% two-bar move as a bad print. Thin names' spike-and-revert trades are
-genuinely ambiguous, and up to two are allowed.
+warn. Across seeds 1-14 the gates hold on 12. Seeds 8 and 9 report three thin
+names' spike-and-revert trades (two are allowed), and seed 9 brings DQ201's
+precision to 0.88. Thin names' spike-and-revert trades are genuinely ambiguous.
+
+DQ107 is held to fault precision 0.5 and recall 0.9. It reports 10-20 bars a
+universe: every injected flat bar, other faults that leave a bar flat, and a few
+rare flat days on low-priced names. On the penny and 1/16 series it reports 0-4
+bars, where it reported over a thousand before it learned the price grid.

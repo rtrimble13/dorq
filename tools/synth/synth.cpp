@@ -131,6 +131,18 @@ std::string price_text(double price, Class cls) {
   return out.str();
 }
 
+// The grid a class's prices are quoted on, at `price`.
+double grid_of(double price, Class cls) {
+  switch (cls) {
+    case Class::kPenny:
+      return 0.01;
+    case Class::kSixteenths:
+      return 0.0625;
+    default:
+      return price >= 1.0 ? 0.01 : 0.0001;
+  }
+}
+
 double round_price(double price, Class cls) {
   switch (cls) {
     case Class::kPenny:
@@ -171,6 +183,7 @@ class Generator {
   void inject_scale_eras(Pool& tradable);
   void inject_segments(Pool& thin_or_mid);
   void inject_outages(Pool& liquid);
+  void inject_flat_bars(Pool& liquid);
   void inject_failed_load(Pool& liquid);
   SeriesPlan& any(Pool& from);
   void label(const SeriesPlan& plan, std::size_t first, std::size_t last, const char* kind,
@@ -261,15 +274,14 @@ void Generator::simulate(SeriesPlan& plan, const std::vector<Date>& dates,
         round_price(std::min(open, close) * std::exp(-std::fabs(rng_.normal()) * spread), plan.cls);
     bar.high = std::max({bar.high, open, close});
     bar.low = std::min({bar.low, open, close});
-    // On a coarse grid the bid-ask bounce still spans a tick most days.
-    if (plan.cls == Class::kPenny || plan.cls == Class::kSixteenths) {
-      const double tick = plan.cls == Class::kPenny ? 0.01 : 0.0625;
-      if (rng_.chance(0.7)) {
-        bar.high = std::max(bar.high, std::max(open, close) + tick);
-      }
-      if (rng_.chance(0.7) && std::min(open, close) > tick) {
-        bar.low = std::min(bar.low, std::min(open, close) - tick);
-      }
+    // A traded day's prints land on both sides of the spread: the range spans a
+    // tick most days, however quiet (it matters on a coarse grid).
+    const double tick = grid_of(close, plan.cls);
+    if (rng_.chance(0.7)) {
+      bar.high = std::max(bar.high, round_price(std::max(open, close) + tick, plan.cls));
+    }
+    if (rng_.chance(0.7) && std::min(open, close) > tick) {
+      bar.low = std::min(bar.low, round_price(std::min(open, close) - tick, plan.cls));
     }
     bar.volume = std::round(std::exp(log_volume));
     prev_close = close;
@@ -451,10 +463,7 @@ void Generator::inject_segments(Pool& thin_or_mid) {
       if (!bar.present) {
         continue;
       }
-      bar.open = round_to(bar.open * scale, 0.01);
-      bar.high = round_to(bar.high * scale, 0.01);
-      bar.low = round_to(bar.low * scale, 0.01);
-      bar.close = round_to(bar.close * scale, 0.01);
+      scale_bar(bar, scale, plan.cls);
       bar.volume = std::round(bar.volume * rng_.uniform(5.0, 50.0));
     }
     Bar& listing = plan.bars[first];
@@ -482,6 +491,30 @@ void Generator::inject_outages(Pool& liquid) {
       plan.bars[i].present = false;
     }
     label(plan, t, t + k - 1, "outage", "DQ301");
+    ++done;
+  }
+}
+
+// The range lost: the close copied into open, high and low on a busy day.
+void Generator::inject_flat_bars(Pool& liquid) {
+  for (int done = 0; done < 8;) {
+    SeriesPlan& plan = any(liquid);
+    const std::size_t t = pick_bar(plan, 60);
+    if (!plan.bars[t].present || !reserve(plan.id, t, t)) {
+      continue;
+    }
+    std::vector<double> volumes;
+    for (const Bar& b : plan.bars) {
+      if (b.present && b.volume > 0.0) {
+        volumes.push_back(b.volume);
+      }
+    }
+    const auto mid = volumes.begin() + static_cast<std::ptrdiff_t>(volumes.size() / 2);
+    std::nth_element(volumes.begin(), mid, volumes.end());
+    Bar& bar = plan.bars[t];
+    bar.open = bar.high = bar.low = bar.close;
+    bar.volume = std::round(*mid * rng_.uniform(1.2, 3.0));  // a busy day
+    label(plan, t, t, "flat_bar", "DQ107");
     ++done;
   }
 }
@@ -521,6 +554,7 @@ void Generator::inject(std::vector<SeriesPlan>& universe) {
   inject_segments(thin_or_mid);
   inject_outages(liquid);
   inject_failed_load(liquid);
+  inject_flat_bars(liquid);
 }
 
 void Generator::run(std::ostream& bars, std::ostream& labels) {

@@ -731,10 +731,17 @@ date, DQ303 fires once, thin names produce no DQ301, and a single missing day on
 hard-negative set (earnings gaps, crash days, tick moves) produces no `warn`.
 
 **Result:** on seeds 1 and 2 (the CTest gate) DQ201 precision is 1.0 and 0.94,
-DQ203 1.0 and 1.0, with recall 1.0 and 0.94 or better; DQ202, DQ204 and DQ205 are
-at 1.0. No earnings gap or crash day is reported at warn on seeds 1–14, and one
-tick-series move on one seed (a penny stock's +51%/−49% over two bars). Thin
-names' spike-and-revert trades remain the ambiguous case: up to two per universe.
+DQ203 1.0 and 0.94, with recall 1.0; DQ202, DQ204 and DQ205 are at 1.0. No
+earnings gap, crash day or tick move is reported at warn on seeds 1–14. Thin
+names' spike-and-revert trades remain the ambiguous case: up to three per
+universe, and the gate allows two.
+
+**Also in M3:** dorq-synth showed DQ107 reporting over a thousand flat bars a
+universe on sub-dime stocks quoted in cents, where flat bars are ordinary. DQ107
+now judges a flat bar against the range of the bars nearby in steps of the price
+grid (the exchange tick, the decimals written, or the lattice the prices sit on),
+and against how often they are flat: 0–4 such reports remain, and every injected
+copied-close bar is still found (doc/checks/DQ107.md).
 
 ### M4: Volume, stale values, point series (v0.4.0)
 | ID | Item | Size | Status |

@@ -132,6 +132,8 @@ IntegrityPatch read_integrity(const toml::table& table, const std::string& where
       patch.precision_min_segment = read_int(node, where, path, 2, 1000000);
     } else if (key == "precision_min_contrast") {
       patch.precision_min_contrast = read_double(node, where, path, 0.0, 1.0);
+    } else if (key == "flat_bar_steps") {
+      patch.flat_bar_steps = read_double(node, where, path, 0.0, 1e6);
     } else {
       fail(where, node, "unknown key \"" + path + "\"");
     }
@@ -529,6 +531,9 @@ void append_integrity_patch(std::string& out, const IntegrityPatch& patch) {
   if (patch.precision_min_contrast) {
     out += "precision_min_contrast = " + format_number(*patch.precision_min_contrast) + "\n";
   }
+  if (patch.flat_bar_steps) {
+    out += "flat_bar_steps = " + format_number(*patch.flat_bar_steps) + "\n";
+  }
 }
 
 IntegrityPatch full_patch(const IntegritySettings& settings) {
@@ -538,6 +543,7 @@ IntegrityPatch full_patch(const IntegritySettings& settings) {
   full.precision_high_sig_figs = settings.precision_high_sig_figs;
   full.precision_min_segment = settings.precision_min_segment;
   full.precision_min_contrast = settings.precision_min_contrast;
+  full.flat_bar_steps = settings.flat_bar_steps;
   return full;
 }
 
@@ -727,6 +733,9 @@ void IntegrityPatch::apply_to(IntegritySettings& settings) const {
   }
   if (precision_min_contrast) {
     settings.precision_min_contrast = *precision_min_contrast;
+  }
+  if (flat_bar_steps) {
+    settings.flat_bar_steps = *flat_bar_steps;
   }
 }
 
@@ -1080,6 +1089,8 @@ precision_high_decimals = 5
 precision_high_sig_figs = 5
 precision_min_segment = 20
 precision_min_contrast = 0.8
+# DQ107: a flat bar is expected where nearby bars span this many price-grid steps or fewer.
+flat_bar_steps = 3
 
 [coverage]
 # DQ3xx: how missing sessions are judged (doc/checks/DQ301.md).

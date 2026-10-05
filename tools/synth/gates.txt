@@ -19,6 +19,13 @@ DQ204 recall 0.90
 DQ205 precision 0.80
 DQ205 recall 0.80
 
+# Integrity. DQ107 also fires, rightly, on other faults that leave a bar flat (a
+# scale error rounding the range away, a newest bar at the wrong scale), so it is
+# held to fault precision; its few false positives are rare flat days on low-priced
+# names, which a deterministic check reports.
+DQ107 fault_precision 0.5
+DQ107 recall 0.9
+
 # Coverage (M2).
 DQ301 precision 0.90
 DQ301 recall 0.90

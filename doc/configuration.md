@@ -59,6 +59,7 @@ precision_high_decimals = 5
 precision_high_sig_figs = 5
 precision_min_segment = 20
 precision_min_contrast = 0.8
+flat_bar_steps = 3    # DQ107: flat bars are ordinary where bars span this many grid steps
 
 [coverage]            # DQ3xx; see doc/checks/DQ301.md for the model
 frequency = "auto"    # or daily, weekly, monthly, quarterly, annual, irregular
