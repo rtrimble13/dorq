@@ -103,7 +103,8 @@ TEST_CASE("M2 acceptance: one cohort, the lone liquid gap, no thin-name noise") 
 }
 
 TEST_CASE("info shows the downgraded members and the sparse series") {
-  const Result result = run({"--isolated", "--show-info", "--format", "jsonl"}, universe());
+  const Result result =
+      run({"--isolated", "--select", "DQ3", "--show-info", "--format", "jsonl"}, universe());
   CHECK(count_matching(result.out, "part of the DQ303 cohort on 2023-06-15") == 20);
   CHECK(count_matching(result.out, R"("code":"DQ302")") == 10);
   CHECK(count_matching(result.out, R"("code":"DQ302")") ==

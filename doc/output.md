@@ -40,6 +40,27 @@ The fields are:
 - **message**.
 - **`(line N)`**: the source line, when one row is at fault.
 
+`--show-evidence` adds indented lines under each violation that compares
+explanations (the DQ2xx price checks): the suggested action, every hypothesis
+with its posterior probability, and the evidence, as each term's log Bayes factor
+for the reported explanation against a real market move:
+
+```
+LIQ03  2022-01-07  DQ203 error  unreported-split  close 199.99→67 (×0.335 ≈ a 3:1 split), volume ×3.087 after; P(error) = >0.99  (line 5768)
+      → add split 3:1 ex 2022-01-07
+      hypotheses: unreported_split >0.999 market_move <0.001 scale_error <0.001 bad_print <0.001 bad_close <0.001
+      evidence (log Bayes factor against market_move):
+        prior 0.02  -3.8
+        return 0.335 (nearest split 3:1)  +12.6
+        next_bars 1.018 (the largest of the next 5 moves)  +0.7
+        open_high_low 0.3337  +0.7
+        volume_on_day 4.465 (against the median before)  +0.1
+        volume_shift 3.087 (median after / before)  +1.1
+```
+
+A violation judged with too few bars after it ends its message with
+`provisional` (see doc/checks/DQ201.md).
+
 `--color auto|always|never` colours the severity. `auto` colours only when
 stdout is a terminal and `NO_COLOR` is unset.
 
@@ -52,8 +73,25 @@ One JSON object per line. This is the record every machine format is built from:
  "code":"DQ101","check":"ohlc-bounds","severity":"error","p_error":1,
  "classification":"data_error","message":"high 9.5 < open 10; high 9.5 < close 10",
  "detail":{"open":10,"high":9.5,"low":9,"close":10},
+ "hypotheses":{},"evidence":[],"suggested_action":null,"provisional":false,
  "record_key":{"trade_date":"2024-01-03"},
- "dorq":{"version":"0.1.0","config_hash":"1610b258f86d7891"}}
+ "dorq":{"version":"0.3.0","config_hash":"1610b258f86d7891"}}
+```
+
+A price check's record carries its model (wrapped the same way):
+
+```json
+{"series":"LIQ03","label":null,"source":"bars.csv","date":"2022-01-07","line":5768,
+ "code":"DQ203","check":"unreported-split","severity":"error","p_error":0.99999999,
+ "classification":"context_gap","message":"close 199.99→67 (×0.335 ≈ a 3:1 split), ...",
+ "detail":{"close":67,"previous_close":199.99,"factor":0.335,"tail_probability":1.2e-09,
+           "volume_ratio":3.087,"split_ratio":"3:1"},
+ "hypotheses":{"market_move":1.1e-06,"tick_move":0,"bad_print":2.3e-09,...},
+ "evidence":[{"feature":"prior","value":0.02,"log_bf":-3.807},
+             {"feature":"return","value":0.335,"log_bf":12.6,"note":"nearest split 3:1"},
+             {"feature":"volume_shift","value":3.087,"log_bf":1.1,"note":"median after / before"}],
+ "suggested_action":{"kind":"add_split","ratio":"3:1","ex_date":"2022-01-07"},
+ "provisional":false,"record_key":{"trade_date":"2022-01-07"},"dorq":{...}}
 ```
 
 (This example is wrapped here; each record is one line in the output.)
@@ -72,6 +110,10 @@ One JSON object per line. This is the record every machine format is built from:
 | `classification` | `data_error`, `market_fact` or `context_gap` |
 | `message` | What the text format prints |
 | `detail` | The check's own fields; see `doc/checks/` |
+| `hypotheses` | For a check that compares explanations: each one considered, with its posterior probability. `{}` otherwise |
+| `evidence` | The evidence terms: `feature`, `value`, `log_bf` (the log Bayes factor for the reported explanation against a real market move) and an optional `note`. `[]` otherwise |
+| `suggested_action` | What would fix it: `kind` (`delete_bars`, `refetch_bar`, `add_split`, `rescale`, `split_history`) and its fields, or `null`. dorq never changes data |
+| `provisional` | `true` when the violation was judged with fewer bars after it than the model needs; a later run may change it. Its severity is at most `warn` |
 | `record_key` | `{"trade_date": "..."}`, or `{"line": N}` when there is no date |
 | `dorq` | The version, and the hash of the settings that can change what is reported (`dorq config show` prints it) |
 
@@ -88,7 +130,7 @@ One object: the same records in a `violations` array, followed by a `summary`.
 {...}
 ],"summary":{"inputs":1,"series":2,"rows":6,"violations":6,
  "by_severity":{"error":5,"warn":1,"info":0},"by_code":{"DQ101":2,"DQ102":1,"DQ104":3},
- "dorq":{"version":"0.1.0","config_hash":"1610b258f86d7891"}}}
+ "dorq":{"version":"0.3.0","config_hash":"1610b258f86d7891"}}}
 ```
 
 `rows` counts every data row read, including rows skipped for an unusable date.
@@ -101,7 +143,7 @@ A header row, then one row per violation:
 series,label,source,date,end_date,line,code,check,severity,p_error,classification,message
 ```
 
-`detail` is not included; use `jsonl` when you need it.
+`detail` and the model's fields are not included; use `jsonl` when you need them.
 
 ## fafnir
 

@@ -1,0 +1,43 @@
+# The precision and recall dorq must reach on dorq-synth data (seeds 1 and 2), at
+# warn and above. `ctest -R synth` runs it; see tools/synth/README.md.
+#
+# <code or hard-negative kind>  <metric>  <bound>
+#   precision        reported with the right code for an injected fault (at least)
+#   fault_precision  reported on any injected fault (at least)
+#   recall           injected faults reported with the right code (at least)
+#   max              reports on a hard negative of this kind (at most)
+
+# Price action (M3). The milestone's bar: DQ201 and DQ203 at precision 0.9.
+DQ201 precision 0.90
+DQ201 recall 0.90
+DQ202 precision 0.90
+DQ202 recall 0.90
+DQ203 precision 0.90
+DQ203 recall 0.85
+DQ204 precision 0.90
+DQ204 recall 0.90
+DQ205 precision 0.80
+DQ205 recall 0.80
+
+# Integrity. DQ107 also fires, rightly, on other faults that leave a bar flat (a
+# scale error rounding the range away, a newest bar at the wrong scale), so it is
+# held to fault precision; its few false positives are rare flat days on low-priced
+# names, which a deterministic check reports.
+DQ107 fault_precision 0.5
+DQ107 recall 0.9
+
+# Coverage (M2).
+DQ301 precision 0.90
+DQ301 recall 0.90
+DQ303 precision 1.0
+DQ303 recall 1.0
+DQ304 precision 1.0
+DQ304 recall 1.0
+
+# Hard negatives: real events that must not be reported. Earnings gaps, the crash
+# day and tick moves never; thin names' spike-and-revert trades are genuinely
+# ambiguous, and a couple are allowed.
+hn_earnings max 0
+hn_crash max 0
+hn_tick max 0
+hn_thin max 2

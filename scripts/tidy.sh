@@ -23,7 +23,7 @@ if [[ -z "${RUN_CLANG_TIDY}" || -z "${CLANG_TIDY}" ]]; then
   exit 2
 fi
 
-# The file filter is a Python regex over compile-database paths: our sources and
-# tests, and the generated build-info unit, but nothing fetched into _deps.
+# The file filter is a Python regex over compile-database paths: our sources,
+# tests and tools, and the generated build-info unit, but nothing fetched into _deps.
 "${RUN_CLANG_TIDY}" -quiet -clang-tidy-binary "${CLANG_TIDY}" -p "${build_dir}" \
-  '^(?!.*/_deps/).*/(src|tests)/.*\.cpp$'
+  '^(?!.*/_deps/).*/(src|tests|tools)/.*\.cpp$'

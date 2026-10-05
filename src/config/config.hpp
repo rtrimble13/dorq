@@ -31,6 +31,9 @@ struct IntegritySettings {
   int precision_high_sig_figs = 5;
   int precision_min_segment = 20;       // rows on each side of a regime change
   double precision_min_contrast = 0.8;  // difference in the high-precision share
+  // DQ107: a flat bar is expected where the bars nearby usually span this many
+  // steps of the price grid or fewer (see doc/checks/DQ107.md).
+  double flat_bar_steps = 3.0;
 };
 
 // A partial IntegritySettings: what one config table sets.
@@ -40,6 +43,7 @@ struct IntegrityPatch {
   std::optional<int> precision_high_sig_figs;
   std::optional<int> precision_min_segment;
   std::optional<double> precision_min_contrast;
+  std::optional<double> flat_bar_steps;
 
   void apply_to(IntegritySettings& settings) const;
 };
@@ -69,6 +73,84 @@ struct CoveragePatch {
   std::optional<int> publication_lag;
 
   void apply_to(CoverageSettings& settings) const;
+};
+
+// A split of `shares_after` new shares for `shares_before` old ones ("2:1"): the
+// price is multiplied by shares_before / shares_after. A reverse split is "1:10".
+struct SplitRatio {
+  int shares_after = 1;
+  int shares_before = 1;
+
+  [[nodiscard]] double price_factor() const noexcept {
+    return static_cast<double>(shares_before) / shares_after;
+  }
+  [[nodiscard]] std::string to_string() const;
+  auto operator<=>(const SplitRatio&) const = default;
+};
+
+[[nodiscard]] std::optional<SplitRatio> parse_split_ratio(std::string_view text) noexcept;
+
+// The hypotheses' prior weights per candidate bar (plan section 4.3), normalized
+// over the hypotheses that apply to it. `dorq calibrate` (M6) will fit them.
+struct PricePriors {
+  double market_move = 0.90;
+  double bad_print = 0.05;
+  double bad_close = 0.01;         // OHLC bars only
+  double unreported_split = 0.02;  // bars with volume only
+  double scale_error = 0.02;
+  double tick_move = 0.01;
+  double history_segment = 0.05;  // only after a gap of segment_gap sessions
+};
+
+// Settings for the price action checks (DQ2xx); doc/checks/DQ201.md explains the
+// model.
+struct PriceSettings {
+  double candidate_tail_prob = 1e-3;  // screen bars whose return is this improbable
+  double floor_move = 0.5;            // and every move of 50% or more, either way
+  int revert_max_bars = 5;            // the longest bad print: bars before the series reverts
+  int volume_window = 40;             // bars either side for volume levels
+  double ratio_tolerance = 0.01;      // slack on a clean ratio, on the log scale
+  std::vector<SplitRatio> split_ratios = {{2, 1},  {3, 1},  {3, 2},  {4, 1},  {5, 1},  {5, 4},
+                                          {8, 1},  {10, 1}, {15, 1}, {20, 1}, {1, 2},  {1, 3},
+                                          {1, 4},  {1, 5},  {1, 8},  {1, 10}, {1, 15}, {1, 20},
+                                          {1, 25}, {1, 30}, {1, 40}, {1, 50}, {1, 100}};
+  int provisional_bars = 3;           // fewer bars after a candidate than this: provisional
+  int segment_gap = 60;               // sessions without a bar before a history segment
+  double volatility_discount = 0.97;  // the forgetting factor of the volatility estimate
+  double tail_dof = 4.0;              // degrees of freedom of the return distribution
+  double jump_prob = 0.03;            // a real move's chance of being a jump
+  double jump_scale = 6.0;            // a jump's scale, in ordinary returns
+  double min_price = 1e-5;            // prices outside [min, max] are implausible
+  double max_price = 1e6;
+  PricePriors priors;
+};
+
+// A partial PriceSettings: what one [price] or [priors] table sets.
+struct PricePatch {
+  std::optional<double> candidate_tail_prob;
+  std::optional<double> floor_move;
+  std::optional<int> revert_max_bars;
+  std::optional<int> volume_window;
+  std::optional<double> ratio_tolerance;
+  std::optional<std::vector<SplitRatio>> split_ratios;
+  std::optional<int> provisional_bars;
+  std::optional<int> segment_gap;
+  std::optional<double> volatility_discount;
+  std::optional<double> tail_dof;
+  std::optional<double> jump_prob;
+  std::optional<double> jump_scale;
+  std::optional<double> min_price;
+  std::optional<double> max_price;
+  // [priors]
+  std::optional<double> market_move;
+  std::optional<double> bad_print;
+  std::optional<double> bad_close;
+  std::optional<double> unreported_split;
+  std::optional<double> scale_error;
+  std::optional<double> tick_move;
+  std::optional<double> history_segment;
+
+  void apply_to(PriceSettings& settings) const;
 };
 
 // How a DQ301 run is reported: one violation per run, or one per missing session
@@ -102,6 +184,7 @@ struct Profile {
   std::vector<std::string> ignore;        // added to the ignores
   IntegrityPatch integrity;
   CoveragePatch coverage;
+  PricePatch price;
 
   [[nodiscard]] bool matches(const Series& series) const;
 };
@@ -119,6 +202,7 @@ struct Config {
   ColumnOverrides columns;
   IntegritySettings integrity;
   CoverageSettings coverage;
+  PriceSettings price;
   GapReport gap_report = GapReport::kRun;
   CohortSettings cohort;
   SeverityThresholds severity;

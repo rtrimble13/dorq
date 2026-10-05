@@ -21,6 +21,10 @@ constexpr std::size_t kMinVolumeBars = 10;
 // halt is rare, not impossible.
 constexpr double kMinNoTrade = 1e-6;
 constexpr double kMaxNoTrade = 0.999;
+// Volume lifts the density only where the counts already show a bar on nearly
+// every session. Below that, trades are lumpy (one 2,000-share print is not two
+// trades) and the counts are the better guide.
+constexpr double kVolumeFloorFrom = 0.9;
 
 double median_of(std::vector<double> values) {
   const auto mid = values.begin() + static_cast<std::ptrdiff_t>(values.size() / 2);
@@ -62,7 +66,7 @@ double healthy_density(double present, double healthy_missing, const VolumeEvide
   const double a = settings.prior_density * settings.prior_strength;
   const double b = (1.0 - settings.prior_density) * settings.prior_strength;
   const double from_data = (present + a) / (present + healthy_missing + a + b);
-  if (!volume.present) {
+  if (!volume.present || from_data < kVolumeFloorFrom) {
     return from_data;
   }
   return std::max(from_data, 1.0 - volume.no_trade);
@@ -213,8 +217,11 @@ CoverageAnalysis analyze_coverage(const Series& series, const Calendar& calendar
   // way.
   std::vector<double> outage(n, 0.0);
   for (std::size_t r = 0; r < out.runs.size(); ++r) {
-    const VolumeEvidence& v = evidence[run_start[r] / block];
-    const double density = v.present ? 1.0 - v.no_trade : settings.prior_density;
+    const std::size_t b = run_start[r] / block;
+    const auto [lo, hi] = window(b);
+    const double present_w = present_sum.range(lo, hi);
+    const double density =
+        healthy_density(present_w, static_cast<double>(hi - lo) - present_w, evidence[b], settings);
     const std::vector<double> p = run_posterior(out.runs[r].sessions, density, settings, true);
     std::copy(p.begin(), p.end(), outage.begin() + static_cast<std::ptrdiff_t>(run_start[r]));
   }
@@ -236,7 +243,7 @@ CoverageAnalysis analyze_coverage(const Series& series, const Calendar& calendar
       const VolumeEvidence& traded = evidence[b];
       run.density = healthy_density(present_w, healthy_missing, traded, settings);
       run.observed_density = present_w / static_cast<double>(hi - lo);
-      run.density_from_volume = traded.present && 1.0 - traded.no_trade >= run.density;
+      run.density_from_volume = traded.present && run.density == 1.0 - traded.no_trade;
       run.median_volume = traded.median_volume;
       run.session_p = run_posterior(run.sessions, run.density, settings, true);
       run.p_outage = *std::max_element(run.session_p.begin(), run.session_p.end());

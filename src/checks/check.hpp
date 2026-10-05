@@ -11,6 +11,7 @@
 #include "dorq/frequency.hpp"
 #include "dorq/series.hpp"
 #include "dorq/violation.hpp"
+#include "price/model.hpp"
 
 namespace dorq {
 
@@ -21,11 +22,15 @@ struct SeriesContext {
   const CoverageSettings& coverage;
   const Calendar& calendar;
   const SeverityThresholds& thresholds;
+  const PriceSettings& price;
   Frequency frequency = Frequency::kDaily;  // resolved: never kAuto
   // The coverage model's view of a daily series, computed once when any DQ30x
   // check runs; nullptr otherwise.
   const CoverageAnalysis* analysis = nullptr;
   GapReport gap_report = GapReport::kRun;
+  // The price model's findings, computed once when any DQ2xx price check runs;
+  // nullptr otherwise.
+  const PriceAnalysis* price_analysis = nullptr;
 };
 
 // A check reads one series and appends violations. Checks hold no state and are

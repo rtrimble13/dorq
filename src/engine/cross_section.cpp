@@ -161,15 +161,19 @@ std::vector<Violation> CrossSection::finalize(std::vector<SeriesResult>& results
   for (std::size_t i = 0; i < results.size() && i < tails_.size(); ++i) {
     SeriesResult& result = results[i];
     const CrossSummary& t = tails_[i];
-    // DQ301 runs a cohort explains.
+    // DQ301 runs a cohort explains: every session missing is a cohort date. A long
+    // run that merely contains one is still its own outage.
     if (!cohort_dates.empty()) {
       for (Violation& v : result.violations) {
-        if (v.check->code != "DQ301") {
+        if (v.check->code != "DQ301" || !v.date) {
           continue;
         }
-        const auto it = std::find_if(cohort_dates.begin(), cohort_dates.end(),
-                                     [&v](Date date) { return covers(v, date); });
-        if (it != cohort_dates.end()) {
+        const auto covered = std::count_if(cohort_dates.begin(), cohort_dates.end(),
+                                           [&v](Date date) { return covers(v, date); });
+        const int sessions = calendar_.sessions_between(*v.date, v.end_date.value_or(*v.date));
+        if (covered > 0 && covered >= sessions) {
+          const auto it = std::find_if(cohort_dates.begin(), cohort_dates.end(),
+                                       [&v](Date date) { return covers(v, date); });
           cohort_note(v, *it);
         }
       }

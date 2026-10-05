@@ -9,6 +9,7 @@
 #include "checks/check.hpp"
 #include "checks/coverage.hpp"
 #include "checks/integrity.hpp"
+#include "checks/price.hpp"
 #include "core/text.hpp"
 
 namespace dorq {
@@ -54,16 +55,23 @@ std::span<const Check* const> all_checks() {
   static const PrecisionShift kPrecisionShift;
   static const NonSessionBar kNonSession;
   static const ZeroRangeWithVolume kZeroRange;
+  static const PriceCheck kBadPrint(bad_print_info());
+  static const PriceCheck kScaleShift(scale_shift_info());
+  static const PriceCheck kUnreportedSplit(unreported_split_info());
+  static const PriceCheck kCloseMismatch(ohlc_close_mismatch_info());
+  static const PriceCheck kHistorySegment(history_segment_info());
   static const DateShift kDateShift;
+  static const PriceCheck kLargeMove(large_move_info());
   static const MissingRunCheck kMissingRun;
   static const SparseSeries kSparse;
   static const CohortGap kCohort;
   static const StaleFeed kStale;
   static const FrequencyGap kFrequencyGap;
-  static const std::array<const Check*, 13> kChecks = {
-      &kOhlcBounds,     &kNonPositive, &kDuplicateDate, &kMissingField, &kNonSession,
-      &kPrecisionShift, &kZeroRange,   &kDateShift,     &kMissingRun,   &kSparse,
-      &kCohort,         &kStale,       &kFrequencyGap};
+  static const std::array<const Check*, 19> kChecks = {
+      &kOhlcBounds,     &kNonPositive,    &kDuplicateDate, &kMissingField, &kNonSession,
+      &kPrecisionShift, &kZeroRange,      &kBadPrint,      &kScaleShift,   &kUnreportedSplit,
+      &kCloseMismatch,  &kHistorySegment, &kDateShift,     &kLargeMove,    &kMissingRun,
+      &kSparse,         &kCohort,         &kStale,         &kFrequencyGap};
   return kChecks;
 }
 

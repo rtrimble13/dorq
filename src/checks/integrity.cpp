@@ -4,11 +4,13 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "dorq/number.hpp"
+#include "price/tick.hpp"
 
 namespace dorq {
 namespace {
@@ -49,6 +51,32 @@ double median(std::vector<double> values) {
 
 std::string percent(double share) {
   return std::to_string(static_cast<int>(std::lround(share * 100.0))) + "%";
+}
+
+// The smallest step prices take in rows [from, to): the least gap between the
+// distinct open, high, low and close values there. Prices can sit on a lattice
+// coarser than the decimals they are written with: a cent grid adjusted for a 1:9
+// split moves in steps of 0.0009, written to four decimals. 0 when there is one
+// price or none.
+double smallest_step(const Series& s, std::size_t from, std::size_t to) {
+  std::vector<double> prices;
+  for (std::size_t j = from; j < to; ++j) {
+    for (const double p : {s.open[j], s.high[j], s.low[j], s.close[j]}) {
+      if (std::isfinite(p) && p > 0.0) {
+        prices.push_back(p);
+      }
+    }
+  }
+  std::sort(prices.begin(), prices.end());
+  double step = std::numeric_limits<double>::infinity();
+  for (std::size_t k = 1; k < prices.size(); ++k) {
+    const double gap = prices[k] - prices[k - 1];
+    // Equal as written, or apart by a rounding error.
+    if (gap > 1e-9 * prices[k]) {
+      step = std::min(step, gap);
+    }
+  }
+  return std::isfinite(step) ? step * (1.0 - 1e-9) : 0.0;
 }
 
 }  // namespace
@@ -369,30 +397,92 @@ void ZeroRangeWithVolume::run(const SeriesContext& context, std::vector<Violatio
     return;
   }
   // A single trade prints a flat bar on small volume, and on a thin name that is
-  // normal. A flat bar on the volume the series usually trades is not.
+  // normal. A flat bar on the volume the series usually trades is not -- unless
+  // the price grid is coarse for the price, as for a sub-dime stock quoted in
+  // cents, whose bars span a tick or two and are often flat.
   constexpr std::size_t kMinTradedRows = 20;
+  constexpr std::size_t kNearby = 20;        // bars either side that judge the usual range
+  constexpr std::size_t kMinNearby = 5;      // bars with a range needed to judge it
+  constexpr std::size_t kMinFlatNearby = 3;  // and other flat bars that make them a habit
   std::vector<double> traded;
-  for (const double volume : s.volume) {
-    if (std::isfinite(volume) && volume > 0.0) {
-      traded.push_back(volume);
+  std::vector<std::uint8_t> decimals;
+  for (std::size_t i = 0; i < s.size(); ++i) {
+    if (std::isfinite(s.volume[i]) && s.volume[i] > 0.0) {
+      traded.push_back(s.volume[i]);
+    }
+    if (std::isfinite(s.close[i])) {
+      decimals.push_back(s.close_decimals[i]);
     }
   }
   if (traded.size() < kMinTradedRows) {
     return;
   }
   const double typical = median(traded);
+  const double written = written_grid(std::move(decimals));
+  const auto flat = [&s](std::size_t i) {
+    const double c = s.close[i];
+    return s.open[i] == c && s.high[i] == c && s.low[i] == c;
+  };
+  // Each traded bar's range, as a share of its close. NaN for a flat or unusable
+  // bar.
+  std::vector<double> range(s.size(), std::numeric_limits<double>::quiet_NaN());
+  for (std::size_t i = 0; i < s.size(); ++i) {
+    const double c = s.close[i];
+    if (!std::isfinite(s.volume[i]) || s.volume[i] <= 0.0 || !std::isfinite(c) || c <= 0.0 ||
+        !std::isfinite(s.high[i]) || !std::isfinite(s.low[i]) || flat(i)) {
+      continue;
+    }
+    range[i] = (s.high[i] - s.low[i]) / c;
+  }
   for (std::size_t i = 0; i < s.size(); ++i) {
     const double c = s.close[i];
     const double volume = s.volume[i];
     if (!std::isfinite(c) || !std::isfinite(volume) || volume <= 0.0 || volume < typical ||
-        s.open[i] != c || s.high[i] != c || s.low[i] != c) {
+        !flat(i)) {
       continue;
     }
-    Violation v =
-        make_violation(info(), Severity::kWarn, s, i,
-                       "open = high = low = close = " + format_number(c) + " on volume " +
-                           format_number(volume) + " (median " + format_number(typical) + ")");
+    // The ranges nearby, at this bar's price, in steps of its price grid: the
+    // exchange's tick, or the grid the prices are written on. Rounded, since 0.05 -
+    // 0.03 is not exactly two cents in binary.
+    const std::size_t from = i >= kNearby ? i - kNearby : 0;
+    const std::size_t to = std::min(s.size(), i + kNearby + 1);
+    const double grid = std::max({tick_size(s.date[i], c), written, smallest_step(s, from, to)});
+    std::vector<double> nearby;
+    std::size_t traded_nearby = 0;
+    std::size_t flat_nearby = 0;
+    for (std::size_t j = from; j < to; ++j) {
+      if (j == i || !std::isfinite(s.volume[j]) || s.volume[j] <= 0.0) {
+        continue;
+      }
+      ++traded_nearby;
+      if (std::isfinite(range[j])) {
+        nearby.push_back(std::round(range[j] * c / grid * 1e6) / 1e6);
+      } else if (flat(j)) {
+        ++flat_nearby;
+      }
+    }
+    const double usual =
+        nearby.size() >= kMinNearby ? median(nearby) : std::numeric_limits<double>::quiet_NaN();
+    if (usual <= context.integrity.flat_bar_steps) {
+      continue;  // the bars here span a step or two: a flat one is ordinary
+    }
+    // Flat bars among ranged ones are a habit of this stretch (a price only a few
+    // ticks wide); a run of flat bars with no ranged bar nearby is not.
+    if (nearby.size() >= kMinNearby && flat_nearby >= kMinFlatNearby &&
+        10 * flat_nearby >= traded_nearby) {
+      continue;
+    }
+    std::string message = "open = high = low = close = " + format_number(c) + " on volume " +
+                          format_number(volume) + " (median " + format_number(typical) + ")";
+    message += std::isfinite(usual)
+                   ? ", where the bars nearby span a median " +
+                         format_number(std::round(usual * 10.0) / 10.0) + " steps of the price grid"
+                   : ", with no bar nearby that has a range";
+    Violation v = make_violation(info(), Severity::kWarn, s, i, std::move(message));
     v.detail = {{"close", c}, {"volume", volume}, {"median_volume", typical}};
+    if (std::isfinite(usual)) {
+      v.detail.push_back({"nearby_range_steps", usual});
+    }
     out.push_back(std::move(v));
   }
 }

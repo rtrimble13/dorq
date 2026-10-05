@@ -10,7 +10,8 @@ add_executable(
   unit/test_stats.cpp
   unit/test_checks.cpp
   unit/test_config.cpp
-  unit/test_coverage.cpp)
+  unit/test_coverage.cpp
+  unit/test_price.cpp)
 target_include_directories(dorq_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(dorq_tests PRIVATE dorq_lib doctest::doctest_with_main)
 dorq_configure_target(dorq_tests)
@@ -45,4 +46,16 @@ dorq_cli_exit_test(no-date-column 3 --isolated ${DATA}/no_date.csv)
 dorq_cli_exit_test(exit-zero 0 --isolated --exit-zero ${DATA}/bad_bars.csv)
 foreach(format text json jsonl csv fafnir)
   dorq_cli_exit_test(violations-${format} 1 --isolated --format ${format} ${DATA}/bad_bars.csv)
+endforeach()
+
+# The synthetic-data gate (DR-0308): precision and recall per check on dorq-synth
+# universes, against tools/synth/gates.txt.
+foreach(seed 1 2)
+  add_test(
+    NAME synth.gate-seed-${seed}
+    COMMAND
+      "${CMAKE_COMMAND}" "-DSYNTH=$<TARGET_FILE:dorq-synth>" "-DDORQ=$<TARGET_FILE:dorq>"
+      "-DGATES=${PROJECT_SOURCE_DIR}/tools/synth/gates.txt"
+      "-DOUT=${CMAKE_CURRENT_BINARY_DIR}/synth-${seed}" "-DSEED=${seed}" -P
+      "${CMAKE_CURRENT_SOURCE_DIR}/synth_gate.cmake")
 endforeach()
