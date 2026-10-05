@@ -103,7 +103,7 @@ precision to 0.88. Thin names' spike-and-revert trades are genuinely ambiguous.
 
 At M4 the gate adds DQ108 and DQ403 at 1.0 and 0.9, DQ401 at precision 0.9 and
 recall 0.8, and DQ501 at 0.8 and 0.6. On seeds 1-6, DQ501 misses one to three
-runs a universe, all of them two or three bars long. A quiet stock repeats its
+runs a universe, all of them two to four bars long. A quiet stock repeats its
 close twice now and then, so such runs are reported at info if at all. A
 rate's quarter-point move that half-reverts the next day is ambiguous; one
 such report is allowed.
