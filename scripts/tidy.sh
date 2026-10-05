@@ -2,7 +2,7 @@
 # Runs clang-tidy over dorq's own sources, using the compile database of a
 # configured build directory (default: build/ci).
 #
-#   cmake --preset ci && cmake --build --preset ci --target dorq_build_info
+#   cmake --preset ci && cmake --build --preset ci --target dorq_generated
 #   scripts/tidy.sh [build-dir]
 #
 # Uses $RUN_CLANG_TIDY / $CLANG_TIDY if set, else the -18 versions, else unversioned.

@@ -1,0 +1,54 @@
+#pragma once
+
+#include <vector>
+
+#include "checks/check.hpp"
+
+namespace dorq {
+
+// DQ1xx: integrity. Deterministic checks of a row, or a series, on its own
+// terms; each violation has p_error = 1. See doc/checks/DQ1xx.md.
+
+// DQ101
+class OhlcBounds final : public Check {
+ public:
+  [[nodiscard]] const CheckInfo& info() const noexcept override;
+  void run(const SeriesContext& context, std::vector<Violation>& out) const override;
+};
+
+// DQ102
+class NonPositive final : public Check {
+ public:
+  [[nodiscard]] const CheckInfo& info() const noexcept override;
+  void run(const SeriesContext& context, std::vector<Violation>& out) const override;
+};
+
+// DQ103
+class DuplicateDate final : public Check {
+ public:
+  [[nodiscard]] const CheckInfo& info() const noexcept override;
+  void run(const SeriesContext& context, std::vector<Violation>& out) const override;
+};
+
+// DQ104
+class MissingField final : public Check {
+ public:
+  [[nodiscard]] const CheckInfo& info() const noexcept override;
+  void run(const SeriesContext& context, std::vector<Violation>& out) const override;
+};
+
+// DQ106
+class PrecisionShift final : public Check {
+ public:
+  [[nodiscard]] const CheckInfo& info() const noexcept override;
+  void run(const SeriesContext& context, std::vector<Violation>& out) const override;
+};
+
+// DQ107
+class ZeroRangeWithVolume final : public Check {
+ public:
+  [[nodiscard]] const CheckInfo& info() const noexcept override;
+  void run(const SeriesContext& context, std::vector<Violation>& out) const override;
+};
+
+}  // namespace dorq

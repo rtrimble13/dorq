@@ -1,0 +1,6 @@
+select = ["DQ1"]
+[columns]
+date = "d"
+[profiles.p]
+match = { kind = "point" }
+ignore = ["DQ107"]

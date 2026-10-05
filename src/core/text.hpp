@@ -1,0 +1,40 @@
+#pragma once
+
+#include <string>
+#include <string_view>
+
+namespace dorq {
+
+[[nodiscard]] constexpr char ascii_lower(char ch) noexcept {
+  return ch >= 'A' && ch <= 'Z' ? static_cast<char>(ch - 'A' + 'a') : ch;
+}
+
+[[nodiscard]] constexpr bool iequals(std::string_view a, std::string_view b) noexcept {
+  if (a.size() != b.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    if (ascii_lower(a[i]) != ascii_lower(b[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+[[nodiscard]] constexpr std::string_view trim(std::string_view text) noexcept {
+  while (!text.empty() && (text.front() == ' ' || text.front() == '\t' || text.front() == '\r')) {
+    text.remove_prefix(1);
+  }
+  while (!text.empty() && (text.back() == ' ' || text.back() == '\t' || text.back() == '\r')) {
+    text.remove_suffix(1);
+  }
+  return text;
+}
+
+// Appends `text` as a JSON string literal, quotes included (RFC 8259, section 7).
+void append_json_string(std::string& out, std::string_view text);
+
+// Shortens `text` to at most `max_chars` bytes, marking a cut with "...".
+[[nodiscard]] std::string abbreviate(std::string_view text, std::size_t max_chars);
+
+}  // namespace dorq

@@ -42,6 +42,11 @@ function(dorq_configure_target target)
     target_link_options(${target} PRIVATE -fsanitize=${_sanitizers})
   endif()
 
+  # Coverage instrumentation for libFuzzer on everything a fuzz target links.
+  if(DORQ_BUILD_FUZZERS)
+    target_compile_options(${target} PRIVATE -fsanitize=fuzzer-no-link)
+  endif()
+
   if(DORQ_COVERAGE)
     target_compile_options(${target} PRIVATE --coverage -O0)
     target_link_options(${target} PRIVATE --coverage)

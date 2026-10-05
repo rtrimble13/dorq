@@ -7,8 +7,9 @@ DerivePointerAlignment: false
 PointerAlignment: Left
 IncludeBlocks: Regroup
 IncludeCategories:
-  # Project headers last, after the standard library and third-party headers.
-  - Regex: '^"(dorq|cli|core)/'
+  # Project headers ("...") last, after the standard library and then
+  # third-party and system headers.
+  - Regex: '^"'
     Priority: 3
   - Regex: '^<[a-z_]+>$'
     Priority: 1

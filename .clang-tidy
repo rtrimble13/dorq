@@ -14,6 +14,7 @@ Checks: >
   portability-*,
   readability-*,
   -bugprone-easily-swappable-parameters,
+  -cppcoreguidelines-avoid-const-or-ref-data-members,
   -cppcoreguidelines-avoid-magic-numbers,
   -readability-magic-numbers,
   -misc-include-cleaner,
@@ -23,6 +24,8 @@ Checks: >
 
 # Why those are off:
 #   easily-swappable-parameters  flags every (double, double); numeric code is made of them
+#   avoid-const-or-ref-data-members  a non-copyable helper holding a reference to the
+#                                stream or sink it works on is the intent
 #   magic-numbers (both)         statistical constants read better in place, with a comment
 #   include-cleaner              too eager with umbrella headers such as <CLI/CLI.hpp>
 #   non-private-member-variables plain aggregates (BuildInfo, Violation) are the point
@@ -34,6 +37,10 @@ WarningsAsErrors: '*'
 HeaderFilterRegex: '/(include/dorq|src|tests)/'
 FormatStyle: file
 CheckOptions:
+  # Flat dispatch over config keys and parser state machines scores high without being
+  # hard to read; 60 still catches the genuinely tangled.
+  - { key: readability-function-cognitive-complexity.Threshold,   value: 60 }
+  - { key: readability-function-cognitive-complexity.IgnoreMacros, value: true }
   - { key: readability-identifier-naming.NamespaceCase,           value: lower_case }
   - { key: readability-identifier-naming.ClassCase,               value: CamelCase }
   - { key: readability-identifier-naming.StructCase,              value: CamelCase }

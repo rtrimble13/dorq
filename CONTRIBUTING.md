@@ -19,7 +19,7 @@ is how they go stale. The PR template has the checklist:
 | You changed | Update |
 |---|---|
 | A command, option, output format, exit code, or the install steps | `README.md` |
-| A check: added, renamed, default changed, behaviour changed | `doc/checks/DQxxx.md` (from M1) |
+| A check: added, renamed, default changed, behaviour changed | `doc/checks/DQxxx.md` |
 | A decision someone will later ask "why" about | a new ADR in `doc/adr/`, or a correction note on an existing one |
 | Scope, order or status of planned work | `doc/plans/dorq-development-plan.md` |
 
@@ -63,6 +63,37 @@ For a given binary, input and configuration, dorq's output is fixed
 - Run at least `cmake --workflow --preset dev` and `cmake --workflow --preset asan`
   before pushing. The sanitizer preset needs the compiler's sanitizer runtime: GCC
   ships it; for Clang on Ubuntu, install `libclang-rt-18-dev`.
+
+## Adding a check
+
+1. Implement it as a `Check` (`src/checks/`), with a `CheckInfo` that gives its
+   code, name, summary, default severity and what it applies to. Take the next
+   free code in its family ([ADR 0003](doc/adr/0003-check-codes.md)). A code is
+   never reused.
+2. Register it in `all_checks()` (`src/checks/registry.cpp`), in code order.
+3. Write `doc/checks/DQxxx.md`, starting `# DQxxx name`. The build compiles it into
+   the binary for `dorq explain`, and a test fails if a registered check has no
+   page.
+4. Test what it reports *and* what it must not report: the near misses are the
+   point of a data-quality check.
+5. Add any settings to `Config` and `IntegritySettings` (or the family's
+   equivalent). Settings are parsed in `src/config/config.cpp` and documented in
+   `doc/configuration.md`; anything that changes what is reported belongs in
+   `config_hash`.
+
+## Fuzzing
+
+The readers (and every check behind them) and the config parser have libFuzzer
+targets in `fuzz/`. CI runs each one for a minute on every pull request. Locally,
+with Clang and its runtime (`libclang-rt-18-dev` on Ubuntu):
+
+```bash
+CC=clang-18 CXX=clang++-18 cmake --preset fuzz && cmake --build --preset fuzz
+mkdir -p /tmp/corpus && build/fuzz/fuzz/fuzz_reader -max_total_time=300 /tmp/corpus fuzz/corpus/reader
+```
+
+When the fuzzer finds a crash, fix it, then add the crashing input to
+`fuzz/corpus/` so it stays fixed.
 
 ## Dependencies
 

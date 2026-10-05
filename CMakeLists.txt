@@ -1,11 +1,17 @@
 cmake_minimum_required(VERSION 3.25)
 
+# macOS 13.3 is the first whose C++ library formats floating point with
+# std::to_chars, which writes every number dorq outputs. Ignored elsewhere.
+set(CMAKE_OSX_DEPLOYMENT_TARGET
+    "13.3"
+    CACHE STRING "Minimum macOS version")
+
 # The version is written here and nowhere else. The binary reports it
 # (`dorq --version`), every output record will carry it, and the release
 # workflow refuses a tag that disagrees with it. See CONTRIBUTING.md.
 project(
   dorq
-  VERSION 0.0.1
+  VERSION 0.1.0
   DESCRIPTION "Bayesian data-quality linter for financial time series"
   HOMEPAGE_URL "https://github.com/rtrimble13/dorq"
   LANGUAGES CXX)
@@ -17,6 +23,7 @@ endif()
 option(DORQ_BUILD_TESTS "Build the test suite" ${PROJECT_IS_TOP_LEVEL})
 option(DORQ_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(DORQ_COVERAGE "Instrument for gcov-style coverage (GCC/Clang)" OFF)
+option(DORQ_BUILD_FUZZERS "Build the libFuzzer targets (Clang only)" OFF)
 option(DORQ_STATIC_RUNTIME "Link libstdc++ and libgcc statically (Linux only)" OFF)
 set(DORQ_SANITIZERS
     ""
@@ -46,6 +53,13 @@ add_subdirectory(src)
 if(DORQ_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
+endif()
+
+if(DORQ_BUILD_FUZZERS)
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "DORQ_BUILD_FUZZERS needs Clang (libFuzzer)")
+  endif()
+  add_subdirectory(fuzz)
 endif()
 
 include(GNUInstallDirs)

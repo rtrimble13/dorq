@@ -1,0 +1,8 @@
+# Tests inherit the project configuration, with two checks off.
+#   unchecked-optional-access  REQUIRE(x.has_value()) guards an access, but clang-tidy
+#                              cannot see through doctest's macros
+#   function-cognitive-complexity  a test case is a flat list of assertions
+InheritParentConfig: true
+Checks: >
+  -bugprone-unchecked-optional-access,
+  -readability-function-cognitive-complexity

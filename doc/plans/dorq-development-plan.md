@@ -1,7 +1,7 @@
 # Plan: dorq, a Bayesian data-quality linter for financial time series
 
-- Status: **accepted** (2026-10-05). The defaults in §10 are confirmed, and Q9 is answered. M0 is
-  implemented and awaiting merge.
+- Status: **accepted** (2026-10-05). The defaults in §10 are confirmed, and Q9 is answered. M0 is done
+  (PR #1). M1 is implemented and awaiting merge.
 - Scope: this repository (the C++ CLI), plus one milestone of integration work in `rtrimble13/fafnir` (M7).
 - Status legend: ⬜ planned · 🔄 in progress · ✅ done (PR #) · ⏭ carried over · ✖ dropped (reason)
 
@@ -104,6 +104,8 @@ dorq version
 | `--since DATE` | none | Report only on dates ≥ `--since`. Earlier data is still used as lookback, which is the incremental mode |
 | `--show-evidence`, `--show-info`, `--statistics` | off | `--statistics` works like flake8's per-code counts |
 | `--threads N` | all cores | Output is identical for any N |
+| `--buffer` | off | Read all input before checking, for large input not grouped by series (§2.2) |
+| `--color auto\|always\|never` | `auto` | Colour in text output; `auto` means a terminal and no `NO_COLOR` |
 | `--config F` / `--isolated` | discovered | `--isolated` ignores any config file |
 
 **Exit codes:** `0` means no violations at or above `--fail-on`. `1` means violations were found. `2`
@@ -114,8 +116,12 @@ means a usage or config error. `3` means the input could not be read or parsed.
 - **Long format**: one row per `(series, date)`. The `series` column is optional; without it, each
   file is one series named after its file stem.
 - **OHLCV**: `date, open, high, low, close, volume[, vwap]`. **Point**: `date, value`.
-- The input may be unsorted. If it is sorted by `(series, date)`, which fafnir's export guarantees, dorq
-  streams it with bounded memory (§5.3). Otherwise it buffers the whole input.
+- The input may be unsorted. Up to 256 MiB of input in total is read whole before checking. Larger
+  input, and stdin, is streamed with bounded memory (§5.3), which needs every row of a series together
+  (as `ORDER BY series, date` gives, and as fafnir's export does). A series that reappears is then an
+  input error (exit 3) that says to sort the input, or to pass `--buffer` and read everything first.
+  *(Decided in M1. The plan first said dorq would fall back to buffering when it met unsorted input, but
+  by the time a series reappears its first half has already been checked and reported.)*
 - Prices are parsed with fast_float into `double` (§5.1 explains why not `std::from_chars`), and dorq also records how many decimal places
   each value had as written, for the precision check DQ106.
 - `--actions`: `series, ex_date, type(split|dividend), numerator, denominator, amount`.
@@ -176,7 +182,7 @@ Bayesian and report `p_error`. Checks marked **D** are deterministic, and a viol
 | DQ104 | `missing-field` | NaN, empty, or unparseable values |
 | DQ105 | `non-session-bar` | A bar on a date the calendar marks closed |
 | DQ106 | `precision-shift` | The number of decimal places changes regime, e.g. 2 dp becomes 6+ dp. Vendors produce this when they back-adjust a feed that should be raw (the WZRD and SMUP cases) |
-| DQ107 | `zero-range-with-volume` | `O = H = L = C` with volume > 0 on a series traded in sessions. This is the general form of `price_scale_collapse`. NAV-priced series are exempt via their profile |
+| DQ107 | `zero-range-with-volume` | `O = H = L = C` on at least the series' median traded volume. A single trade on a thin day prints a flat bar legitimately, so a bare "volume > 0" would have flagged every thin name. This is the general form of `price_scale_collapse`. NAV-priced series are exempt via their profile |
 
 ### DQ2xx: price action (B; the core of dorq)
 | Code | Name | Detects | Suggested action |
@@ -346,17 +352,17 @@ frequency model for DQ305.
   targets GCC 13 and Clang 18 on Ubuntu 24.04 (fafnir's host OS, where those are the system
   compilers) and AppleClang on macOS.
 - Dependencies are fetched with `FetchContent`, each pinned to a commit with its tag in a comment, and
-  are all header-only or small. Each one is added in the PR that first uses it. M0 brought in only
-  CLI11 and doctest.
+  are all header-only or small. Each one is added in the PR that first uses it. M0 brought in CLI11
+  and doctest; M1 added fast_float and toml++.
 
   | Need | Library |
   |---|---|
   | CLI parsing | CLI11 |
   | Number parsing | fast_float. libc++ (macOS) did not implement `std::from_chars` for floating point until LLVM 20, so it can't be relied on across the platforms dorq releases for |
-  | JSON input and output | simdjson (reading JSONL) plus nlohmann/json (config and output) |
-  | TOML config | toml++ |
+  | JSON input and output | Neither library. Input records are flat objects of scalars, so a ~250-line parser (`src/io/json.cpp`, fuzzed) does the job, streams JSON Lines, and keeps each number's raw text so its written precision survives (DQ106 needs it). A library's DOM would have discarded that text. Output is written directly. *(Changed in M1; the plan had simdjson and nlohmann/json.)* |
+  | TOML config | toml++, pinned past v3.4.0 to the commit fixing marzer/tomlplusplus#305 (undefined behaviour on some non-ASCII input), which dorq's config fuzzer found |
   | Special functions (the t CDF, lgamma, incomplete beta) | Boost.Math, in its standalone header-only form |
-  | Formatting | {fmt}. `std::format` works on GCC 13, but Apple's libc++ only formats floating point from macOS 13.3, and floats are most of dorq's output |
+  | Formatting | `std::to_chars` (shortest round-trip), with the macOS deployment target set to 13.3, the first release whose libc++ provides it. No {fmt}. *(Changed in M1.)* |
   | Tests and benchmarks | doctest, Google Benchmark |
 
 - No Eigen, Arrow, or database client in v1. Parquet input is a stretch item behind a CMake option.
@@ -582,11 +588,11 @@ release; items within a milestone are listed in dependency order.
 ### M0: Foundations (tag v0.0.1)
 | ID | Item | Size | Status |
 |---|---|---|---|
-| DR-0001 | CMake + presets (dev, release, ci, asan, coverage), FetchContent pinned deps, `dorq --version` / `dorq version [--format json]` with the commit recorded at build time | M | 🔄 awaiting merge |
-| DR-0002 | CI: GCC 13 and Clang 18 on Linux, AppleClang on macOS, ASan+UBSan, clang-format and clang-tidy (both pinned to 18), unit and CLI contract tests | M | 🔄 awaiting merge |
-| DR-0003 | `doc/adr/0001-stateless-deterministic-linter.md`, `0002-bayesian-core-no-mcmc.md`, `0003-check-codes.md` | S | 🔄 awaiting merge |
-| DR-0004 | README with a quickstart, CONTRIBUTING, and a PR template that requires docs to change with code (fafnir's docs-gate convention) | S | 🔄 awaiting merge |
-| DR-0005 | Release workflow: a `vX.Y.Z` tag builds and tests on Linux x86-64 and macOS arm64, refuses a tag that disagrees with the binary's version, and publishes archives with `SHA256SUMS` | S | 🔄 awaiting merge |
+| DR-0001 | CMake + presets (dev, release, ci, asan, coverage), FetchContent pinned deps, `dorq --version` / `dorq version [--format json]` with the commit recorded at build time | M | ✅ PR #1 |
+| DR-0002 | CI: GCC 13 and Clang 18 on Linux, AppleClang on macOS, ASan+UBSan, clang-format and clang-tidy (both pinned to 18), unit and CLI contract tests | M | ✅ PR #1 |
+| DR-0003 | `doc/adr/0001-stateless-deterministic-linter.md`, `0002-bayesian-core-no-mcmc.md`, `0003-check-codes.md` | S | ✅ PR #1 |
+| DR-0004 | README with a quickstart, CONTRIBUTING, and a PR template that requires docs to change with code (fafnir's docs-gate convention) | S | ✅ PR #1 |
+| DR-0005 | Release workflow: a `vX.Y.Z` tag builds and tests on Linux x86-64 and macOS arm64, refuses a tag that disagrees with the binary's version, and publishes archives with `SHA256SUMS` | S | ✅ PR #1 |
 
 **Done when:** CI is green on an empty `dorq` binary that prints its version, and tagging `v0.0.1`
 publishes release archives.
@@ -594,15 +600,15 @@ publishes release archives.
 ### M1: I/O, data model, deterministic checks (v0.1.0)
 | ID | Item | Size | Status |
 |---|---|---|---|
-| DR-0101 | Series data model (structure of arrays, OHLCV and point), recorded decimal places, the `Violation` type | M | ⬜ |
-| DR-0102 | CSV/TSV reader: `from_chars`, column aliases and `--columns`, schema detection, stdin, streaming grouped by series | L | ⬜ |
-| DR-0103 | JSONL and JSON-array readers (simdjson) | M | ⬜ |
-| DR-0104 | Writers: text (aligned, colour when writing to a terminal), json, jsonl, csv, fafnir; `--statistics` | M | ⬜ |
-| DR-0105 | Config: toml++, discovery including `[tool.dorq]`, profiles, `config show`/`init`, `config_hash` | M | ⬜ |
-| DR-0106 | Check registry, `--select`/`--ignore`, `list-checks`, `explain`, exit codes | M | ⬜ |
-| DR-0107 | DQ101–DQ104, DQ106, DQ107 | M | ⬜ |
-| DR-0108 | Streaming engine, thread pool, deterministic output sort, determinism test | M | ⬜ |
-| DR-0109 | Parser fuzz targets (libFuzzer) run in CI for a short time budget | S | ⬜ |
+| DR-0101 | Series data model (structure of arrays, OHLCV and point), decimals and significant figures as written, the `Violation` type | M | 🔄 awaiting merge |
+| DR-0102 | CSV/TSV reader: an incremental RFC 4180 parser, fast_float, column aliases and `--columns`, kind detection, stdin, buffered or streamed grouping by series | L | 🔄 awaiting merge |
+| DR-0103 | JSONL and JSON-array readers (a flat-record parser of dorq's own, not simdjson; see §5.1) | M | 🔄 awaiting merge |
+| DR-0104 | Writers: text (colour when writing to a terminal), json, jsonl, csv, fafnir; `--statistics` | M | 🔄 awaiting merge |
+| DR-0105 | Config: toml++, discovery including `[tool.dorq]`, unknown keys rejected, profiles (matching on kind or series until `--meta` in M5), `config show`/`init`, `config_hash` | M | 🔄 awaiting merge |
+| DR-0106 | Check registry, flake8-style `--select`/`--ignore`, `list-checks`, `explain` (pages compiled in), exit codes | M | 🔄 awaiting merge |
+| DR-0107 | DQ101–DQ104, DQ106, DQ107 | M | 🔄 awaiting merge |
+| DR-0108 | Engine: thread pool, bounded in-flight series, results delivered in input order; determinism test (1 vs 8 threads, and buffered vs streamed) | M | 🔄 awaiting merge |
+| DR-0109 | libFuzzer targets for the readers (with every check behind them) and the config parser; run for a minute each in CI | S | 🔄 awaiting merge |
 
 **Done when:** `dorq prices.csv` reports the integrity violations with correct exit codes in all five
 output formats, and the determinism test passes.
