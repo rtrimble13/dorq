@@ -65,8 +65,8 @@ struct PriceFinding {
 struct StaleRun {
   std::size_t first = 0;  // feature index of the first repeat
   std::size_t last = 0;
-  int full_bars = 0;      // repeats where open, high and low repeat too
-  double log_q = 0.0;     // log P(the closes repeat | a healthy feed)
+  int full_bars = 0;   // repeats where open, high and low repeat too
+  double log_q = 0.0;  // log P(the closes repeat | a healthy feed)
   double p_error = 0.0;
 };
 

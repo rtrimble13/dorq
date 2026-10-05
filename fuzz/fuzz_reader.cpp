@@ -1,6 +1,7 @@
 // libFuzzer target: arbitrary bytes through the readers and every check.
 //
-// The first byte picks the input format and the grouping; the rest is the input.
+// The first byte picks the input format, the grouping and the settings; the rest
+// is the input.
 // Anything may be rejected with an InputError -- that is the contract for bad
 // input -- but nothing may crash, hang, leak or trip a sanitizer.
 #include <cstddef>
@@ -27,16 +28,22 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   options.format = kFormats.at(selector % kFormats.size());
   const auto grouping = (selector & 0x80U) != 0 ? dorq::Grouping::kStream : dorq::Grouping::kBuffer;
 
-  const dorq::IntegritySettings settings{.precision_min_segment = 2};
+  // Bit 0x40 runs the rates settings: bounds (DQ108) and the difference scale.
+  const bool rates = (selector & 0x40U) != 0;
+  dorq::IntegritySettings settings{.precision_min_segment = 2};
+  dorq::PriceSettings price;
+  if (rates) {
+    settings.bounds = dorq::Bounds{-5.0, 25.0};
+    price.transform = dorq::Transform::kDiff;
+  }
   static const dorq::Calendar kCalendar;
   const dorq::CoverageSettings coverage;
   const dorq::SeverityThresholds thresholds;
-  const dorq::PriceSettings price;
   std::vector<dorq::Violation> found;
   dorq::SeriesAssembler assembler(grouping, [&](dorq::Series&& series) {
     const dorq::Frequency frequency = dorq::infer_frequency(series.date);
     const auto analysis = dorq::analyze_coverage(series, kCalendar, coverage, 0.95);
-    const auto price_analysis = dorq::analyze_prices(series, kCalendar, price);
+    const auto price_analysis = dorq::analyze_prices(series, kCalendar, price, settings.bounds);
     const dorq::SeriesContext context{.series = series,
                                       .integrity = settings,
                                       .coverage = coverage,

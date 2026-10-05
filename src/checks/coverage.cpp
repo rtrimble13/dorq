@@ -219,7 +219,7 @@ void MissingRunCheck::run(const SeriesContext& context, std::vector<Violation>& 
     std::string nearby =
         "nearby the series has a bar on " + percent(run.observed_density) + " of sessions";
     if (run.density_from_volume) {
-      nearby += " and trades a median " + with_commas(std::llround(run.median_volume)) + " a day";
+      nearby += " and trades a median " + whole_number(run.median_volume) + " a day";
     }
     const auto add = [&](Date first, Date last, int sessions, double p) {
       const auto severity = context.thresholds.for_probability(p);

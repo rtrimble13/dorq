@@ -124,17 +124,17 @@ double effective_share(const std::vector<double>& values, std::size_t from, std:
 
 // A step in the volume level, at traded bar k.
 struct Shift {
-  std::size_t k = 0;      // the first traded bar after the step
-  std::size_t end = 0;    // the last traded bar of an era (two opposite steps)
+  std::size_t k = 0;       // the first traded bar after the step
+  std::size_t end = 0;     // the last traded bar of an era (two opposite steps)
   double log_ratio = 0.0;  // median after / before
   double p_error = 0.0;
   bool era = false;
 };
 
-constexpr double kErrorPrior = 0.05;      // a volume step being an error, per step found
-constexpr double kNaturalScale = 0.5;     // natural shifts: Student t (4 dof), this scale
-constexpr double kScreen = 0.5878;        // log 1.8: steps smaller than this are not judged
-constexpr double kRatioTolerance = 0.05;  // an error's step about its clean ratio
+constexpr double kShiftErrorPrior = 0.05;  // a volume step being an error, per step found
+constexpr double kNaturalScale = 0.5;      // natural shifts: Student t (4 dof), this scale
+constexpr double kScreen = 0.5878;         // log 1.8: steps smaller than this are not judged
+constexpr double kRatioTolerance = 0.05;   // an error's step about its clean ratio
 
 std::vector<Shift> find_shifts(const Series& s, const PriceAnalysis& analysis, std::size_t window) {
   std::vector<Shift> shifts;
@@ -188,8 +188,8 @@ std::vector<Shift> find_shifts(const Series& s, const PriceAnalysis& analysis, s
     }
     const double dp = stats::median(price_after) - stats::median(price_before);
     const std::size_t bar = t.bar[best];
-    const bool price_moved = std::any_of(
-        analysis.findings.begin(), analysis.findings.end(), [&](const PriceFinding& f) {
+    const bool price_moved =
+        std::any_of(analysis.findings.begin(), analysis.findings.end(), [&](const PriceFinding& f) {
           return f.bar + 2 >= bar && f.bar <= bar + 2 && f.p_error >= 0.5 &&
                  (f.hypothesis == H::kUnreportedSplit || f.hypothesis == H::kScaleError ||
                   f.hypothesis == H::kHistorySegment);
@@ -197,10 +197,10 @@ std::vector<Shift> find_shifts(const Series& s, const PriceAnalysis& analysis, s
     if (price_moved || (std::fabs(dp) > 0.3 && std::fabs(dv + dp) < 0.3)) {
       continue;
     }
-    const double natural = std::log1p(-kErrorPrior) +
+    const double natural = std::log1p(-kShiftErrorPrior) +
                            stats::student_t_log_pdf(dv, 4.0, std::hypot(kNaturalScale, noise));
     const double error =
-        std::log(kErrorPrior) + clean_ratio_ll(dv, std::hypot(kRatioTolerance, noise));
+        std::log(kShiftErrorPrior) + clean_ratio_ll(dv, std::hypot(kRatioTolerance, noise));
     Shift shift;
     shift.k = best;
     shift.end = best;
@@ -249,8 +249,7 @@ const CheckInfo& VolumeScaleShift::info() const noexcept {
 
 void VolumeScaleShift::run(const SeriesContext& context, std::vector<Violation>& out) const {
   const Series& s = context.series;
-  if (!s.has_volume || context.price_analysis == nullptr ||
-      !context.price_analysis->applicable) {
+  if (!s.has_volume || context.price_analysis == nullptr || !context.price_analysis->applicable) {
     return;
   }
   const PriceAnalysis& analysis = *context.price_analysis;
@@ -307,8 +306,7 @@ const CheckInfo& VolumeSpikeNoMove::info() const noexcept {
 
 void VolumeSpikeNoMove::run(const SeriesContext& context, std::vector<Violation>& out) const {
   const Series& s = context.series;
-  if (!s.has_volume || context.price_analysis == nullptr ||
-      !context.price_analysis->applicable) {
+  if (!s.has_volume || context.price_analysis == nullptr || !context.price_analysis->applicable) {
     return;
   }
   const PriceAnalysis& analysis = *context.price_analysis;
@@ -326,10 +324,10 @@ void VolumeSpikeNoMove::run(const SeriesContext& context, std::vector<Violation>
       explained.emplace_back(shift.k, shift.end + window);
     }
   }
-  constexpr double kSpike = 2.302585;    // log 10
-  constexpr double kQuiet = 1.5;         // |move| below this many sd is no move
-  constexpr double kSpikePrior = 0.1;    // a volume spike without a move being an error
-  constexpr double kSpikeScale = 1.0;    // real spikes: log ratio above 10x, exponential
+  constexpr double kSpike = std::numbers::ln10;  // ×10
+  constexpr double kQuiet = 1.5;                 // |move| below this many sd is no move
+  constexpr double kSpikePrior = 0.1;            // a volume spike without a move being an error
+  constexpr double kSpikeScale = 1.0;            // real spikes: log ratio above 10x, exponential
   double sum = 0.0;
   for (std::size_t i = 0; i < window; ++i) {
     sum += t.log_volume[i];
@@ -344,12 +342,14 @@ void VolumeSpikeNoMove::run(const SeriesContext& context, std::vector<Violation>
     const double lr = t.log_volume[k] - usual;
     const std::size_t bar = t.bar[k];
     if (lr < kSpike || lr / spread < 4.0 || std::fabs(analysis.move_z[bar]) >= kQuiet ||
-        std::any_of(explained.begin(), explained.end(),
-                    [bar](const auto& range) { return bar >= range.first && bar <= range.second; })) {
+        std::any_of(explained.begin(), explained.end(), [bar](const auto& range) {
+          return bar >= range.first && bar <= range.second;
+        })) {
       continue;
     }
     // A recording error lands on a clean ratio; a real spike anywhere above 10x.
-    const double real = std::log1p(-kSpikePrior) - std::log(kSpikeScale) - (lr - kSpike) / kSpikeScale;
+    const double real =
+        std::log1p(-kSpikePrior) - std::log(kSpikeScale) - (lr - kSpike) / kSpikeScale;
     const double error = std::log(kSpikePrior) + clean_ratio_ll(lr, 0.1);
     const double p = std::exp(error - stats::log_add(error, real));
     const std::size_t row = analysis.features.row[bar];
@@ -360,9 +360,8 @@ void VolumeSpikeNoMove::run(const SeriesContext& context, std::vector<Violation>
     v.p_error = p;
     v.date = s.date[row];
     v.line = s.line[row];
-    v.message = "volume " + with_commas(std::llround(s.volume[row])) + " is ×" +
-                significant(std::exp(lr), 3) + " the usual " +
-                with_commas(std::llround(std::exp(usual))) + ", on a day the " +
+    v.message = "volume " + whole_number(s.volume[row]) + " is ×" + significant(std::exp(lr), 3) +
+                " the usual " + whole_number(std::exp(usual)) + ", on a day the " +
                 std::string{field_name(Field::kClose, s.kind)} + " moved " +
                 significant(std::fabs(analysis.move_z[bar]), 2) +
                 " standard deviations; P(error) = " + format_probability(p);
@@ -429,10 +428,11 @@ void MoveOnZeroVolume::run(const SeriesContext& context, std::vector<Violation>&
   if (!severity) {
     return;
   }
+  const Severity level = *severity;
   for (const auto& [row, prev] : moves) {
     Violation v;
     v.check = &info();
-    v.severity = *severity;
+    v.severity = level;
     v.p_error = p;
     v.date = s.date[row];
     v.line = s.line[row];

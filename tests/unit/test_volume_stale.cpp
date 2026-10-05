@@ -81,8 +81,10 @@ std::vector<Bar> stock(int n, double start, double vol, double volume, std::uint
     Bar b;
     b.close = std::round(price * 100.0) / 100.0;
     b.open = std::round(prev * std::exp(0.3 * vol * noise.normal()) * 100.0) / 100.0;
-    b.high = std::max(b.open, b.close) + 0.01 + std::round(40.0 * vol * price * noise.uniform()) / 100.0;
-    b.low = std::min(b.open, b.close) - 0.01 - std::round(40.0 * vol * price * noise.uniform()) / 100.0;
+    b.high =
+        std::max(b.open, b.close) + 0.01 + std::round(40.0 * vol * price * noise.uniform()) / 100.0;
+    b.low =
+        std::min(b.open, b.close) - 0.01 - std::round(40.0 * vol * price * noise.uniform()) / 100.0;
     b.volume = std::round(volume * std::exp(0.3 * noise.normal()));
     bars.push_back(b);
   }
@@ -202,8 +204,8 @@ TEST_CASE("DQ108: a value outside the bounds, and nothing without bounds") {
   CHECK(contains(result.out, "value 470 is outside the bounds [-5, 25]"));
   CHECK(count_matching(result.out, R"("code":"DQ201")") == 1);
 
-  const Result unbounded = run({"--isolated", "--select", "DQ108", "--format", "jsonl"},
-                               points_csv(values));
+  const Result unbounded =
+      run({"--isolated", "--select", "DQ108", "--format", "jsonl"}, points_csv(values));
   CHECK(unbounded.out.empty());
 }
 
@@ -249,8 +251,8 @@ TEST_CASE("DQ401: an era of volume in other units is reported once") {
   for (std::size_t i = 200; i < 320; ++i) {
     bars[i].volume *= 100.0;
   }
-  const Result result =
-      run({"--isolated", "--select", "DQ4", "--format", "jsonl", "--show-info"}, bars_csv("V", bars));
+  const Result result = run({"--isolated", "--select", "DQ4", "--format", "jsonl", "--show-info"},
+                            bars_csv("V", bars));
   CAPTURE(result.out);
   CHECK(count_matching(result.out, R"("code":"DQ401")") == 1);
   CHECK(contains(result.out, R"("nearest_ratio":"×100")"));
@@ -267,8 +269,8 @@ TEST_CASE("DQ402: a spike on a quiet day is info") {
   std::vector<Bar> bars = stock(300, 40.0, 0.015, 2e6, 6);
   bars[200].close = bars[199].close;
   bars[200].volume = 2e6 * 37.0;
-  const Result info =
-      run({"--isolated", "--select", "DQ402", "--format", "jsonl", "--show-info"}, bars_csv("S", bars));
+  const Result info = run({"--isolated", "--select", "DQ402", "--format", "jsonl", "--show-info"},
+                          bars_csv("S", bars));
   CAPTURE(info.out);
   CHECK(count_matching(info.out, R"("code":"DQ402")") == 1);
   CHECK(contains(info.out, R"("classification":"market_fact")"));
@@ -281,14 +283,13 @@ TEST_CASE("DQ403: a move on zero volume, where the series has none") {
   bars[250].volume = 0.0;
   bars[250].close = bars[249].close + 0.37;
   bars[250].high = std::max(bars[250].high, bars[250].close);
-  const Result result = run({"--isolated", "--select", "DQ403", "--format", "jsonl"},
-                            bars_csv("Z", bars));
+  const Result result =
+      run({"--isolated", "--select", "DQ403", "--format", "jsonl"}, bars_csv("Z", bars));
   CAPTURE(result.out);
   CHECK(count_matching(result.out, R"("code":"DQ403")") == 1);
   CHECK(contains(result.out, R"("kind":"refetch_bar")"));
 
   // A feed that quotes every untraded day: a habit, not an error.
-  Noise noise(8);
   for (std::size_t i = 10; i < bars.size(); i += 8) {
     bars[i].volume = 0.0;
   }
@@ -306,8 +307,8 @@ TEST_CASE("DQ501: a liquid close repeated on volume, but a coarse price is not j
     bars[i].high = std::max(bars[i].high, bars[i].close);
     bars[i].low = std::min(bars[i].low, bars[i].close);
   }
-  const Result result = run({"--isolated", "--select", "DQ501", "--format", "jsonl"},
-                            bars_csv("R", bars));
+  const Result result =
+      run({"--isolated", "--select", "DQ501", "--format", "jsonl"}, bars_csv("R", bars));
   CAPTURE(result.out);
   CHECK(count_matching(result.out, R"("code":"DQ501")") == 1);
   CHECK(contains(result.out, R"("kind":"delete_bars")"));

@@ -76,10 +76,11 @@ std::span<const Check* const> all_checks() {
   static const RepeatedPrice kRepeatedPrice;
   static const CarryBar kCarryBar;
   static const std::array<const Check*, 25> kChecks = {
-      &kOhlcBounds,     &kNonPositive,    &kDuplicateDate, &kMissingField, &kNonSession,
-      &kPrecisionShift, &kZeroRange,        &kOutOfBounds,      &kBadPrint,      &kScaleShift,   &kUnreportedSplit,
-      &kCloseMismatch,  &kHistorySegment, &kDateShift,     &kLargeMove,    &kMissingRun,
-      &kSparse,         &kCohort,         &kStale,         &kFrequencyGap, &kVolumeShift, &kVolumeSpike, &kZeroVolumeMove, &kRepeatedPrice, &kCarryBar};
+      &kOhlcBounds,      &kNonPositive,   &kDuplicateDate,  &kMissingField,  &kNonSession,
+      &kPrecisionShift,  &kZeroRange,     &kOutOfBounds,    &kBadPrint,      &kScaleShift,
+      &kUnreportedSplit, &kCloseMismatch, &kHistorySegment, &kDateShift,     &kLargeMove,
+      &kMissingRun,      &kSparse,        &kCohort,         &kStale,         &kFrequencyGap,
+      &kVolumeShift,     &kVolumeSpike,   &kZeroVolumeMove, &kRepeatedPrice, &kCarryBar};
   return kChecks;
 }
 

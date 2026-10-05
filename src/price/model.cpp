@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <limits>
 #include <numbers>
-#include <numeric>
 #include <optional>
 #include <string>
 #include <utility>
@@ -214,9 +213,8 @@ class Scorer {
     }
     // On the log scale a grid step is a share of the price; on the value scale it
     // is the step itself.
-    const double bounce = f_.log_scale
-                              ? kBounce * price_grid(a, b) / std::min(close(a), close(b))
-                              : kBounce * price_grid(a, b);
+    const double bounce = f_.log_scale ? kBounce * price_grid(a, b) / std::min(close(a), close(b))
+                                       : kBounce * price_grid(a, b);
     return std::hypot(sig * std::sqrt(static_cast<double>(sessions)), bounce);
   }
 
@@ -276,18 +274,23 @@ class Scorer {
   // of unchanged values); 0 when fewer than kMinSpread moves.
   [[nodiscard]] double local_spread(std::size_t from, std::size_t to) const {
     constexpr std::size_t kMinSpread = 3;
-    std::vector<double> moves;
-    for (std::size_t i = std::max<std::size_t>(from, 1); i < to && i < n_; ++i) {
-      moves.push_back(std::fabs(f_.ret[i]));
-    }
-    if (moves.size() < kMinSpread) {
+    const std::size_t first = std::max<std::size_t>(from, 1);
+    const std::size_t last = std::min(to, n_);
+    if (last < first + kMinSpread) {
       return 0.0;
     }
-    double spread = stats::median(moves);
-    if (spread <= 0.0) {
-      spread = std::accumulate(moves.begin(), moves.end(), 0.0) / static_cast<double>(moves.size());
+    std::vector<double> moves(last - first);
+    double sum = 0.0;
+    for (std::size_t i = first; i < last; ++i) {
+      moves[i - first] = std::fabs(f_.ret[i]);
+      sum += moves[i - first];
     }
-    return spread > 0.0 ? spread : 0.5 * price_grid(from, std::min(to, n_) - 1);
+    const auto count = static_cast<double>(moves.size());
+    double spread = stats::median(std::move(moves));
+    if (spread <= 0.0) {
+      spread = sum / count;
+    }
+    return spread > 0.0 ? spread : 0.5 * price_grid(first, last - 1);
   }
 
   // A price no security trades at, or a point series' value outside its bounds.
@@ -485,8 +488,7 @@ Term Scorer::return_term(const Candidate& c, PriceFinding& out) const {
   Term term{"return", out.factor, {}, {}};
   at(term, H::kMarketMove) = ordinary(c.r, c.base_sd);
   // A tick's density: uniform over two steps either way, in r's units.
-  at(term, H::kTickMove) =
-      (f_.log_scale ? std::log(c.this_close) : 0.0) - std::log(4.0 * c.grid);
+  at(term, H::kTickMove) = (f_.log_scale ? std::log(c.this_close) : 0.0) - std::log(4.0 * c.grid);
   at(term, H::kBadPrint) = log_cauchy(c.r, f_.error_scale);
   at(term, H::kBadClose) = log_cauchy(c.r, f_.error_scale);
   at(term, H::kUnreportedSplit) = split_ll(c, out);
@@ -849,7 +851,7 @@ std::vector<StaleRun> Scorer::stale_runs() const {
   if (!has_ohlc_ || !series_.has_volume) {
     return runs;
   }
-  constexpr std::size_t kNearby = 40;  // bars either side that show how sticky prices are
+  constexpr std::size_t kNearby = 40;    // bars either side that show how sticky prices are
   constexpr double kCoarseSteps = 20.0;  // a price this many grid steps wide, or fewer, is coarse
   const auto traded = [this](std::size_t i) {
     const double v = volume(i);
@@ -922,9 +924,9 @@ std::vector<StaleRun> Scorer::stale_runs() const {
       const double model = std::clamp(1.0 - tail(h, sd), 1e-300, 1.0);
       // The model's chance of a repeat, or the series' own nearby if higher.
       const bool first = j == run.first;
-      const double seen = first ? (repeat_after_move + kWeight * model) / (after_move + kWeight)
-                                : (repeat_after_repeat + kWeight * model) /
-                                      (after_repeat + kWeight);
+      const double seen = first
+                              ? (repeat_after_move + kWeight * model) / (after_move + kWeight)
+                              : (repeat_after_repeat + kWeight * model) / (after_repeat + kWeight);
       run.log_q += std::log(std::max(model, seen));
       run.full_bars += whole(j) ? 1 : 0;
     }

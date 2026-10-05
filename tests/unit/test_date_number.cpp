@@ -1,10 +1,12 @@
 #include <cmath>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include <doctest/doctest.h>
 
+#include "core/text.hpp"
 #include "dorq/date.hpp"
 #include "dorq/number.hpp"
 
@@ -150,4 +152,14 @@ TEST_CASE("frequency inference") {
   CHECK(infer_frequency(every(1, 2)) == Frequency::kIrregular);  // too few
   CHECK(dorq::parse_frequency("Monthly") == Frequency::kMonthly);
   CHECK_FALSE(dorq::parse_frequency("fortnightly").has_value());
+}
+
+TEST_CASE("counts with commas, whatever their size") {
+  CHECK(dorq::with_commas(1234567) == "1,234,567");
+  CHECK(dorq::with_commas(-1234) == "-1,234");
+  CHECK(dorq::with_commas(std::numeric_limits<long long>::min()) == "-9,223,372,036,854,775,808");
+  CHECK(dorq::whole_number(605833700.4) == "605,833,700");
+  CHECK(dorq::whole_number(1e30) == dorq::format_number(1e30));
+  CHECK(dorq::whole_number(std::numeric_limits<double>::infinity()) ==
+        dorq::format_number(std::numeric_limits<double>::infinity()));
 }

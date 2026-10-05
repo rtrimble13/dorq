@@ -149,7 +149,8 @@ TEST_CASE("DQ305: missing months in a monthly series") {
                "between 2023-03-01 and 2023-06-01"));
 }
 
-TEST_CASE("calendars: weekdays sees holidays as gaps, and a reference file decides within its span") {
+TEST_CASE(
+    "calendars: weekdays sees holidays as gaps, and a reference file decides within its span") {
   std::string csv = "date,open,high,low,close,volume\n";
   for (const dorq::Date d : sessions("2023-06-01", "2023-07-31")) {
     csv += d.to_string() + ",10,11,9,10.5,1000000\n";

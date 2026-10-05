@@ -490,9 +490,9 @@ void OutOfBounds::run(const SeriesContext& context, std::vector<Violation>& out)
     if (!std::isfinite(value) || (value >= bounds->low && value <= bounds->high)) {
       continue;
     }
-    Violation v = make_violation(info(), Severity::kError, s, i,
-                                 std::string{field} + " " + format_number(value) +
-                                     " is outside the bounds " + range);
+    Violation v = make_violation(
+        info(), Severity::kError, s, i,
+        std::string{field} + " " + format_number(value) + " is outside the bounds " + range);
     v.detail = {{std::string{field}, value}, {"low", bounds->low}, {"high", bounds->high}};
     out.push_back(std::move(v));
   }

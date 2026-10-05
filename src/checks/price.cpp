@@ -95,8 +95,8 @@ class Builder {
       v.message = std::to_string(finding_.block) + " bars " +
                   (f_.log_scale ? "at " + times(finding_.factor) + " the level"
                                 : "off the level by " + change(close(t - 1), close(t))) +
-                  " either side (" + field() + " " + price(close(t - 1)) + "→" +
-                  price(close(t)) + ", back to " + price(close(last + 1)) + ")";
+                  " either side (" + field() + " " + price(close(t - 1)) + "→" + price(close(t)) +
+                  ", back to " + price(close(last + 1)) + ")";
     } else {
       v.message = move() + "), not yet confirmed by a later bar";
     }
@@ -271,9 +271,8 @@ Violation make_violation(const SeriesContext& context, const PriceAnalysis& anal
     v.evidence.push_back({e.feature, e.value, e.log_bf, e.note});
   }
   const std::string field = b.field();
-  v.detail = {{field, b.close(t)},
-              {"previous_" + field, b.close(t - 1)},
-              {"factor", finding.factor}};
+  v.detail = {
+      {field, b.close(t)}, {"previous_" + field, b.close(t - 1)}, {"factor", finding.factor}};
   if (!analysis.features.log_scale) {
     v.detail.push_back({"change", b.close(t) - b.close(t - 1)});
   }

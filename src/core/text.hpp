@@ -36,6 +36,9 @@ void append_json_string(std::string& out, std::string_view text);
 
 // 1234567 -> "1,234,567".
 [[nodiscard]] std::string with_commas(long long value);
+// A count or volume, rounded, with commas; one beyond 10^18 (or not finite) is
+// written as format_number writes it.
+[[nodiscard]] std::string whole_number(double value);
 
 // 0.2618 -> "26.2%".
 [[nodiscard]] std::string percent(double share);

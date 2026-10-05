@@ -597,8 +597,8 @@ void Generator::inject_stale(Pool& tradable) {
         bar.high = source.high;
         bar.low = source.low;
       } else {
-        bar.open = std::clamp(bar.open, std::min(bar.low, source.close),
-                              std::max(bar.high, source.close));
+        bar.open =
+            std::clamp(bar.open, std::min(bar.low, source.close), std::max(bar.high, source.close));
         bar.high = std::max(bar.high, source.close);
         bar.low = std::min(bar.low, source.close);
       }

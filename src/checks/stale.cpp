@@ -21,7 +21,7 @@ std::string one_in(double log_p) {
   if (!std::isfinite(odds) || odds > 1e12) {
     return "less than 1 in a trillion";
   }
-  return "1 in " + with_commas(std::llround(odds));
+  return "1 in " + whole_number(odds);
 }
 
 }  // namespace
@@ -48,6 +48,7 @@ void RepeatedPrice::run(const SeriesContext& context, std::vector<Violation>& ou
     if (!severity) {
       continue;
     }
+    const Severity level = *severity;
     const std::size_t first = analysis.features.row[run.first];
     const std::size_t last = analysis.features.row[run.last];
     const std::size_t before = analysis.features.row[run.first - 1];
@@ -61,7 +62,7 @@ void RepeatedPrice::run(const SeriesContext& context, std::vector<Violation>& ou
     }
     Violation v;
     v.check = &info();
-    v.severity = *severity;
+    v.severity = level;
     v.p_error = run.p_error;
     v.date = s.date[first];
     if (last != first) {
@@ -70,10 +71,9 @@ void RepeatedPrice::run(const SeriesContext& context, std::vector<Violation>& ou
     v.line = s.line[first];
     v.message = "close " + significant(s.close[first], 6) + " on " + std::to_string(bars) +
                 " traded bars running (from " + s.date[before].to_string() + "), on volume " +
-                with_commas(std::llround(low)) +
-                (high > low ? "–" + with_commas(std::llround(high)) : std::string{}) +
-                ", where the series' moves make that " + one_in(run.log_q) + "; P(error) = " +
-                format_probability(run.p_error);
+                whole_number(low) + (high > low ? "–" + whole_number(high) : std::string{}) +
+                ", where the series' moves make that " + one_in(run.log_q) +
+                "; P(error) = " + format_probability(run.p_error);
     if (run.full_bars > 0) {
       v.message += " (" + std::to_string(run.full_bars) + " whole bar" +
                    (run.full_bars == 1 ? "" : "s") + " repeated)";
@@ -114,9 +114,8 @@ void CarryBar::run(const SeriesContext& context, std::vector<Violation>& out) co
   // The last usable close before row i, by row; the first row has none.
   std::size_t previous = s.size();
   for (std::size_t i = 0; i < s.size();) {
-    const bool carry = previous < s.size() && s.volume[i] == 0.0 &&
-                       std::isfinite(s.close[i]) && s.close[i] == s.close[previous] &&
-                       s.date[i] != s.date[previous];
+    const bool carry = previous < s.size() && s.volume[i] == 0.0 && std::isfinite(s.close[i]) &&
+                       s.close[i] == s.close[previous] && s.date[i] != s.date[previous];
     if (!carry) {
       if (std::isfinite(s.close[i])) {
         previous = i;
@@ -140,9 +139,9 @@ void CarryBar::run(const SeriesContext& context, std::vector<Violation>& out) co
     }
     v.line = s.line[i];
     const std::size_t count = last - i + 1;
-    v.message = std::to_string(count) + (count == 1 ? " bar with no trade carries" : " bars with no trade carry") +
-                " the close " + significant(s.close[i], 6) + " of " +
-                s.date[previous].to_string();
+    v.message = std::to_string(count) +
+                (count == 1 ? " bar with no trade carries" : " bars with no trade carry") +
+                " the close " + significant(s.close[i], 6) + " of " + s.date[previous].to_string();
     v.detail = {{"close", s.close[i]},
                 {"bars", static_cast<std::int64_t>(count)},
                 {"traded", s.date[previous].to_string()}};
