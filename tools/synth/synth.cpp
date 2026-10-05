@@ -19,6 +19,7 @@
 #include <numbers>
 #include <optional>
 #include <set>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -141,6 +142,8 @@ double round_price(double price, Class cls) {
   }
 }
 
+using Pool = std::vector<SeriesPlan*>;
+
 class Generator {
  public:
   explicit Generator(std::uint64_t seed) : rng_(seed), calendar_(dorq::CalendarKind::kXnys) {}
@@ -148,7 +151,7 @@ class Generator {
   void run(std::ostream& bars, std::ostream& labels);
 
  private:
-  std::vector<Date> sessions(Date from, int count) const {
+  [[nodiscard]] std::vector<Date> sessions(Date from, int count) const {
     std::vector<Date> out;
     for (Date d = from; static_cast<int>(out.size()) < count; d = Date::from_days(d.days() + 1)) {
       if (calendar_.is_session(d)) {
@@ -161,6 +164,17 @@ class Generator {
   void simulate(SeriesPlan& plan, const std::vector<Date>& dates, const std::vector<double>& market,
                 std::size_t crash_index);
   void inject(std::vector<SeriesPlan>& universe);
+  void inject_bad_prints(Pool& tradable);
+  void inject_newest(Pool& tradable);
+  void inject_bad_closes(Pool& tradable);
+  void inject_splits(Pool& tradable);
+  void inject_scale_eras(Pool& tradable);
+  void inject_segments(Pool& thin_or_mid);
+  void inject_outages(Pool& liquid);
+  void inject_failed_load(Pool& liquid);
+  SeriesPlan& any(Pool& from);
+  void label(const SeriesPlan& plan, std::size_t first, std::size_t last, const char* kind,
+             const char* expect);
   std::size_t pick_bar(const SeriesPlan& plan, std::size_t margin);
   bool reserve(const std::string& id, std::size_t from, std::size_t to);
 
@@ -284,70 +298,70 @@ std::size_t Generator::pick_bar(const SeriesPlan& plan, std::size_t margin) {
 double bad_factor(Rng& rng) {
   if (rng.chance(0.5)) {
     static constexpr std::array<double, 4> kSlips = {10.0, 0.1, 100.0, 0.01};
-    return kSlips[static_cast<std::size_t>(rng.integer(0, 3))];
+    return kSlips.at(static_cast<std::size_t>(rng.integer(0, 3)));
   }
   const double size = rng.log_uniform(1.35, 2.5);
   return rng.chance(0.5) ? size : 1.0 / size;
 }
 
-void Generator::inject(std::vector<SeriesPlan>& universe) {
-  std::vector<SeriesPlan*> liquid;
-  std::vector<SeriesPlan*> tradable;  // liquid and mid
-  std::vector<SeriesPlan*> thin_or_mid;
-  for (SeriesPlan& plan : universe) {
-    if (plan.cls == Class::kLiquid) {
-      liquid.push_back(&plan);
-    }
-    if (plan.cls == Class::kLiquid || plan.cls == Class::kMid) {
-      tradable.push_back(&plan);
-    }
-    if (plan.cls == Class::kThin || plan.cls == Class::kMid) {
-      thin_or_mid.push_back(&plan);
-    }
-  }
-  const auto any = [this](std::vector<SeriesPlan*>& from) -> SeriesPlan& {
-    return *from[static_cast<std::size_t>(rng_.integer(0, static_cast<int>(from.size()) - 1))];
-  };
-  const auto label = [this](const SeriesPlan& plan, std::size_t first, std::size_t last,
-                            const char* kind, const char* expect) {
-    labels_.push_back({plan.id, plan.bars[first].date, plan.bars[last].date, kind, expect, ""});
-  };
+// Every price of a bar multiplied by `factor`, back on the grid.
+void scale_bar(Bar& bar, double factor, Class cls) {
+  bar.open = round_price(bar.open * factor, cls);
+  bar.high = round_price(bar.high * factor, cls);
+  bar.low = round_price(bar.low * factor, cls);
+  bar.close = round_price(bar.close * factor, cls);
+}
 
-  // Bad prints: one to three bars off, then back.
+SeriesPlan& Generator::any(Pool& from) {
+  return *from.at(static_cast<std::size_t>(rng_.integer(0, static_cast<int>(from.size()) - 1)));
+}
+
+void Generator::label(const SeriesPlan& plan, std::size_t first, std::size_t last, const char* kind,
+                      const char* expect) {
+  labels_.push_back({plan.id, plan.bars[first].date, plan.bars[last].date, kind, expect, ""});
+}
+
+// Bad prints: one to three bars off, then back.
+void Generator::inject_bad_prints(Pool& tradable) {
   for (int done = 0; done < 30;) {
     SeriesPlan& plan = any(tradable);
     const std::size_t t = pick_bar(plan, 50);
-    const std::size_t k = rng_.chance(0.6) ? 1 : (rng_.chance(0.6) ? 2 : 3);
+    std::size_t k = 1;
+    if (!rng_.chance(0.6)) {
+      k = rng_.chance(0.6) ? 2 : 3;
+    }
     if (!reserve(plan.id, t, t + k)) {
       continue;
     }
     const double factor = bad_factor(rng_);
     for (std::size_t i = t; i < t + k; ++i) {
-      Bar& bar = plan.bars[i];
-      bar.open = round_price(bar.open * factor, plan.cls);
-      bar.high = round_price(bar.high * factor, plan.cls);
-      bar.low = round_price(bar.low * factor, plan.cls);
-      bar.close = round_price(bar.close * factor, plan.cls);
-      bar.volume = std::round(bar.volume * rng_.uniform(0.2, 1.0));
+      scale_bar(plan.bars[i], factor, plan.cls);
+      plan.bars[i].volume = std::round(plan.bars[i].volume * rng_.uniform(0.2, 1.0));
     }
     label(plan, t, t + k - 1, "bad_print", "DQ201");
     ++done;
   }
-  // The newest bar wrong: provisional.
+}
+
+// The newest bar wrong: provisional.
+void Generator::inject_newest(Pool& tradable) {
   for (int done = 0; done < 4;) {
     SeriesPlan& plan = any(tradable);
     const std::size_t t = plan.bars.size() - 1;
     if (!reserve(plan.id, t, t)) {
       continue;
     }
-    plan.bars[t].close =
-        round_price(plan.bars[t].close * (rng_.chance(0.5) ? 100.0 : 0.01), plan.cls);
-    plan.bars[t].open = plan.bars[t].high = plan.bars[t].low = plan.bars[t].close;
+    Bar& bar = plan.bars[t];
+    bar.close = round_price(bar.close * (rng_.chance(0.5) ? 100.0 : 0.01), plan.cls);
+    bar.open = bar.high = bar.low = bar.close;
     // With no later bar, a bad print and a scale change look alike.
     label(plan, t, t, "bad_print_newest", "DQ201|DQ202");
     ++done;
   }
-  // Only the close wrong.
+}
+
+// Only the close wrong.
+void Generator::inject_bad_closes(Pool& tradable) {
   for (int done = 0; done < 12;) {
     SeriesPlan& plan = any(tradable);
     const std::size_t t = pick_bar(plan, 50);
@@ -358,38 +372,41 @@ void Generator::inject(std::vector<SeriesPlan>& universe) {
     label(plan, t, t, "bad_close", "DQ204");
     ++done;
   }
-  // Splits the data does not record: the raw price changes level, volume inversely.
+}
+
+// Splits the data does not record: the raw price changes level, volume inversely.
+void Generator::inject_splits(Pool& tradable) {
+  struct Split {
+    double after = 1.0;
+    double before = 1.0;
+  };
+  // Forward splits bring a high price down; reverse splits lift a low one.
+  static constexpr std::array<Split, 6> kForward = {
+      {{2, 1}, {2, 1}, {2, 1}, {3, 1}, {3, 2}, {4, 1}}};
+  static constexpr std::array<Split, 3> kReverse = {{{1, 10}, {1, 5}, {1, 20}}};
   for (int done = 0; done < 16;) {
     SeriesPlan& plan = any(tradable);
     const std::size_t t = pick_bar(plan, 60);
-    struct Split {
-      double after;
-      double before;
-    };
-    // Forward splits bring a high price down; reverse splits lift a low one.
-    static constexpr std::array<Split, 6> kForward = {
-        {{2, 1}, {2, 1}, {2, 1}, {3, 1}, {3, 2}, {4, 1}}};
-    static constexpr std::array<Split, 3> kReverse = {{{1, 10}, {1, 5}, {1, 20}}};
     const double price = plan.bars[t - 1].close;
     if ((price < 25.0 && price >= 8.0) || !plan.bars[t - 1].present ||
         !reserve(plan.id, t, plan.bars.size())) {
       continue;
     }
-    const Split split = price >= 25.0 ? kForward[static_cast<std::size_t>(rng_.integer(0, 5))]
-                                      : kReverse[static_cast<std::size_t>(rng_.integer(0, 2))];
+    const Split split = price >= 25.0 ? kForward.at(static_cast<std::size_t>(rng_.integer(0, 5)))
+                                      : kReverse.at(static_cast<std::size_t>(rng_.integer(0, 2)));
     const double price_factor = split.before / split.after;
     for (std::size_t i = t; i < plan.bars.size(); ++i) {
-      Bar& bar = plan.bars[i];
-      bar.open = round_price(bar.open * price_factor, plan.cls);
-      bar.high = round_price(bar.high * price_factor, plan.cls);
-      bar.low = round_price(bar.low * price_factor, plan.cls);
-      bar.close = round_price(bar.close * price_factor, plan.cls);
-      bar.volume = std::round(bar.volume / price_factor);
+      scale_bar(plan.bars[i], price_factor, plan.cls);
+      plan.bars[i].volume = std::round(plan.bars[i].volume / price_factor);
     }
     label(plan, t, t, "unreported_split", "DQ203");
     ++done;
   }
-  // Eras stored at the wrong scale; and a scale change that runs to the end.
+}
+
+// Eras stored at the wrong scale; and a scale change that runs to the end.
+void Generator::inject_scale_eras(Pool& tradable) {
+  static constexpr std::array<double, 4> kScales = {100.0, 0.01, 1000.0, 0.001};
   for (int done = 0; done < 12;) {
     SeriesPlan& plan = any(tradable);
     const bool to_end = done % 3 == 2;
@@ -400,19 +417,18 @@ void Generator::inject(std::vector<SeriesPlan>& universe) {
     if (!reserve(plan.id, t, end)) {
       continue;
     }
-    static constexpr std::array<double, 4> kScales = {100.0, 0.01, 1000.0, 0.001};
-    const double factor = kScales[static_cast<std::size_t>(rng_.integer(0, 3))];
+    const double factor = kScales.at(static_cast<std::size_t>(rng_.integer(0, 3)));
     for (std::size_t i = t; i <= end; ++i) {
-      Bar& bar = plan.bars[i];
-      bar.open = round_price(bar.open * factor, plan.cls);
-      bar.high = round_price(bar.high * factor, plan.cls);
-      bar.low = round_price(bar.low * factor, plan.cls);
-      bar.close = round_price(bar.close * factor, plan.cls);
+      scale_bar(plan.bars[i], factor, plan.cls);
     }
     label(plan, t, end, to_end ? "scale_to_end" : "scale_era", "DQ202");
     ++done;
   }
-  // A new security's history continuing an old one after a long gap.
+}
+
+// A new security's history continuing an old one after a long gap.
+void Generator::inject_segments(Pool& thin_or_mid) {
+  static constexpr std::array<double, 3> kListing = {10.0, 20.0, 25.0};
   for (int done = 0; done < 6;) {
     SeriesPlan& plan = any(thin_or_mid);
     const std::size_t t = pick_bar(plan, 400);
@@ -420,20 +436,16 @@ void Generator::inject(std::vector<SeriesPlan>& universe) {
     if (!reserve(plan.id, t, plan.bars.size())) {
       continue;
     }
-    static constexpr std::array<double, 3> kListing = {10.0, 20.0, 25.0};
-    const double start = kListing[static_cast<std::size_t>(rng_.integer(0, 2))];
-    for (std::size_t i = t; i < t + gap; ++i) {
-      plan.bars[i].present = false;
-    }
+    const double start = kListing.at(static_cast<std::size_t>(rng_.integer(0, 2)));
     std::size_t first = t + gap;  // the new history's first traded bar
     while (first + 1 < plan.bars.size() &&
            (!plan.bars[first].present || plan.bars[first].volume == 0.0)) {
       ++first;
     }
-    const double scale = start / plan.bars[first].close;
-    for (std::size_t i = t + gap; i < first; ++i) {
+    for (std::size_t i = t; i < first; ++i) {
       plan.bars[i].present = false;
     }
+    const double scale = start / plan.bars[first].close;
     for (std::size_t i = first; i < plan.bars.size(); ++i) {
       Bar& bar = plan.bars[i];
       if (!bar.present) {
@@ -452,11 +464,13 @@ void Generator::inject(std::vector<SeriesPlan>& universe) {
     listing.low = std::min(listing.low, start);
     label(plan, first, first, "history_segment", "DQ205");
     // The gap itself is a long run with no bar: DQ301 is right to report it.
-    labels_.push_back(
-        {plan.id, plan.bars[t].date, plan.bars[first - 1].date, "history_gap", "DQ301", ""});
+    label(plan, t, first - 1, "history_gap", "DQ301");
     ++done;
   }
-  // Feed outages on liquid names.
+}
+
+// Feed outages on liquid names.
+void Generator::inject_outages(Pool& liquid) {
   for (int done = 0; done < 8;) {
     SeriesPlan& plan = any(liquid);
     const std::size_t t = pick_bar(plan, 60);
@@ -470,15 +484,43 @@ void Generator::inject(std::vector<SeriesPlan>& universe) {
     label(plan, t, t + k - 1, "outage", "DQ301");
     ++done;
   }
-  // One failed load: a date missing from most liquid names.
+}
+
+// One failed load: a date missing from most liquid names.
+void Generator::inject_failed_load(Pool& liquid) {
   const std::size_t load = pick_bar(*liquid.front(), 100);
   for (SeriesPlan* plan : liquid) {
     if (rng_.chance(0.7)) {
       plan->bars[load].present = false;
     }
   }
-  labels_.push_back({"*", liquid.front()->bars[load].date, liquid.front()->bars[load].date,
-                     "failed_load", "DQ303", ""});
+  const Date date = liquid.front()->bars[load].date;
+  labels_.push_back({"*", date, date, "failed_load", "DQ303", ""});
+}
+
+void Generator::inject(std::vector<SeriesPlan>& universe) {
+  Pool liquid;
+  Pool tradable;  // liquid and mid
+  Pool thin_or_mid;
+  for (SeriesPlan& plan : universe) {
+    if (plan.cls == Class::kLiquid) {
+      liquid.push_back(&plan);
+    }
+    if (plan.cls == Class::kLiquid || plan.cls == Class::kMid) {
+      tradable.push_back(&plan);
+    }
+    if (plan.cls == Class::kThin || plan.cls == Class::kMid) {
+      thin_or_mid.push_back(&plan);
+    }
+  }
+  inject_bad_prints(tradable);
+  inject_newest(tradable);
+  inject_bad_closes(tradable);
+  inject_splits(tradable);
+  inject_scale_eras(tradable);
+  inject_segments(thin_or_mid);
+  inject_outages(liquid);
+  inject_failed_load(liquid);
 }
 
 void Generator::run(std::ostream& bars, std::ostream& labels) {
@@ -600,7 +642,7 @@ struct Result {
 };
 
 std::vector<std::vector<std::string>> read_csv(const std::string& path) {
-  std::ifstream in(path, std::ios::binary);
+  const std::ifstream in(path, std::ios::binary);
   if (!in) {
     throw std::runtime_error(path + ": cannot open the file");
   }
@@ -681,49 +723,61 @@ std::vector<Gate> read_gates(const std::string& path) {
   return gates;
 }
 
-int score(const std::string& labels_path, const std::string& results_path,
-          const std::string& gates_path, bool verbose) {
-  const std::vector<Gate> gates = gates_path.empty() ? std::vector<Gate>{} : read_gates(gates_path);
-  // With gates, the narration covers the codes they judge.
-  const auto narrate = [&](const std::string& code) {
-    return verbose && (gates.empty() || std::any_of(gates.begin(), gates.end(),
-                                                    [&](const Gate& g) { return g.code == code; }));
-  };
+std::vector<Label> read_labels(const std::string& path) {
   std::vector<Label> labels;
-  {
-    const auto rows = read_csv(labels_path);
-    const auto& h = rows.at(0);
-    for (std::size_t i = 1; i < rows.size(); ++i) {
-      const auto& row = rows[i];
-      labels.push_back({row[column(h, "series")], date_of(row[column(h, "first")]),
-                        date_of(row[column(h, "last")]), row[column(h, "kind")],
-                        row[column(h, "expect")], row[column(h, "codes")]});
-    }
+  const auto rows = read_csv(path);
+  const auto& h = rows.at(0);
+  for (std::size_t i = 1; i < rows.size(); ++i) {
+    const auto& row = rows[i];
+    labels.push_back({row.at(column(h, "series")), date_of(row.at(column(h, "first"))),
+                      date_of(row.at(column(h, "last"))), row.at(column(h, "kind")),
+                      row.at(column(h, "expect")), row.at(column(h, "codes"))});
   }
-  std::vector<Result> results;
-  {
-    const auto rows = read_csv(results_path);
-    if (!rows.empty()) {
-      const auto& h = rows.at(0);
-      for (std::size_t i = 1; i < rows.size(); ++i) {
-        const auto& row = rows[i];
-        Result r;
-        r.series = row[column(h, "series")];
-        r.first = date_of(row[column(h, "date")]);
-        const std::string& end = row[column(h, "end_date")];
-        r.last = end.empty() ? r.first : date_of(end);
-        r.code = row[column(h, "code")];
-        r.severity = row[column(h, "severity")];
-        r.message = row[column(h, "message")];
-        if (r.severity == "info") {
-          continue;  // precision and recall are measured at warn and above
-        }
-        results.push_back(std::move(r));
-      }
-    }
-  }
-  constexpr int kSlack = 3;  // calendar days of slack in matching a date
+  return labels;
+}
 
+// dorq's --format csv output, at warn and above: precision and recall are
+// measured there.
+std::vector<Result> read_results(const std::string& path) {
+  std::vector<Result> results;
+  const auto rows = read_csv(path);
+  if (rows.empty()) {
+    return results;
+  }
+  const auto& h = rows.at(0);
+  for (std::size_t i = 1; i < rows.size(); ++i) {
+    const auto& row = rows[i];
+    Result r;
+    r.severity = row.at(column(h, "severity"));
+    if (r.severity == "info") {
+      continue;
+    }
+    r.series = row.at(column(h, "series"));
+    r.first = date_of(row.at(column(h, "date")));
+    const std::string& end = row.at(column(h, "end_date"));
+    r.last = end.empty() ? r.first : date_of(end);
+    r.code = row.at(column(h, "code"));
+    r.message = row.at(column(h, "message"));
+    results.push_back(std::move(r));
+  }
+  return results;
+}
+
+double ratio(int a, int b) { return b == 0 ? 1.0 : static_cast<double>(a) / b; }
+
+std::string fixed3(double x) {
+  std::ostringstream out;
+  out.setf(std::ios::fixed);
+  out.precision(3);
+  out << x;
+  return out.str();
+}
+
+constexpr int kSlack = 3;  // calendar days of slack in matching a date
+
+// Results against labels.
+class Tally {
+ public:
   struct Counts {
     int reported = 0;
     int correct = 0;
@@ -732,18 +786,19 @@ int score(const std::string& labels_path, const std::string& results_path,
     int labels = 0;
     int found = 0;
   };
-  std::map<std::string, Counts> by_code;
-  std::map<std::string, int> hard_hits;  // by hard-negative kind
-  for (const Result& r : results) {
-    Counts& c = by_code[r.code];
+
+  Tally(const std::vector<Label>& labels, const std::vector<Gate>& gates, bool verbose)
+      : labels_(labels), gates_(gates), verbose_(verbose) {}
+
+  void add(const Result& r) {
+    Counts& c = by_code_[r.code];
     ++c.reported;
     bool correct = false;
     bool other = false;
-    for (const Label& l : labels) {
-      if (l.expect.empty() || !overlaps(r, l, kSlack)) {
-        continue;
+    for (const Label& l : labels_) {
+      if (!l.expect.empty() && overlaps(r, l, kSlack)) {
+        (expects(l, r.code) ? correct : other) = true;
       }
-      (expects(l, r.code) ? correct : other) = true;
     }
     if (correct) {
       ++c.correct;
@@ -751,117 +806,154 @@ int score(const std::string& labels_path, const std::string& results_path,
       ++c.other_fault;
     } else {
       ++c.false_positive;
-      bool hard = false;
-      for (const Label& l : labels) {
-        if (!l.expect.empty() || !overlaps(r, l, 0) || !r.code.starts_with(l.codes)) {
-          continue;
-        }
-        if (!hard) {
-          ++hard_hits[l.kind];
-        }
-        hard = true;
-        if (narrate(r.code) || verbose) {
-          std::cout << "hard negative (" << l.kind << "): " << r.series << " "
-                    << r.first.to_string() << " " << r.code << " " << r.message << "\n";
-        }
-      }
-      if (narrate(r.code) && !hard) {
+      if (!hard_negative(r) && narrate(r.code)) {
         std::cout << "false positive: " << r.series << " " << r.first.to_string() << " " << r.code
                   << " " << r.message << "\n";
       }
     }
   }
-  for (const Label& l : labels) {
-    if (l.expect.empty()) {
-      continue;
-    }
-    Counts& c = by_code[l.expect.substr(0, l.expect.find('|'))];
-    ++c.labels;
-    const bool found = std::any_of(results.begin(), results.end(), [&](const Result& r) {
-      return expects(l, r.code) && overlaps(r, l, kSlack);
-    });
-    c.found += found ? 1 : 0;
-    if (narrate(l.expect.substr(0, l.expect.find('|'))) && !found) {
-      std::cout << "missed (" << l.kind << "): " << l.series << " " << l.first.to_string() << ".."
-                << l.last.to_string() << " " << l.expect << "\n";
-    }
-  }
 
-  const auto ratio = [](int a, int b) { return b == 0 ? 1.0 : static_cast<double>(a) / b; };
-  const auto fixed3 = [](double x) {
-    std::ostringstream out;
-    out.setf(std::ios::fixed);
-    out.precision(3);
-    out << x;
-    return out.str();
-  };
-  std::cout
-      << "At warn and above. precision: the right code for an injected fault; fault\n"
-         "precision: any injected fault; recall: faults reported with the right code.\n\n"
-         "code    reported  right  other fault  false  precision  fault prec.  faults  found  "
-         "recall\n";
-  for (const auto& [code, c] : by_code) {
-    std::string line = code;
-    const auto column = [&line](const std::string& text, std::size_t width) {
-      line += std::string(width > text.size() ? width - text.size() : 1, ' ') + text;
-    };
-    column(std::to_string(c.reported), 11);
-    column(std::to_string(c.correct), 7);
-    column(std::to_string(c.other_fault), 13);
-    column(std::to_string(c.false_positive), 7);
-    column(fixed3(ratio(c.correct, c.reported)), 11);
-    column(fixed3(ratio(c.correct + c.other_fault, c.reported)), 13);
-    column(std::to_string(c.labels), 8);
-    column(std::to_string(c.found), 7);
-    column(fixed3(ratio(c.found, c.labels)), 8);
-    std::cout << line << "\n";
-  }
-  std::cout << "\nhard negatives reported at warn or above:";
-  std::set<std::string> kinds;
-  for (const Label& l : labels) {
-    if (l.expect.empty()) {
-      kinds.insert(l.kind);
-    }
-  }
-  for (const std::string& kind : kinds) {
-    std::cout << " " << kind << " " << hard_hits[kind];
-  }
-  std::cout << "\n";
-
-  int failures = 0;
-  for (const Gate& gate : gates) {
-    double value = 0.0;
-    bool at_most = false;
-    if (gate.metric == "max") {  // a hard-negative kind
-      value = hard_hits[gate.code];
-      at_most = true;
-    } else {
-      const Counts& c = by_code[gate.code];
-      if (gate.metric == "precision") {
-        value = ratio(c.correct, c.reported);
-      } else if (gate.metric == "fault_precision") {
-        value = ratio(c.correct + c.other_fault, c.reported);
-      } else if (gate.metric == "recall") {
-        value = ratio(c.found, c.labels);
-      } else {
-        std::cerr << gates_path << ": unknown metric \"" << gate.metric << "\"\n";
-        return 2;
+  void recall(const std::vector<Result>& results) {
+    for (const Label& l : labels_) {
+      if (l.expect.empty()) {
+        continue;
+      }
+      const std::string code = l.expect.substr(0, l.expect.find('|'));
+      Counts& c = by_code_[code];
+      ++c.labels;
+      const bool found = std::any_of(results.begin(), results.end(), [&](const Result& r) {
+        return expects(l, r.code) && overlaps(r, l, kSlack);
+      });
+      c.found += found ? 1 : 0;
+      if (!found && narrate(code)) {
+        std::cout << "missed (" << l.kind << "): " << l.series << " " << l.first.to_string() << ".."
+                  << l.last.to_string() << " " << l.expect << "\n";
       }
     }
-    const bool ok = at_most ? value <= gate.bound : value >= gate.bound;
-    if (!ok) {
-      std::cout << "GATE FAILED: " << gate.code << " " << gate.metric << " "
-                << dorq::format_number(gate.bound) << " (got " << fixed3(value) << ")\n";
-      ++failures;
+  }
+
+  void print() {
+    std::cout << "At warn and above. precision: the right code for an injected fault; fault\n"
+                 "precision: any injected fault; recall: faults reported with the right code.\n\n"
+                 "code    reported  right  other fault  false  precision  fault prec.  faults  "
+                 "found  recall\n";
+    for (const auto& [code, c] : by_code_) {
+      std::string line = code;
+      const auto cell = [&line](const std::string& text, std::size_t width) {
+        line += std::string(width > text.size() ? width - text.size() : 1, ' ');
+        line += text;
+      };
+      cell(std::to_string(c.reported), 11);
+      cell(std::to_string(c.correct), 7);
+      cell(std::to_string(c.other_fault), 13);
+      cell(std::to_string(c.false_positive), 7);
+      cell(fixed3(ratio(c.correct, c.reported)), 11);
+      cell(fixed3(ratio(c.correct + c.other_fault, c.reported)), 13);
+      cell(std::to_string(c.labels), 8);
+      cell(std::to_string(c.found), 7);
+      cell(fixed3(ratio(c.found, c.labels)), 8);
+      std::cout << line << "\n";
     }
+    std::cout << "\nhard negatives reported at warn or above:";
+    std::set<std::string> kinds;
+    for (const Label& l : labels_) {
+      if (l.expect.empty()) {
+        kinds.insert(l.kind);
+      }
+    }
+    for (const std::string& kind : kinds) {
+      std::cout << " " << kind << " " << hard_hits_[kind];
+    }
+    std::cout << "\n";
   }
-  if (gates.empty()) {
-    return 0;
+
+  // The number of gates that fail, or -1 for a gate that names no metric dorq-synth knows.
+  int failures() {
+    int failed = 0;
+    for (const Gate& gate : gates_) {
+      const std::optional<double> value = metric(gate);
+      if (!value) {
+        std::cerr << "unknown metric \"" << gate.metric << "\" in the gates\n";
+        return -1;
+      }
+      const bool ok = gate.metric == "max" ? *value <= gate.bound : *value >= gate.bound;
+      if (!ok) {
+        std::cout << "GATE FAILED: " << gate.code << " " << gate.metric << " "
+                  << dorq::format_number(gate.bound) << " (got " << fixed3(*value) << ")\n";
+        ++failed;
+      }
+    }
+    return failed;
   }
-  if (failures == 0) {
+
+ private:
+  // With gates, the narration covers the codes they judge.
+  [[nodiscard]] bool narrate(const std::string& code) const {
+    return verbose_ &&
+           (gates_.empty() || std::any_of(gates_.begin(), gates_.end(),
+                                          [&](const Gate& g) { return g.code == code; }));
+  }
+
+  // Counts a false positive that overlaps a hard negative; true when one does.
+  bool hard_negative(const Result& r) {
+    bool hard = false;
+    for (const Label& l : labels_) {
+      if (!l.expect.empty() || !overlaps(r, l, 0) || !r.code.starts_with(l.codes)) {
+        continue;
+      }
+      hard_hits_[l.kind] += hard ? 0 : 1;
+      hard = true;
+      if (verbose_) {
+        std::cout << "hard negative (" << l.kind << "): " << r.series << " " << r.first.to_string()
+                  << " " << r.code << " " << r.message << "\n";
+      }
+    }
+    return hard;
+  }
+
+  std::optional<double> metric(const Gate& gate) {
+    if (gate.metric == "max") {  // a hard-negative kind
+      return hard_hits_[gate.code];
+    }
+    const Counts& c = by_code_[gate.code];
+    if (gate.metric == "precision") {
+      return ratio(c.correct, c.reported);
+    }
+    if (gate.metric == "fault_precision") {
+      return ratio(c.correct + c.other_fault, c.reported);
+    }
+    if (gate.metric == "recall") {
+      return ratio(c.found, c.labels);
+    }
+    return std::nullopt;
+  }
+
+  const std::vector<Label>& labels_;
+  const std::vector<Gate>& gates_;
+  bool verbose_ = false;
+  std::map<std::string, Counts> by_code_;
+  std::map<std::string, int> hard_hits_;  // by hard-negative kind
+};
+
+int score(const std::string& labels_path, const std::string& results_path,
+          const std::string& gates_path, bool verbose) {
+  const std::vector<Gate> gates = gates_path.empty() ? std::vector<Gate>{} : read_gates(gates_path);
+  const std::vector<Label> labels = read_labels(labels_path);
+  const std::vector<Result> results = read_results(results_path);
+  Tally tally(labels, gates, verbose);
+  for (const Result& r : results) {
+    tally.add(r);
+  }
+  tally.recall(results);
+  tally.print();
+  const int failed = tally.failures();
+  if (failed < 0) {
+    return 2;
+  }
+  if (!gates.empty() && failed == 0) {
     std::cout << "all gates passed\n";
   }
-  return failures == 0 ? 0 : 1;
+  return failed == 0 ? 0 : 1;
 }
 
 int usage() {
@@ -873,7 +965,8 @@ int usage() {
 }  // namespace
 
 int main(int argc, char** argv) {
-  const std::vector<std::string> args(argv, argv + argc);
+  const std::span<char*> argument_span(argv, static_cast<std::size_t>(argc));
+  const std::vector<std::string> args(argument_span.begin(), argument_span.end());
   if (args.size() < 2) {
     return usage();
   }

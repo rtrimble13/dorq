@@ -214,9 +214,10 @@ void read_price(const toml::table& table, const std::string& where, const std::s
       for (const std::string& text : read_string_list(node, where, path)) {
         const auto ratio = parse_split_ratio(text);
         if (!ratio) {
-          fail(where, node,
-               "\"" + path + "\" entries must be ratios like \"2:1\" or \"1:10\", not \"" + text +
-                   "\"");
+          std::string what = "\"" + path;
+          what += R"(" entries must be ratios like "2:1" or "1:10", not ")";
+          what += text + "\"";
+          fail(where, node, what);
         }
         ratios.push_back(*ratio);
       }
@@ -1006,12 +1007,18 @@ std::string to_toml(const Config& config) {
     std::string price_keys;
     append_price_patch(price_keys, profile.price);
     if (!price_keys.empty()) {
-      out += "\n[" + section + ".price]\n" + price_keys;
+      out += "\n[";
+      out += section;
+      out += ".price]\n";
+      out += price_keys;
     }
     std::string priors;
     append_priors_patch(priors, profile.price);
     if (!priors.empty()) {
-      out += "\n[" + section + ".priors]\n" + priors;
+      out += "\n[";
+      out += section;
+      out += ".priors]\n";
+      out += priors;
     }
   }
   return out;

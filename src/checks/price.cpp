@@ -97,10 +97,15 @@ class Builder {
     const std::size_t t = finding_.bar;
     const std::size_t r = row(t);
     const bool outside = s_.close[r] < s_.low[r] || s_.close[r] > s_.high[r];
-    v.message = "close " + price(close(t)) + (outside ? " outside" : " far from") +
-                " the bar's range " + price(s_.low[r]) + ".." + price(s_.high[r]) +
-                ", whose open " + price(s_.open[r]) + " held the prior close " +
-                price(close(t - 1));
+    if (outside) {
+      v.message = "close " + price(close(t)) + " outside the bar's range " + price(s_.low[r]) +
+                  ".." + price(s_.high[r]) + ", whose open " + price(s_.open[r]) +
+                  " held the prior close " + price(close(t - 1));
+    } else {
+      v.message = "close " + price(close(t)) + " is " + times(close(t) / s_.open[r]) +
+                  " the bar's open " + price(s_.open[r]) + ", which held the prior close " +
+                  price(close(t - 1));
+    }
     SuggestedAction action;
     action.kind = "refetch_bar";
     action.fields = {{"date", date(t).to_string()}, {"field", std::string{"close"}}};
@@ -180,8 +185,8 @@ class Builder {
   }
 
   void market(Violation& v) const {
-    const bool tick = finding_.posterior[static_cast<std::size_t>(H::kTickMove)] >
-                      finding_.posterior[static_cast<std::size_t>(H::kMarketMove)];
+    const bool tick = finding_.posterior.at(static_cast<std::size_t>(H::kTickMove)) >
+                      finding_.posterior.at(static_cast<std::size_t>(H::kMarketMove));
     v.message = move() + "): probably " + (tick ? "a move of a tick or two" : "a real move");
   }
 
@@ -240,8 +245,8 @@ Violation make_violation(const SeriesContext& context, const PriceAnalysis& anal
     v.message += ", provisional";
   }
   for (std::size_t h = 0; h < kPriceHypotheses; ++h) {
-    if (finding.considered[h]) {
-      v.hypotheses.push_back({to_string(static_cast<H>(h)), finding.posterior[h]});
+    if (finding.considered.at(h)) {
+      v.hypotheses.push_back({to_string(static_cast<H>(h)), finding.posterior.at(h)});
     }
   }
   for (const PriceEvidence& e : finding.evidence) {

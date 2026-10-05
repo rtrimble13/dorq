@@ -13,6 +13,7 @@
 #include "config/config.hpp"
 #include "io/input_error.hpp"
 #include "io/reader.hpp"
+#include "price/model.hpp"
 
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size) {
   if (size == 0) {
@@ -30,22 +31,26 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   static const dorq::Calendar kCalendar;
   const dorq::CoverageSettings coverage;
   const dorq::SeverityThresholds thresholds;
+  const dorq::PriceSettings price;
   std::vector<dorq::Violation> found;
   dorq::SeriesAssembler assembler(grouping, [&](dorq::Series&& series) {
+    const dorq::Frequency frequency = dorq::infer_frequency(series.date);
+    const auto analysis = dorq::analyze_coverage(series, kCalendar, coverage, 0.95);
+    const auto price_analysis = dorq::analyze_prices(series, kCalendar, price);
+    const dorq::SeriesContext context{.series = series,
+                                      .integrity = settings,
+                                      .coverage = coverage,
+                                      .calendar = kCalendar,
+                                      .thresholds = thresholds,
+                                      .price = price,
+                                      .frequency = frequency,
+                                      .analysis = &analysis,
+                                      .price_analysis = &price_analysis};
     for (const dorq::Check* check : dorq::all_checks()) {
       if (check->info().applies == dorq::Applies::kOhlcvOnly &&
           series.kind != dorq::SeriesKind::kOhlcv) {
         continue;
       }
-      const dorq::Frequency frequency = dorq::infer_frequency(series.date);
-      const auto analysis = dorq::analyze_coverage(series, kCalendar, coverage, 0.95);
-      const dorq::SeriesContext context{.series = series,
-                                        .integrity = settings,
-                                        .coverage = coverage,
-                                        .calendar = kCalendar,
-                                        .thresholds = thresholds,
-                                        .frequency = frequency,
-                                        .analysis = &analysis};
       check->run(context, found);
     }
   });

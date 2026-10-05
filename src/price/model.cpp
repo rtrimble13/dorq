@@ -70,7 +70,7 @@ double log_cauchy(double x, double scale) noexcept {
 double split_weight(const SplitRatio& ratio) noexcept {
   struct Known {
     SplitRatio ratio;
-    double weight;
+    double weight = 0.0;
   };
   // Rough frequencies of US splits: forward 2:1 dominates, and reverse splits of
   // 1:10, 1:5 and 1:20 are the usual penny-stock repair.
@@ -108,6 +108,40 @@ struct Term {
   Terms ll{};
 };
 
+// A term's log-likelihood under one hypothesis.
+double& at(Term& term, H hypothesis) { return term.ll.at(idx(hypothesis)); }
+
+// A term with the same log-likelihood under every hypothesis, to be overridden for
+// the ones it tells apart.
+Term uniform_term(std::string feature, DetailValue value, double ll) {
+  Term term{std::move(feature), std::move(value), {}, {}};
+  term.ll.fill(ll);
+  return term;
+}
+
+// What scoring one candidate needs to know about it.
+struct Candidate {
+  std::size_t t = 0;    // the bar
+  std::size_t row = 0;  // its row in the series
+  double r = 0.0;       // its return
+  int elapsed = 1;      // sessions since the bar before
+  std::size_t max_block = 1;
+  double sig = 0.0;      // per-session volatility, the bar and those after it left out
+  double base_sd = 0.0;  // sd of an ordinary move from the bar before
+  double prev_close = 0.0;
+  double this_close = 0.0;
+  double grid = 0.0;     // the price grid
+  bool bar_ohl = false;  // open, high and low are usable
+};
+
+// The bars after a candidate: the next_bars term, and what describes it.
+struct NextBars {
+  Term term;
+  std::size_t best_block = 1;  // a bad print's most probable length
+  std::size_t count = 0;       // returns seen after the bar
+  double largest = 1.0;        // the largest of them, as a price factor
+};
+
 struct VolumeWindow {
   std::size_t count = 0;
   double median = 0.0;
@@ -118,8 +152,11 @@ struct VolumeWindow {
 class Scorer {
  public:
   Scorer(const Series& series, const PriceFeatures& f, const PriceSettings& settings)
-      : series_(series), f_(f), settings_(settings), n_(f.size()) {
-    has_ohlc_ = series.kind == SeriesKind::kOhlcv;
+      : series_(series),
+        f_(f),
+        settings_(settings),
+        n_(f.size()),
+        has_ohlc_(series.kind == SeriesKind::kOhlcv) {
     const double nu = settings.tail_dof;
     t_scale_ = nu > 2.0 ? std::sqrt((nu - 2.0) / nu) : 1.0;
     double total = 0.0;
@@ -225,7 +262,7 @@ class Scorer {
     return price >= settings_.min_price && price <= settings_.max_price;
   }
 
-  PriceFinding score(std::size_t t) const;
+  [[nodiscard]] PriceFinding score(std::size_t t) const;
 
   [[nodiscard]] bool screened(std::size_t t) const {
     const double r = f_.ret[t];
@@ -251,6 +288,19 @@ class Scorer {
   }
 
  private:
+  [[nodiscard]] Candidate candidate(std::size_t t) const;
+  void applicable(const Candidate& c, std::array<bool, kCount>& on) const;
+  [[nodiscard]] std::optional<Term> prior_term(std::array<bool, kCount>& on) const;
+  [[nodiscard]] Term return_term(const Candidate& c, PriceFinding& out) const;
+  [[nodiscard]] double split_ll(const Candidate& c, PriceFinding& out) const;
+  [[nodiscard]] double scale_ll(const Candidate& c, PriceFinding& out) const;
+  [[nodiscard]] NextBars next_bars(const Candidate& c) const;
+  void ohlc_terms(const Candidate& c, std::vector<Term>& terms) const;
+  void volume_terms(const Candidate& c, PriceFinding& out, std::vector<Term>& terms) const;
+  [[nodiscard]] std::optional<Term> plausibility_term(const Candidate& c) const;
+  [[nodiscard]] std::optional<Term> precision_term(const Candidate& c) const;
+  void segment_terms(const Candidate& c, std::vector<Term>& terms) const;
+
   const Series& series_;
   const PriceFeatures& f_;
   const PriceSettings& settings_;
@@ -261,222 +311,209 @@ class Scorer {
   std::vector<std::pair<SplitRatio, double>> splits_;
 };
 
-PriceFinding Scorer::score(std::size_t t) const {
-  PriceFinding out;
-  out.bar = t;
-  out.end_bar = t;
-  const double r = f_.ret[t];
-  const int elapsed = f_.elapsed[t];
-  const auto max_block = static_cast<std::size_t>(settings_.revert_max_bars);
-  const double sig = sigma(t, max_block);
-  const double base_sd = move_sd(sig, t - 1, t);
-  const double prev_close = close(t - 1);
-  const double this_close = close(t);
-  out.factor = this_close / prev_close;
-  out.tail = tail(r, move_sd(sigma(t, 0), t - 1, t));
-  const std::size_t after = n_ - 1 - t;  // bars after t
-  out.provisional = after < static_cast<std::size_t>(settings_.provisional_bars);
+Candidate Scorer::candidate(std::size_t t) const {
+  Candidate c;
+  c.t = t;
+  c.r = f_.ret[t];
+  c.elapsed = f_.elapsed[t];
+  c.max_block = static_cast<std::size_t>(settings_.revert_max_bars);
+  c.sig = sigma(t, c.max_block);
+  c.base_sd = move_sd(c.sig, t - 1, t);
+  c.prev_close = close(t - 1);
+  c.this_close = close(t);
+  c.grid = price_grid(t - 1, t);
+  c.row = f_.row[t];
+  const std::size_t row = c.row;
+  c.bar_ohl = has_ohlc_ && std::isfinite(series_.open[row]) && std::isfinite(series_.high[row]) &&
+              std::isfinite(series_.low[row]) && series_.open[row] > 0.0 &&
+              series_.high[row] > 0.0 && series_.low[row] > 0.0;
+  return c;
+}
 
-  // Which hypotheses apply.
-  std::array<bool, kCount>& on = out.considered;
+// Which hypotheses apply to a candidate.
+void Scorer::applicable(const Candidate& c, std::array<bool, kCount>& on) const {
   on.fill(true);
-  const double tick = price_grid(t - 1, t);
-  const double ticks = std::fabs(this_close - prev_close) / tick;
-  on[idx(H::kTickMove)] = ticks <= 2.5;
-  const std::size_t row = f_.row[t];
-  const bool bar_ohl = has_ohlc_ && std::isfinite(series_.open[row]) &&
-                       std::isfinite(series_.high[row]) && std::isfinite(series_.low[row]) &&
-                       series_.open[row] > 0.0 && series_.high[row] > 0.0 && series_.low[row] > 0.0;
-  on[idx(H::kBadClose)] = bar_ohl;
-  on[idx(H::kUnreportedSplit)] = has_ohlc_ && !splits_.empty();
-  on[idx(H::kHistorySegment)] = elapsed >= settings_.segment_gap;
+  const double ticks = std::fabs(c.this_close - c.prev_close) / c.grid;
+  on.at(idx(H::kTickMove)) = ticks <= 2.5;
+  on.at(idx(H::kBadClose)) = c.bar_ohl;
+  on.at(idx(H::kUnreportedSplit)) = has_ohlc_ && !splits_.empty();
+  on.at(idx(H::kHistorySegment)) = c.elapsed >= settings_.segment_gap;
+}
 
-  std::vector<Term> terms;
-
-  // The prior.
-  {
-    const PricePriors& p = settings_.priors;
-    const Terms weights = {p.market_move,      p.tick_move,   p.bad_print,      p.bad_close,
-                           p.unreported_split, p.scale_error, p.history_segment};
-    double total = 0.0;
-    for (std::size_t h = 0; h < kCount; ++h) {
-      total += on[h] ? weights[h] : 0.0;
-    }
-    if (total <= 0.0) {  // every applicable prior set to zero: nothing to compare
-      on.fill(false);
-      return out;
-    }
-    Term term{"prior", 0.0, {}, {}};
-    for (std::size_t h = 0; h < kCount; ++h) {
-      term.ll[h] = on[h] && weights[h] > 0.0 ? std::log(weights[h] / total) : kNegInf;
-      on[h] = on[h] && weights[h] > 0.0;
-    }
-    terms.push_back(std::move(term));
+// The prior, normalized over the hypotheses that apply; nullopt when every one of
+// them has weight zero.
+std::optional<Term> Scorer::prior_term(std::array<bool, kCount>& on) const {
+  const PricePriors& p = settings_.priors;
+  const Terms weights = {p.market_move,      p.tick_move,   p.bad_print,      p.bad_close,
+                         p.unreported_split, p.scale_error, p.history_segment};
+  double total = 0.0;
+  for (std::size_t h = 0; h < kCount; ++h) {
+    total += on.at(h) ? weights.at(h) : 0.0;
   }
+  if (total <= 0.0) {
+    return std::nullopt;
+  }
+  Term term{"prior", 0.0, {}, {}};
+  for (std::size_t h = 0; h < kCount; ++h) {
+    on.at(h) = on.at(h) && weights.at(h) > 0.0;
+    term.ll.at(h) = on.at(h) ? std::log(weights.at(h) / total) : kNegInf;
+  }
+  return term;
+}
 
-  // The return itself.
-  {
-    Term term{"return", out.factor, {}, {}};
-    term.ll[idx(H::kMarketMove)] = ordinary(r, base_sd);
-    term.ll[idx(H::kTickMove)] = std::log(this_close) - std::log(4.0 * tick);
-    term.ll[idx(H::kBadPrint)] = log_cauchy(r, kErrorJumpScale);
-    term.ll[idx(H::kBadClose)] = log_cauchy(r, kErrorJumpScale);
-    // A split or a scale error shifts the level exactly; the rest of the move is
-    // an ordinary return.
-    const double slack = settings_.ratio_tolerance;
-    double split = kNegInf;
-    double best = kNegInf;
-    const double level = split_level_weights(prev_close);
-    for (const auto& [ratio, weight] : splits_) {
-      const bool forward = ratio.shares_after > ratio.shares_before;
-      const double at_level = forward ? level : 1.0 - level;
-      const double ll = std::log(weight * at_level) +
-                        ordinary(r - std::log(ratio.price_factor()), std::hypot(base_sd, slack));
-      split = stats::log_add(split, ll);
+// A split shifts the level by its ratio exactly; the rest of the move is an
+// ordinary return. Sets the nearest ratio.
+double Scorer::split_ll(const Candidate& c, PriceFinding& out) const {
+  const double sd = std::hypot(c.base_sd, settings_.ratio_tolerance);
+  const double level = split_level_weights(c.prev_close);
+  double total = kNegInf;
+  double best = kNegInf;
+  for (const auto& [ratio, weight] : splits_) {
+    const bool forward = ratio.shares_after > ratio.shares_before;
+    const double ll = std::log(weight * (forward ? level : 1.0 - level)) +
+                      ordinary(c.r - std::log(ratio.price_factor()), sd);
+    total = stats::log_add(total, ll);
+    if (ll > best) {
+      best = ll;
+      out.split = ratio;
+    }
+  }
+  return total;
+}
+
+// A scale error shifts the level by a power of ten. Sets the nearest power.
+double Scorer::scale_ll(const Candidate& c, PriceFinding& out) const {
+  const double sd = std::hypot(c.base_sd, settings_.ratio_tolerance);
+  double total = std::log(kScaleBroad) + log_cauchy(c.r, kErrorJumpScale);
+  double best = kNegInf;
+  for (std::size_t k = 0; k < kPowerWeights.size(); ++k) {
+    for (const int sign : {-1, 1}) {
+      const double power = sign * static_cast<double>(k + 1);
+      const double ll = std::log((1.0 - kScaleBroad) * kPowerWeights.at(k) / 2.0) +
+                        ordinary(c.r - power * std::numbers::ln10, sd);
+      total = stats::log_add(total, ll);
       if (ll > best) {
         best = ll;
-        out.split = ratio;
+        out.power_of_ten = static_cast<int>(power);
       }
     }
-    term.ll[idx(H::kUnreportedSplit)] = split;
-    double scale = std::log(kScaleBroad) + log_cauchy(r, kErrorJumpScale);
-    double best_power = kNegInf;
-    for (std::size_t k = 0; k < kPowerWeights.size(); ++k) {
-      for (const int sign : {-1, 1}) {
-        const double power = sign * static_cast<double>(k + 1);
-        const double ll = std::log((1.0 - kScaleBroad) * kPowerWeights[k] / 2.0) +
-                          ordinary(r - power * std::numbers::ln10, std::hypot(base_sd, slack));
-        scale = stats::log_add(scale, ll);
-        if (ll > best_power) {
-          best_power = ll;
-          out.power_of_ten = static_cast<int>(power);
-        }
-      }
-    }
-    term.ll[idx(H::kScaleError)] = scale;
-    term.ll[idx(H::kHistorySegment)] = log_normal_pdf(r, 0.0, std::hypot(kSegmentSpread, base_sd));
-    if (out.split) {
-      term.note = "nearest split " + out.split->to_string();
-    }
-    terms.push_back(std::move(term));
   }
+  return total;
+}
 
-  std::size_t next_term = 0;
-  double next_largest = 1.0;
-  std::size_t next_count = 0;
-  // The bars after: a bad print's block of k bars ends with a return that undoes
-  // it, so the move from before the block to after it is ordinary. A real move
-  // stirs volatility up (half the time, by kAftershock of its size); a split, a
-  // scale error or a bad print leaves the bars after it calm.
-  std::size_t best_block = 1;
-  {
-    Term term{"next_bars", false, {}, {}};
-    std::vector<double> plain;    // log density of each later return, as ordinary
-    std::vector<double> stirred;  // and as ordinary after a real move
-    for (std::size_t j = 1; j <= max_block && t + j < n_; ++j) {
-      const double sd = move_sd(sig, t + j - 1, t + j);
-      plain.push_back(ordinary(f_.ret[t + j], sd));
-      stirred.push_back(ordinary(f_.ret[t + j], std::hypot(sd, kAftershock * std::fabs(r))));
-    }
-    double all_plain = 0.0;
-    double all_stirred = 0.0;
-    for (std::size_t j = 0; j < plain.size(); ++j) {
-      all_plain += plain[j];
-      all_stirred += stirred[j];
-    }
-    double norm = 0.0;
-    for (std::size_t k = 1; k <= max_block; ++k) {
-      norm += std::pow(kBlockDecay, static_cast<double>(k));
-    }
-    double mixture = kNegInf;
-    double best = kNegInf;
-    double first = all_plain;
-    for (std::size_t k = 1; k <= max_block; ++k) {
-      const double weight = std::pow(kBlockDecay, static_cast<double>(k)) / norm;
-      double ll = all_plain;  // not yet reverted within the data: nothing to score
-      if (k <= plain.size()) {
-        // The block's own moves cancel: from before it to after it is ordinary.
-        const double across = f_.y[t + k] - f_.y[t - 1] - (f_.y[t + k - 1] - f_.y[t]);
-        ll = all_plain - plain[k - 1] + ordinary(across, move_sd(sig, t - 1, t + k));
-      }
-      if (k == 1) {
-        first = ll;
-      }
-      mixture = stats::log_add(mixture, std::log(weight) + ll);
-      if (std::log(weight) + ll > best) {
-        best = std::log(weight) + ll;
-        best_block = k;
-      }
-    }
-    for (std::size_t h = 0; h < kCount; ++h) {
-      term.ll[h] = all_plain;
-    }
-    term.ll[idx(H::kMarketMove)] =
-        stats::log_add(std::log(0.5) + all_stirred, std::log(0.5) + all_plain);
-    term.ll[idx(H::kBadPrint)] = mixture;
-    term.ll[idx(H::kBadClose)] = first;
-    if (plain.empty()) {
-      term.note = "none yet";
-    } else {
-      // Described for a bad print by the move that undoes it, and otherwise by the
-      // largest of the moves that follow (see the evidence step below).
-      double largest = 0.0;
-      for (std::size_t j = 1; j <= plain.size(); ++j) {
-        largest = std::fabs(f_.ret[t + j]) > std::fabs(largest) ? f_.ret[t + j] : largest;
-      }
-      next_largest = std::exp(largest);
-      next_count = plain.size();
-      if (t + best_block < n_) {
-        term.value = std::exp(f_.ret[t + best_block]);
-        term.note = "the move " + std::to_string(best_block) + " bar" +
-                    (best_block == 1 ? "" : "s") + " later";
-      }
-    }
-    next_term = terms.size();
-    terms.push_back(std::move(term));
+// The move itself.
+Term Scorer::return_term(const Candidate& c, PriceFinding& out) const {
+  Term term{"return", out.factor, {}, {}};
+  at(term, H::kMarketMove) = ordinary(c.r, c.base_sd);
+  at(term, H::kTickMove) = std::log(c.this_close) - std::log(4.0 * c.grid);
+  at(term, H::kBadPrint) = log_cauchy(c.r, kErrorJumpScale);
+  at(term, H::kBadClose) = log_cauchy(c.r, kErrorJumpScale);
+  at(term, H::kUnreportedSplit) = split_ll(c, out);
+  at(term, H::kScaleError) = scale_ll(c, out);
+  at(term, H::kHistorySegment) = log_normal_pdf(c.r, 0.0, std::hypot(kSegmentSpread, c.base_sd));
+  if (out.split) {
+    term.note = "nearest split " + out.split->to_string();
   }
+  return term;
+}
 
-  // The bar's own open, high and low.
-  if (bar_ohl) {
-    const double o = series_.open[row];
-    const double hi = series_.high[row];
-    const double lo = series_.low[row];
-    // The close outside a range that holds the open blames the close; with the open
-    // outside too, the high or low is the bad field (DQ101 reports it).
-    const bool range_holds_open = lo <= o && o <= hi;
-    const bool outside = range_holds_open && close_outside_range(t);
-    Term range{"close_in_range", !outside, {}, {}};
-    const auto p_out = [outside](double p) { return outside ? std::log(p) : std::log1p(-p); };
-    for (std::size_t h = 0; h < kCount; ++h) {
-      range.ll[h] = p_out(kRangeNoise);
-    }
-    range.ll[idx(H::kBadPrint)] = p_out(0.05);
-    range.ll[idx(H::kBadClose)] = p_out(0.9);
-    terms.push_back(std::move(range));
-
-    const double mid = std::max(std::min(o, hi), std::min(std::max(o, hi), lo));
-    const double r_ohl = std::log(mid) - f_.y[t - 1];
-    const double sd = 1.5 * base_sd;
-    Term level{"open_high_low", std::exp(r_ohl), {}, {}};
-    for (std::size_t h = 0; h < kCount; ++h) {
-      level.ll[h] = log_normal_pdf(r_ohl, r, sd);
-    }
-    // A real move's bar opens at the old level and trades to the new, or gaps.
-    const double market =
-        stats::log_add(std::log(0.5) + log_normal_pdf(r_ohl, r, sd),
-                       std::log(0.5) + log_normal_pdf(r_ohl, r / 2.0, std::fabs(r) / 2.0 + sd));
-    level.ll[idx(H::kMarketMove)] = market;
-    level.ll[idx(H::kTickMove)] = market;
-    level.ll[idx(H::kBadClose)] = log_normal_pdf(r_ohl, 0.0, sd);
-    terms.push_back(std::move(level));
+// The bars after: a bad print's block of k bars ends with a return that undoes
+// it, so the move from before the block to after it is ordinary. A real move
+// stirs volatility up (half the time, by kAftershock of its size); a split, a
+// scale error or a bad print leaves the bars after it calm.
+NextBars Scorer::next_bars(const Candidate& c) const {
+  const std::size_t t = c.t;
+  NextBars out;
+  out.term = Term{"next_bars", false, {}, {}};
+  std::vector<double> plain;  // log density of each later return, as ordinary
+  double all_plain = 0.0;
+  double all_stirred = 0.0;  // and as ordinary after a real move
+  double largest = 0.0;
+  for (std::size_t j = 1; j <= c.max_block && t + j < n_; ++j) {
+    const double sd = move_sd(c.sig, t + j - 1, t + j);
+    plain.push_back(ordinary(f_.ret[t + j], sd));
+    all_plain += plain.back();
+    all_stirred += ordinary(f_.ret[t + j], std::hypot(sd, kAftershock * std::fabs(c.r)));
+    largest = std::fabs(f_.ret[t + j]) > std::fabs(largest) ? f_.ret[t + j] : largest;
   }
+  double norm = 0.0;
+  for (std::size_t k = 1; k <= c.max_block; ++k) {
+    norm += std::pow(kBlockDecay, static_cast<double>(k));
+  }
+  double mixture = kNegInf;
+  double best = kNegInf;
+  double first = all_plain;
+  for (std::size_t k = 1; k <= c.max_block; ++k) {
+    const double weight = std::log(std::pow(kBlockDecay, static_cast<double>(k)) / norm);
+    double ll = all_plain;  // not yet reverted within the data: nothing to score
+    if (k <= plain.size()) {
+      // The block's own moves cancel: from before it to after it is ordinary.
+      const double across = f_.y[t + k] - f_.y[t - 1] - (f_.y[t + k - 1] - f_.y[t]);
+      ll = all_plain - plain[k - 1] + ordinary(across, move_sd(c.sig, t - 1, t + k));
+    }
+    first = k == 1 ? ll : first;
+    mixture = stats::log_add(mixture, weight + ll);
+    if (weight + ll > best) {
+      best = weight + ll;
+      out.best_block = k;
+    }
+  }
+  out.term.ll.fill(all_plain);
+  at(out.term, H::kMarketMove) =
+      stats::log_add(std::log(0.5) + all_stirred, std::log(0.5) + all_plain);
+  at(out.term, H::kBadPrint) = mixture;
+  at(out.term, H::kBadClose) = first;
+  out.count = plain.size();
+  out.largest = std::exp(largest);
+  if (plain.empty()) {
+    out.term.note = "none yet";
+  } else if (t + out.best_block < n_) {
+    out.term.value = std::exp(f_.ret[t + out.best_block]);
+    out.term.note = "the move " + std::to_string(out.best_block) + " bar" +
+                    (out.best_block == 1 ? "" : "s") + " later";
+  }
+  return out;
+}
 
-  // Volume: on the day, and the level before and after.
+// The bar's own open, high and low.
+void Scorer::ohlc_terms(const Candidate& c, std::vector<Term>& terms) const {
+  const double o = series_.open[c.row];
+  const double hi = series_.high[c.row];
+  const double lo = series_.low[c.row];
+  // The close outside a range that holds the open blames the close; with the open
+  // outside too, the high or low is the bad field (DQ101 reports it).
+  const bool outside = lo <= o && o <= hi && close_outside_range(c.t);
+  const auto p_out = [outside](double p) { return outside ? std::log(p) : std::log1p(-p); };
+  Term range = uniform_term("close_in_range", !outside, p_out(kRangeNoise));
+  at(range, H::kBadPrint) = p_out(0.05);
+  at(range, H::kBadClose) = p_out(0.9);
+  terms.push_back(std::move(range));
+
+  const double mid = std::max(std::min(o, hi), std::min(std::max(o, hi), lo));
+  const double r_ohl = std::log(mid) - f_.y[c.t - 1];
+  const double sd = 1.5 * c.base_sd;
+  Term level = uniform_term("open_high_low", std::exp(r_ohl), log_normal_pdf(r_ohl, c.r, sd));
+  // A real move's bar opens at the old level and trades to the new, or gaps.
+  const double market =
+      stats::log_add(std::log(0.5) + log_normal_pdf(r_ohl, c.r, sd),
+                     std::log(0.5) + log_normal_pdf(r_ohl, c.r / 2.0, std::fabs(c.r) / 2.0 + sd));
+  at(level, H::kMarketMove) = market;
+  at(level, H::kTickMove) = market;
+  at(level, H::kBadClose) = log_normal_pdf(r_ohl, 0.0, sd);
+  terms.push_back(std::move(level));
+}
+
+// Volume: on the day, and the level before and after.
+void Scorer::volume_terms(const Candidate& c, PriceFinding& out, std::vector<Term>& terms) const {
+  const std::size_t t = c.t;
   const auto window = static_cast<std::size_t>(settings_.volume_window);
   const VolumeWindow pre = volume_window(t >= window ? t - window : 0, t);
   const VolumeWindow post = volume_window(t + 1, t + 1 + window);
+  if (pre.count < kMinWindow) {
+    return;
+  }
   const double v = volume(t);
-  if (pre.count >= kMinWindow && std::isfinite(v) && v >= 0.0) {
+  if (std::isfinite(v) && v >= 0.0) {
     const double spread = std::max(1.0, pre.log_spread);
     const double lv = std::log1p(v);
     const double lpre = std::log1p(pre.median);
@@ -491,148 +528,177 @@ PriceFinding Scorer::score(std::size_t t) const {
     };
     // Volume rises with how surprising a real move is: not at all for an ordinary
     // one (a tick on a coarse grid), fully from about six standard deviations.
-    const double surprise = std::clamp((std::fabs(r) / base_sd - 2.0) / 4.0, 0.0, 1.0);
-    term.ll[idx(H::kMarketMove)] = ll(0.002, lpre + kSurge * surprise, spread);
-    term.ll[idx(H::kTickMove)] = ll(0.002, lpre, spread);
-    term.ll[idx(H::kBadPrint)] = ll(0.05, lpre + kBadPrintVolume * surprise, spread);
-    term.ll[idx(H::kBadClose)] = ll(0.05, lpre + kBadPrintVolume * surprise, spread);
-    term.ll[idx(H::kUnreportedSplit)] = ll(0.002, lpost, spread);
-    term.ll[idx(H::kScaleError)] = ll(0.002, lpost, spread);
-    term.ll[idx(H::kHistorySegment)] = ll(0.002, lpost, 2.0 * spread);
+    const double surprise = std::clamp((std::fabs(c.r) / c.base_sd - 2.0) / 4.0, 0.0, 1.0);
+    at(term, H::kMarketMove) = ll(0.002, lpre + kSurge * surprise, spread);
+    at(term, H::kTickMove) = ll(0.002, lpre, spread);
+    at(term, H::kBadPrint) = ll(0.05, lpre + kBadPrintVolume * surprise, spread);
+    at(term, H::kBadClose) = ll(0.05, lpre + kBadPrintVolume * surprise, spread);
+    at(term, H::kUnreportedSplit) = ll(0.002, lpost, spread);
+    at(term, H::kScaleError) = ll(0.002, lpost, spread);
+    at(term, H::kHistorySegment) = ll(0.002, lpost, 2.0 * spread);
     term.note = "against the median before";
     terms.push_back(std::move(term));
   }
-  if (pre.count >= kMinWindow && post.count >= kMinWindow) {
-    const double dv = std::log1p(post.median) - std::log1p(pre.median);
-    out.volume_ratio = std::exp(dv);
-    // A median of n values is off by about 1.25 sd / sqrt(n); add that to how much
-    // each hypothesis lets the level move.
-    const auto median_noise = [](const VolumeWindow& w) {
-      return 1.25 * w.log_spread / std::sqrt(static_cast<double>(w.count));
-    };
-    const double noise = std::hypot(median_noise(pre), median_noise(post));
-    const auto sd = [noise](double base) { return std::hypot(base, noise); };
-    Term term{"volume_shift", std::exp(dv), {}, {}};
-    // The volume level drifts by about kVolumeDrift over a few months whatever
-    // happens; the hypotheses differ in where they centre it. A real move keeps
-    // some dollar volume (shares rise as the price falls); a split moves share
-    // volume by its ratio exactly; an error leaves it alone.
-    term.ll[idx(H::kMarketMove)] = log_normal_pdf(dv, -0.5 * r, sd(kVolumeDrift));
-    term.ll[idx(H::kTickMove)] = log_normal_pdf(dv, 0.0, sd(kVolumeDrift));
-    term.ll[idx(H::kBadPrint)] = log_normal_pdf(dv, 0.0, sd(kVolumeDrift));
-    term.ll[idx(H::kBadClose)] = log_normal_pdf(dv, 0.0, sd(kVolumeDrift));
-    term.ll[idx(H::kUnreportedSplit)] = log_normal_pdf(dv, -r, sd(kSplitVolumeDrift));
-    term.ll[idx(H::kScaleError)] = log_normal_pdf(dv, 0.0, sd(kVolumeDrift));
-    term.ll[idx(H::kHistorySegment)] = log_normal_pdf(dv, 0.0, sd(2.0));
-    term.note = "median after / before";
-    terms.push_back(std::move(term));
+  if (post.count < kMinWindow) {
+    return;
   }
+  const double dv = std::log1p(post.median) - std::log1p(pre.median);
+  out.volume_ratio = std::exp(dv);
+  // A median of n values is off by about 1.25 sd / sqrt(n); add that to how much
+  // each hypothesis lets the level move.
+  const auto median_noise = [](const VolumeWindow& w) {
+    return 1.25 * w.log_spread / std::sqrt(static_cast<double>(w.count));
+  };
+  const double noise = std::hypot(median_noise(pre), median_noise(post));
+  // The volume level drifts by about kVolumeDrift over a few months whatever
+  // happens; the hypotheses differ in where they centre it. A real move keeps
+  // some dollar volume (shares rise as the price falls); a split moves share
+  // volume by its ratio exactly; an error leaves it alone.
+  Term term = uniform_term("volume_shift", std::exp(dv),
+                           log_normal_pdf(dv, 0.0, std::hypot(kVolumeDrift, noise)));
+  at(term, H::kMarketMove) = log_normal_pdf(dv, -0.5 * c.r, std::hypot(kVolumeDrift, noise));
+  at(term, H::kUnreportedSplit) = log_normal_pdf(dv, -c.r, std::hypot(kSplitVolumeDrift, noise));
+  at(term, H::kHistorySegment) = log_normal_pdf(dv, 0.0, std::hypot(2.0, noise));
+  term.note = "median after / before";
+  terms.push_back(std::move(term));
+}
 
-  // Plausible price levels either side.
-  {
-    const bool pre_ok = plausible(prev_close);
-    const bool post_ok = plausible(this_close);
-    if (pre_ok != post_ok) {
-      Term term{"plausible_level", pre_ok ? this_close : prev_close, {}, {}};
-      term.note = "outside " + format_number(settings_.min_price) + ".." +
-                  format_number(settings_.max_price);
-      const double unlikely = std::log(1e-3);
-      for (std::size_t h = 0; h < kCount; ++h) {
-        term.ll[h] = unlikely;
-      }
-      term.ll[idx(H::kScaleError)] = 0.0;
-      if (pre_ok) {  // the new level is the implausible one
-        term.ll[idx(H::kBadPrint)] = 0.0;
-        term.ll[idx(H::kBadClose)] = 0.0;
-      } else {  // the old level was: an era ends here
-        term.ll[idx(H::kHistorySegment)] = 0.0;
-      }
-      terms.push_back(std::move(term));
-    }
+// Plausible price levels either side.
+std::optional<Term> Scorer::plausibility_term(const Candidate& c) const {
+  const bool pre_ok = plausible(c.prev_close);
+  const bool post_ok = plausible(c.this_close);
+  if (pre_ok == post_ok) {
+    return std::nullopt;
   }
-
-  // Decimal places as written changing at the boundary (DQ106's signal).
-  {
-    std::size_t before_count = 0;
-    std::size_t after_count = 0;
-    const double before = median_decimals(t >= window ? t - window : 0, t, before_count);
-    const double after_dp = median_decimals(t, t + window, after_count);
-    if (before_count >= kMinWindow && after_count >= kMinWindow &&
-        std::fabs(after_dp - before) >= 3.0) {
-      Term term{"precision_shift", after_dp - before, {}, {}};
-      term.note = "decimal places after - before";
-      for (std::size_t h = 0; h < kCount; ++h) {
-        term.ll[h] = std::log(0.1);
-      }
-      term.ll[idx(H::kScaleError)] = 0.0;
-      terms.push_back(std::move(term));
-    }
+  Term term = uniform_term("plausible_level", pre_ok ? c.this_close : c.prev_close, std::log(1e-3));
+  term.note =
+      "outside " + format_number(settings_.min_price) + ".." + format_number(settings_.max_price);
+  at(term, H::kScaleError) = 0.0;
+  if (pre_ok) {  // the new level is the implausible one
+    at(term, H::kBadPrint) = 0.0;
+    at(term, H::kBadClose) = 0.0;
+  } else {  // the old level was: an era ends here
+    at(term, H::kHistorySegment) = 0.0;
   }
+  return term;
+}
 
-  // A history segment: a listing price, and a new volatility regime.
-  if (on[idx(H::kHistorySegment)]) {
-    const bool round = std::any_of(kListingPrices.begin(), kListingPrices.end(), [&](double p) {
-      return std::fabs(this_close / p - 1.0) <= 0.0025;
-    });
-    Term listing{"listing_price", this_close, {}, {}};
-    for (std::size_t h = 0; h < kCount; ++h) {
-      listing.ll[h] = round ? std::log(0.01) : std::log(0.99);
-    }
-    listing.ll[idx(H::kHistorySegment)] = round ? std::log(0.3) : std::log(0.7);
-    terms.push_back(std::move(listing));
-
-    const double shift = 0.5 * std::log(f_.backward[t].variance() / f_.forward[t].variance());
-    Term vol{"volatility_shift", std::exp(shift), {}, {}};
-    for (std::size_t h = 0; h < kCount; ++h) {
-      vol.ll[h] = log_normal_pdf(shift, 0.0, 0.35);
-    }
-    vol.ll[idx(H::kHistorySegment)] = log_normal_pdf(shift, 0.0, 1.0);
-    vol.note = "after / before";
-    terms.push_back(std::move(vol));
+// Decimal places as written changing at the boundary (DQ106's signal).
+std::optional<Term> Scorer::precision_term(const Candidate& c) const {
+  const auto window = static_cast<std::size_t>(settings_.volume_window);
+  std::size_t before_count = 0;
+  std::size_t after_count = 0;
+  const double before = median_decimals(c.t >= window ? c.t - window : 0, c.t, before_count);
+  const double after = median_decimals(c.t, c.t + window, after_count);
+  if (before_count < kMinWindow || after_count < kMinWindow || std::fabs(after - before) < 3.0) {
+    return std::nullopt;
   }
+  Term term = uniform_term("precision_shift", after - before, std::log(0.1));
+  term.note = "decimal places after - before";
+  at(term, H::kScaleError) = 0.0;
+  return term;
+}
 
-  // The posterior.
+// A history segment: a listing price, and a new volatility regime.
+void Scorer::segment_terms(const Candidate& c, std::vector<Term>& terms) const {
+  const bool round = std::any_of(kListingPrices.begin(), kListingPrices.end(), [&](double p) {
+    return std::fabs(c.this_close / p - 1.0) <= 0.0025;
+  });
+  Term listing =
+      uniform_term("listing_price", c.this_close, round ? std::log(0.01) : std::log(0.99));
+  at(listing, H::kHistorySegment) = round ? std::log(0.3) : std::log(0.7);
+  terms.push_back(std::move(listing));
+
+  const double shift = 0.5 * std::log(f_.backward[c.t].variance() / f_.forward[c.t].variance());
+  Term vol = uniform_term("volatility_shift", std::exp(shift), log_normal_pdf(shift, 0.0, 0.35));
+  at(vol, H::kHistorySegment) = log_normal_pdf(shift, 0.0, 1.0);
+  vol.note = "after / before";
+  terms.push_back(std::move(vol));
+}
+
+// The posterior over the hypotheses considered, p_error, and the most probable
+// error. Returns that error's index.
+std::size_t conclude(const std::vector<Term>& terms, PriceFinding& out) {
+  const std::array<bool, kCount>& on = out.considered;
   Terms total{};
   for (std::size_t h = 0; h < kCount; ++h) {
-    total[h] = on[h] ? 0.0 : kNegInf;
-  }
-  for (const Term& term : terms) {
-    for (std::size_t h = 0; h < kCount; ++h) {
-      if (on[h]) {
-        total[h] += term.ll[h];
-      }
+    total.at(h) = on.at(h) ? 0.0 : kNegInf;
+    for (const Term& term : terms) {
+      total.at(h) += on.at(h) ? term.ll.at(h) : 0.0;
     }
   }
   double norm = kNegInf;
-  for (std::size_t h = 0; h < kCount; ++h) {
-    norm = stats::log_add(norm, total[h]);
+  for (const double value : total) {
+    norm = stats::log_add(norm, value);
   }
   std::size_t best = idx(H::kBadPrint);
   for (std::size_t h = 0; h < kCount; ++h) {
-    out.posterior[h] = on[h] ? std::exp(total[h] - norm) : 0.0;
-    if (is_error(static_cast<H>(h))) {
-      out.p_error += out.posterior[h];
-      if (on[h] && (total[h] > total[best] || !on[best])) {
-        best = h;
-      }
+    out.posterior.at(h) = on.at(h) ? std::exp(total.at(h) - norm) : 0.0;
+    if (!is_error(static_cast<H>(h))) {
+      continue;
+    }
+    out.p_error += out.posterior.at(h);
+    if (on.at(h) && (total.at(h) > total.at(best) || !on.at(best))) {
+      best = h;
     }
   }
   out.p_error = std::min(out.p_error, 1.0);
   out.hypothesis = static_cast<H>(best);
-  if (out.hypothesis == H::kBadPrint) {
-    out.block = static_cast<int>(best_block);
-    out.end_bar = std::min(t + best_block, n_) - 1;
+  return best;
+}
+
+PriceFinding Scorer::score(std::size_t t) const {
+  const Candidate c = candidate(t);
+  PriceFinding out;
+  out.bar = t;
+  out.end_bar = t;
+  out.factor = c.this_close / c.prev_close;
+  out.tail = tail(c.r, move_sd(sigma(t, 0), t - 1, t));
+  out.provisional = n_ - 1 - t < static_cast<std::size_t>(settings_.provisional_bars);
+  applicable(c, out.considered);
+
+  std::vector<Term> terms;
+  std::optional<Term> prior = prior_term(out.considered);
+  if (!prior) {  // every applicable prior set to zero: nothing to compare
+    out.considered.fill(false);
+    return out;
+  }
+  terms.push_back(std::move(*prior));
+  terms.push_back(return_term(c, out));
+  NextBars next = next_bars(c);
+  const std::size_t next_index = terms.size();
+  terms.push_back(std::move(next.term));
+  if (c.bar_ohl) {
+    ohlc_terms(c, terms);
+  }
+  volume_terms(c, out, terms);
+  if (std::optional<Term> plausible_level = plausibility_term(c)) {
+    terms.push_back(std::move(*plausible_level));
+  }
+  if (std::optional<Term> precision = precision_term(c)) {
+    terms.push_back(std::move(*precision));
+  }
+  if (out.considered.at(idx(H::kHistorySegment))) {
+    segment_terms(c, terms);
   }
 
-  // Evidence for the reported hypothesis, against a market move.
-  const std::size_t m = idx(H::kMarketMove);
-  terms.front().value = std::exp(terms.front().ll[best]);
-  if (next_count > 0 && best != idx(H::kBadPrint) && best != idx(H::kBadClose)) {
-    terms[next_term].value = next_largest;
-    terms[next_term].note = "the largest of the next " + std::to_string(next_count) + " moves";
+  const std::size_t best = conclude(terms, out);
+  if (out.hypothesis == H::kBadPrint) {
+    out.block = static_cast<int>(next.best_block);
+    out.end_bar = std::min(t + next.best_block, n_) - 1;
   }
+
+  // Evidence for the reported hypothesis, against a market move. The bars after
+  // are described for a bad print by the move that undoes it, and otherwise by
+  // the largest of them.
+  terms.front().value = std::exp(terms.front().ll.at(best));
+  if (next.count > 0 && best != idx(H::kBadPrint) && best != idx(H::kBadClose)) {
+    terms.at(next_index).value = next.largest;
+    terms.at(next_index).note = "the largest of the next " + std::to_string(next.count) + " moves";
+  }
+  const std::size_t m = idx(H::kMarketMove);
   for (Term& term : terms) {
-    const double log_bf = term.ll[best] - term.ll[m];
+    const double log_bf = term.ll.at(best) - term.ll.at(m);
     if (!std::isfinite(log_bf) || std::fabs(log_bf) < 0.05) {
       continue;
     }
@@ -649,7 +715,7 @@ void pair_scale_eras(std::vector<PriceFinding>& findings, const PriceSettings& s
   for (std::size_t i = 0; i < findings.size(); ++i) {
     PriceFinding& a = findings[i];
     if (a.hypothesis == H::kScaleError && i + 1 < findings.size()) {
-      PriceFinding& b = findings[i + 1];
+      const PriceFinding& b = findings[i + 1];
       const double tolerance = std::max(0.1, 3.0 * settings.ratio_tolerance);
       if (b.hypothesis == H::kScaleError && a.p_error >= 0.5 && b.p_error >= 0.5 &&
           std::fabs(std::log(a.factor) + std::log(b.factor)) < tolerance) {

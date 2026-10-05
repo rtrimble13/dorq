@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -128,7 +129,7 @@ TEST_CASE("Student t against SciPy") {
   // t.cdf(-1.2, 7.5), t.cdf(3.0, 30)
   CHECK(dorq::stats::student_t_cdf(-1.2, 7.5) == doctest::Approx(0.13333446139661093));
   CHECK(dorq::stats::student_t_cdf(3.0, 30.0) == doctest::Approx(0.9973050179671741));
-  CHECK(dorq::stats::student_t_two_sided_tail(INFINITY, 4.0) == 0.0);
+  CHECK(dorq::stats::student_t_two_sided_tail(std::numeric_limits<double>::infinity(), 4.0) == 0.0);
 }
 
 TEST_CASE("discounted Normal-Inverse-Gamma volatility") {
@@ -224,12 +225,15 @@ priors = { scale_error = 0.05 }
   CHECK(dorq::to_toml(dorq::parse_config(dorq::starter_config(), "starter.toml", false)) ==
         dorq::to_toml(dorq::Config{}));
 
-  CHECK_THROWS_WITH_AS(dorq::parse_config("[price]\nsplit_ratios = [\"2-1\"]", "d.toml", false),
-                       doctest::Contains("ratios like"), dorq::ConfigError);
-  CHECK_THROWS_WITH_AS(dorq::parse_config("[priors]\nbogus = 1", "d.toml", false),
-                       doctest::Contains("unknown key \"priors.bogus\""), dorq::ConfigError);
-  CHECK_THROWS_AS(dorq::parse_config("[price]\nrevert_max_bars = 0", "d.toml", false),
-                  dorq::ConfigError);
+  CHECK_THROWS_WITH_AS(
+      static_cast<void>(dorq::parse_config("[price]\nsplit_ratios = [\"2-1\"]", "d.toml", false)),
+      doctest::Contains("ratios like"), dorq::ConfigError);
+  CHECK_THROWS_WITH_AS(
+      static_cast<void>(dorq::parse_config("[priors]\nbogus = 1", "d.toml", false)),
+      doctest::Contains("unknown key \"priors.bogus\""), dorq::ConfigError);
+  CHECK_THROWS_AS(
+      static_cast<void>(dorq::parse_config("[price]\nrevert_max_bars = 0", "d.toml", false)),
+      dorq::ConfigError);
 }
 
 // ---------------------------------------------------------------------------
