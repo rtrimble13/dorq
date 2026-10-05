@@ -127,7 +127,7 @@ TEST_CASE("reader: JSONL and JSON arrays read like CSV") {
   }
 }
 
-TEST_CASE("reader: streaming rejects a series that reappears; buffering accepts it") {
+TEST_CASE("reader: streaming rejects a series that reappears, but buffering accepts it") {
   const std::string text = "id,date,value\na,2024-01-02,1\nb,2024-01-02,1\na,2024-01-03,1\n";
   CHECK_THROWS_AS(read(text, ".csv", dorq::Grouping::kStream), dorq::InputError);
   const auto series = read(text, ".csv", dorq::Grouping::kBuffer);
@@ -135,7 +135,7 @@ TEST_CASE("reader: streaming rejects a series that reappears; buffering accepts 
   CHECK(series[0].size() == 2);
 }
 
-TEST_CASE("reader: empty input is an error; a header alone is not") {
+TEST_CASE("reader: empty input is an error, but a header alone is not") {
   CHECK_THROWS_AS(read(""), dorq::InputError);
   CHECK_THROWS_AS(read(" \n\n"), dorq::InputError);
   CHECK(read("date,value\n").empty());

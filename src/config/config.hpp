@@ -43,7 +43,7 @@ struct IntegritySettings {
   double flat_bar_steps = 3.0;
   // DQ108: the range a value (a point series' value, a bar's close) must lie in;
   // none by default. A profile sets it, e.g. [-5, 25] for a 10-year yield.
-  std::optional<Bounds> bounds;
+  std::optional<Bounds> bounds = std::nullopt;
 };
 
 // A partial IntegritySettings: what one config table sets.

@@ -382,7 +382,7 @@ TEST_CASE("carry bars are not prices") {
   CHECK(result.out.empty());
 }
 
-TEST_CASE("point series: positive values are checked, the rest are not") {
+TEST_CASE("point series: the log scale when positive, the difference scale otherwise") {
   std::string csv = "date,value\n";
   std::vector<Row> rows = walk(300, 100.0, 0.01, 0, 13);
   rows[150].close *= 100.0;
@@ -393,7 +393,8 @@ TEST_CASE("point series: positive values are checked, the rest are not") {
   CAPTURE(result.out);
   CHECK(count_matching(result.out, R"("code":"DQ201")") == 1);
 
-  // A rate that crosses zero needs a transform other than log (M4): skipped.
+  // A rate that crosses zero is judged on the difference scale (transform "auto"):
+  // its ordinary moves are clean.
   std::string rates = "date,value\n";
   Noise noise(14);
   for (const Row& r : rows) {
@@ -425,7 +426,7 @@ TEST_CASE("DQ209 is info: shown with --show-info") {
   CHECK(contains(info.out, R"("hypotheses":{"market_move":)"));
 }
 
-TEST_CASE("every record carries the model's keys; --show-evidence prints them") {
+TEST_CASE("every record carries the model's keys, and --show-evidence prints them") {
   std::vector<Row> rows = walk(300, 40.0, 0.015, 1e6, 16);
   scale_bar(rows[100], 10.0);
   const std::string csv = to_csv("A", rows) + "A,2021-06-01,1,0.5,1,1,1\n";  // DQ101
