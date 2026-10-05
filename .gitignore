@@ -82,3 +82,7 @@ compile_commands.json
 *.gcda
 *.gcno
 *.gcov
+
+# Virtual environments
+venv/
+.venv/
