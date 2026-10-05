@@ -60,9 +60,25 @@ class Builder {
   [[nodiscard]] Date date(std::size_t bar) const { return s_.date[row(bar)]; }
   [[nodiscard]] std::size_t bars() const { return f_.size(); }
 
+  // "close" for bars, "value" for a point series.
+  [[nodiscard]] std::string field() const {
+    return std::string{field_name(Field::kClose, s_.kind)};
+  }
+
+  // A move from a to b: a ratio on the log scale, a signed change on the value
+  // scale.
+  [[nodiscard]] std::string change(double a, double b) const {
+    if (f_.log_scale) {
+      return times(b / a);
+    }
+    const double d = b - a;
+    return (d >= 0.0 ? "+" : "−") + significant(std::fabs(d), 4);
+  }
+
   [[nodiscard]] std::string move() const {
     const std::size_t t = finding_.bar;
-    return "close " + price(close(t - 1)) + "→" + price(close(t)) + " (" + times(finding_.factor);
+    return field() + " " + price(close(t - 1)) + "→" + price(close(t)) + " (" +
+           change(close(t - 1), close(t));
   }
 
   void bad_print(Violation& v) const {
@@ -70,15 +86,17 @@ class Builder {
     const std::size_t last = finding_.end_bar;
     const bool reverted = last + 1 < bars();
     if (finding_.block == 1 && reverted) {
-      const double next = close(t + 1) / close(t);
-      const bool back = (finding_.factor - 1.0) * (next - 1.0) < 0.0;
-      v.message = "close " + price(close(t)) + " between " + price(close(t - 1)) + " and " +
-                  price(close(t + 1)) + " (" + times(finding_.factor) +
-                  (back ? ", then back on the next bar)" : ", then " + times(next) + ")");
+      const bool back = (close(t) - close(t - 1)) * (close(t + 1) - close(t)) < 0.0;
+      v.message = field() + " " + price(close(t)) + " between " + price(close(t - 1)) + " and " +
+                  price(close(t + 1)) + " (" + change(close(t - 1), close(t)) +
+                  (back ? ", then back on the next bar)"
+                        : ", then " + change(close(t), close(t + 1)) + ")");
     } else if (reverted) {
-      v.message = std::to_string(finding_.block) + " bars at " + times(finding_.factor) +
-                  " the level either side (close " + price(close(t - 1)) + "→" + price(close(t)) +
-                  ", back to " + price(close(last + 1)) + ")";
+      v.message = std::to_string(finding_.block) + " bars " +
+                  (f_.log_scale ? "at " + times(finding_.factor) + " the level"
+                                : "off the level by " + change(close(t - 1), close(t))) +
+                  " either side (" + field() + " " + price(close(t - 1)) + "→" +
+                  price(close(t)) + ", back to " + price(close(last + 1)) + ")";
     } else {
       v.message = move() + "), not yet confirmed by a later bar";
     }
@@ -135,7 +153,7 @@ class Builder {
     std::size_t last = finding_.end_bar;
     double rescale = 1.0 / finding_.factor;
     if (finding_.end_bar > t) {
-      v.message = "closes " + date(t).to_string() + ".." + date(last).to_string() + " are " +
+      v.message = field() + "s " + date(t).to_string() + ".." + date(last).to_string() + " are " +
                   times(finding_.factor) + " the level either side" +
                   (near_power ? " (×" + format_number(power) + ")" : std::string{}) +
                   ": an era at the wrong scale";
@@ -252,10 +270,14 @@ Violation make_violation(const SeriesContext& context, const PriceAnalysis& anal
   for (const PriceEvidence& e : finding.evidence) {
     v.evidence.push_back({e.feature, e.value, e.log_bf, e.note});
   }
-  v.detail = {{"close", b.close(t)},
-              {"previous_close", b.close(t - 1)},
-              {"factor", finding.factor},
-              {"tail_probability", finding.tail}};
+  const std::string field = b.field();
+  v.detail = {{field, b.close(t)},
+              {"previous_" + field, b.close(t - 1)},
+              {"factor", finding.factor}};
+  if (!analysis.features.log_scale) {
+    v.detail.push_back({"change", b.close(t) - b.close(t - 1)});
+  }
+  v.detail.push_back({"tail_probability", finding.tail});
   if (const int gap = analysis.features.elapsed[t]; gap > 1) {
     v.detail.push_back({"sessions_elapsed", std::int64_t{gap}});
   }

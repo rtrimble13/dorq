@@ -21,6 +21,17 @@ constexpr double kPriorWeight = 10.0;
 
 }  // namespace
 
+bool uses_log_scale(const Series& series, Transform transform) noexcept {
+  if (series.kind == SeriesKind::kOhlcv || transform == Transform::kLog) {
+    return true;
+  }
+  if (transform == Transform::kDiff) {
+    return false;
+  }
+  return std::none_of(series.close.begin(), series.close.end(),
+                      [](double value) { return std::isfinite(value) && value <= 0.0; });
+}
+
 double class_volatility(double median_price, double median_dollar_volume) noexcept {
   double sigma = 0.02;
   if (median_price < 1.0) {
@@ -39,18 +50,13 @@ double class_volatility(double median_price, double median_dollar_volume) noexce
 PriceFeatures compute_price_features(const Series& series, const Calendar& calendar,
                                      const PriceSettings& settings) {
   PriceFeatures f;
-  if (series.kind == SeriesKind::kPoint) {
-    for (const double value : series.close) {
-      if (std::isfinite(value) && value <= 0.0) {
-        return f;  // needs a transform other than log (M4)
-      }
-    }
-  }
+  f.log_scale = uses_log_scale(series, settings.transform);
+  const auto scaled_value = [&f](double value) { return f.log_scale ? std::log(value) : value; };
   std::vector<double> prices;
   std::vector<double> volumes;
   for (std::size_t i = 0; i < series.size(); ++i) {
     const double close = series.close[i];
-    if (!std::isfinite(close) || close <= 0.0) {
+    if (!std::isfinite(close) || (f.log_scale && close <= 0.0)) {
       continue;
     }
     if (!f.row.empty() && series.date[f.row.back()] == series.date[i]) {
@@ -67,14 +73,14 @@ PriceFeatures compute_price_features(const Series& series, const Calendar& calen
       const int sessions =
           calendar.sessions_between(Date::from_days(prev.days() + 1), series.date[i]);
       f.elapsed.push_back(std::max(1, sessions));
-      f.ret.push_back(std::log(close) - f.y.back());
+      f.ret.push_back(scaled_value(close) - f.y.back());
     } else {
       f.elapsed.push_back(1);
       f.ret.push_back(0.0);
     }
     f.row.push_back(i);
-    f.y.push_back(std::log(close));
-    prices.push_back(close);
+    f.y.push_back(scaled_value(close));
+    prices.push_back(f.log_scale ? close : std::fabs(close));
     if (series.has_volume && std::isfinite(series.volume[i])) {
       volumes.push_back(series.volume[i]);
     }
@@ -95,7 +101,21 @@ PriceFeatures compute_price_features(const Series& series, const Calendar& calen
   for (std::size_t i = 1; i < n; ++i) {
     scaled.push_back(f.ret[i] / std::sqrt(static_cast<double>(f.elapsed[i])));
   }
-  const double own = stats::mad(scaled);
+  double own = stats::mad(scaled);
+  if (!f.log_scale) {
+    // A value-scale series has no class to borrow from: its own scale, or, when
+    // most of its changes are zero (a policy rate), the root mean square of them.
+    f.level = std::max(f.median_price, 1e-12);
+    if (!(own > 0.0)) {
+      double sum = 0.0;
+      for (const double x : scaled) {
+        sum += x * x;
+      }
+      own = std::sqrt(sum / static_cast<double>(scaled.size()));
+    }
+    f.class_volatility = own > 0.0 ? own : 1e-3 * std::max(f.level, 1.0);
+    f.error_scale = 0.3 * std::max(f.level, 20.0 * f.class_volatility);
+  }
   double variance = f.class_volatility * f.class_volatility;
   if (std::isfinite(own) && own > 0.0) {
     const auto count = static_cast<double>(scaled.size());

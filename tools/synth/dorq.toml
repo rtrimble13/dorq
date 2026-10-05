@@ -1,0 +1,6 @@
+# The settings the synthetic gate runs dorq with (tests/synth_gate.cmake): the
+# defaults, and a profile for the rate series.
+[profiles.rates]
+match = { kind = "point" }
+price = { transform = "diff" }
+integrity = { bounds = [-5, 25] }

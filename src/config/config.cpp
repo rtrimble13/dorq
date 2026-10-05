@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -116,6 +117,31 @@ const toml::table& read_table(const toml::node& node, const std::string& where,
   return *table;
 }
 
+Bounds read_bounds(const toml::node& node, const std::string& where, const std::string& key) {
+  const auto* array = node.as_array();
+  const auto number = [](const toml::node* item) -> std::optional<double> {
+    if (item == nullptr) {
+      return std::nullopt;
+    }
+    if (const auto* f = item->as_floating_point()) {
+      return f->get();
+    }
+    if (const auto* i = item->as_integer()) {
+      return static_cast<double>(i->get());
+    }
+    return std::nullopt;
+  };
+  if (array == nullptr || array->size() != 2) {
+    fail(where, node, "\"" + key + "\" must be [low, high]");
+  }
+  const auto low = number(array->get(0));
+  const auto high = number(array->get(1));
+  if (!low || !high || !std::isfinite(*low) || !std::isfinite(*high) || *low >= *high) {
+    fail(where, node, "\"" + key + "\" must be [low, high] with low < high");
+  }
+  return {*low, *high};
+}
+
 IntegrityPatch read_integrity(const toml::table& table, const std::string& where,
                               const std::string& prefix) {
   IntegrityPatch patch;
@@ -134,6 +160,8 @@ IntegrityPatch read_integrity(const toml::table& table, const std::string& where
       patch.precision_min_contrast = read_double(node, where, path, 0.0, 1.0);
     } else if (key == "flat_bar_steps") {
       patch.flat_bar_steps = read_double(node, where, path, 0.0, 1e6);
+    } else if (key == "bounds") {
+      patch.bounds = read_bounds(node, where, path);
     } else {
       fail(where, node, "unknown key \"" + path + "\"");
     }
@@ -240,6 +268,12 @@ void read_price(const toml::table& table, const std::string& where, const std::s
       patch.min_price = read_double(node, where, path, 0.0, 1e12);
     } else if (key == "max_price") {
       patch.max_price = read_double(node, where, path, 0.0, 1e15);
+    } else if (key == "transform") {
+      const auto transform = parse_transform(read_string(node, where, path));
+      if (!transform) {
+        fail(where, node, "\"" + path + R"(" must be "auto", "log" or "diff")");
+      }
+      patch.transform = transform;
     } else {
       fail(where, node, "unknown key \"" + path + "\"");
     }
@@ -267,6 +301,11 @@ void read_priors(const toml::table& table, const std::string& where, const std::
       patch.tick_move = value;
     } else if (key == "history_segment") {
       patch.history_segment = value;
+    } else if (key == "stale_run") {
+      if (value > 1.0) {
+        fail(where, node, "\"" + path + "\" is a probability: from 0 to 1");
+      }
+      patch.stale_run = value;
     } else {
       fail(where, node, "unknown key \"" + path + "\"");
     }
@@ -534,6 +573,10 @@ void append_integrity_patch(std::string& out, const IntegrityPatch& patch) {
   if (patch.flat_bar_steps) {
     out += "flat_bar_steps = " + format_number(*patch.flat_bar_steps) + "\n";
   }
+  if (patch.bounds) {
+    out += "bounds = [" + format_number(patch.bounds->low) + ", " +
+           format_number(patch.bounds->high) + "]\n";
+  }
 }
 
 IntegrityPatch full_patch(const IntegritySettings& settings) {
@@ -544,6 +587,7 @@ IntegrityPatch full_patch(const IntegritySettings& settings) {
   full.precision_min_segment = settings.precision_min_segment;
   full.precision_min_contrast = settings.precision_min_contrast;
   full.flat_bar_steps = settings.flat_bar_steps;
+  full.bounds = settings.bounds;
   return full;
 }
 
@@ -605,6 +649,7 @@ PricePatch full_patch(const PriceSettings& settings) {
   full.jump_scale = settings.jump_scale;
   full.min_price = settings.min_price;
   full.max_price = settings.max_price;
+  full.transform = settings.transform;
   full.market_move = settings.priors.market_move;
   full.bad_print = settings.priors.bad_print;
   full.bad_close = settings.priors.bad_close;
@@ -612,6 +657,7 @@ PricePatch full_patch(const PriceSettings& settings) {
   full.scale_error = settings.priors.scale_error;
   full.tick_move = settings.priors.tick_move;
   full.history_segment = settings.priors.history_segment;
+  full.stale_run = settings.priors.stale_run;
   return full;
 }
 
@@ -656,6 +702,11 @@ void append_price_patch(std::string& out, const PricePatch& patch) {
   append_number(out, "jump_scale", patch.jump_scale);
   append_number(out, "min_price", patch.min_price);
   append_number(out, "max_price", patch.max_price);
+  if (patch.transform) {
+    out += "transform = \"";
+    out += to_string(*patch.transform);
+    out += "\"\n";
+  }
 }
 
 void append_priors_patch(std::string& out, const PricePatch& patch) {
@@ -666,6 +717,7 @@ void append_priors_patch(std::string& out, const PricePatch& patch) {
   append_number(out, "scale_error", patch.scale_error);
   append_number(out, "tick_move", patch.tick_move);
   append_number(out, "history_segment", patch.history_segment);
+  append_number(out, "stale_run", patch.stale_run);
 }
 
 // The settings that decide what is reported (config_hash): the effective
@@ -737,6 +789,9 @@ void IntegrityPatch::apply_to(IntegritySettings& settings) const {
   if (flat_bar_steps) {
     settings.flat_bar_steps = *flat_bar_steps;
   }
+  if (bounds) {
+    settings.bounds = *bounds;
+  }
 }
 
 void CoveragePatch::apply_to(CoverageSettings& settings) const {
@@ -789,6 +844,7 @@ void PricePatch::apply_to(PriceSettings& settings) const {
   set(settings.jump_scale, jump_scale);
   set(settings.min_price, min_price);
   set(settings.max_price, max_price);
+  set(settings.transform, transform);
   set(settings.priors.market_move, market_move);
   set(settings.priors.bad_print, bad_print);
   set(settings.priors.bad_close, bad_close);
@@ -796,6 +852,32 @@ void PricePatch::apply_to(PriceSettings& settings) const {
   set(settings.priors.scale_error, scale_error);
   set(settings.priors.tick_move, tick_move);
   set(settings.priors.history_segment, history_segment);
+  set(settings.priors.stale_run, stale_run);
+}
+
+std::optional<Transform> parse_transform(std::string_view text) noexcept {
+  if (text == "auto") {
+    return Transform::kAuto;
+  }
+  if (text == "log") {
+    return Transform::kLog;
+  }
+  if (text == "diff") {
+    return Transform::kDiff;
+  }
+  return std::nullopt;
+}
+
+std::string_view to_string(Transform transform) noexcept {
+  switch (transform) {
+    case Transform::kAuto:
+      return "auto";
+    case Transform::kLog:
+      return "log";
+    case Transform::kDiff:
+      return "diff";
+  }
+  return "auto";
 }
 
 std::string SplitRatio::to_string() const {
@@ -1091,6 +1173,7 @@ precision_min_segment = 20
 precision_min_contrast = 0.8
 # DQ107: a flat bar is expected where nearby bars span this many price-grid steps or fewer.
 flat_bar_steps = 3
+# DQ108: the range values must lie in, e.g. bounds = [-5, 25] for a yield; none by default.
 
 [coverage]
 # DQ3xx: how missing sessions are judged (doc/checks/DQ301.md).
@@ -1124,6 +1207,7 @@ jump_prob = 0.03              # a real move's chance of being a jump,
 jump_scale = 6                # and a jump's size, in ordinary returns
 min_price = 1e-05             # prices outside [min_price, max_price] are implausible
 max_price = 1000000
+transform = "auto"            # point series: "log", "diff" (rates crossing zero) or "auto"
 
 [priors]
 # Each explanation's prior weight for a suspicious bar, normalized over those that apply.
@@ -1134,6 +1218,7 @@ unreported_split = 0.02
 scale_error = 0.02
 tick_move = 0.01
 history_segment = 0.05
+stale_run = 0.0001            # DQ501: a run of repeated closes being a stale feed, per bar
 
 [severity]
 # p_error at or above which a probabilistic check reports info, warn or error.
@@ -1153,10 +1238,13 @@ name = "XNYS"
 # The table_name written into --format fafnir records.
 table_name = "core.daily_price"
 
-# Profiles apply settings to the series they match, in name order.
+# Profiles apply settings to the series they match, in name order. Rates, for
+# example: changes rather than ratios, and a plausible range.
 # [profiles.rates]
 # match = { kind = "point" }
 # ignore = ["DQ106"]
+# price = { transform = "diff" }
+# integrity = { bounds = [-5, 25] }
 )";
 }
 

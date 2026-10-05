@@ -60,13 +60,29 @@ struct PriceFinding {
   std::vector<PriceEvidence> evidence;
 };
 
+// A run of traded bars with the same close (DQ501): bars first..last repeat the
+// close of the bar before them.
+struct StaleRun {
+  std::size_t first = 0;  // feature index of the first repeat
+  std::size_t last = 0;
+  int full_bars = 0;      // repeats where open, high and low repeat too
+  double log_q = 0.0;     // log P(the closes repeat | a healthy feed)
+  double p_error = 0.0;
+};
+
 struct PriceAnalysis {
   bool applicable = false;
   PriceFeatures features;
   std::vector<PriceFinding> findings;  // in bar order
+  std::vector<StaleRun> stale_runs;    // in bar order; OHLCV with volume only
+  // Each bar's return in standard deviations of an ordinary move (0 for the
+  // first): what the volume checks call a move.
+  std::vector<double> move_z;
 };
 
+// `bounds` is a point series' plausible range ([integrity] bounds), if any.
 [[nodiscard]] PriceAnalysis analyze_prices(const Series& series, const Calendar& calendar,
-                                           const PriceSettings& settings);
+                                           const PriceSettings& settings,
+                                           std::optional<Bounds> bounds = std::nullopt);
 
 }  // namespace dorq

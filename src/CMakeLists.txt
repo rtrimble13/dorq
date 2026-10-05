@@ -24,6 +24,8 @@ add_library(
   checks/integrity.cpp
   checks/price.cpp
   checks/registry.cpp
+  checks/stale.cpp
+  checks/volume.cpp
   cli/app.cpp
   config/config.cpp
   core/build_info.cpp

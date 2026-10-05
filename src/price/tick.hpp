@@ -1,9 +1,11 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
 #include "dorq/date.hpp"
+#include "dorq/series.hpp"
 
 namespace dorq {
 
@@ -17,5 +19,12 @@ namespace dorq {
 // the decimals the closes were written with (a sub-dime stock quoted in cents is
 // on a 0.01 grid whatever the exchange allows). 1 when `decimals` is empty.
 [[nodiscard]] double written_grid(std::vector<std::uint8_t> decimals);
+
+// The smallest step prices take in rows [from, to): the least gap between the
+// distinct open, high, low and close values there (the close alone for a point
+// series). Prices can sit on a lattice coarser than the decimals they are
+// written with: a cent grid adjusted for a 1:9 split moves in steps of 0.0009,
+// written to four decimals. 0 when there is one price or none.
+[[nodiscard]] double observed_step(const Series& series, std::size_t from, std::size_t to);
 
 }  // namespace dorq
