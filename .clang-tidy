@@ -1,0 +1,54 @@
+# clang-tidy 18. Checks are enabled by family and then pruned; each removal says
+# why, so a later reader can tell a deliberate exclusion from an oversight. CI runs
+# this through scripts/tidy.sh with every warning an error.
+Checks: >
+  -*,
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  concurrency-*,
+  cppcoreguidelines-*,
+  misc-*,
+  modernize-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -bugprone-easily-swappable-parameters,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -readability-magic-numbers,
+  -misc-include-cleaner,
+  -misc-non-private-member-variables-in-classes,
+  -modernize-use-trailing-return-type,
+  -readability-identifier-length,
+
+# Why those are off:
+#   easily-swappable-parameters  flags every (double, double); numeric code is made of them
+#   magic-numbers (both)         statistical constants read better in place, with a comment
+#   include-cleaner              too eager with umbrella headers such as <CLI/CLI.hpp>
+#   non-private-member-variables plain aggregates (BuildInfo, Violation) are the point
+#   use-trailing-return-type     a style, not a defect
+#   identifier-length            i, n, mu, x are the right names in statistics
+
+WarningsAsErrors: '*'
+# Our headers only. Third-party headers are SYSTEM includes and never reported.
+HeaderFilterRegex: '/(include/dorq|src|tests)/'
+FormatStyle: file
+CheckOptions:
+  - { key: readability-identifier-naming.NamespaceCase,           value: lower_case }
+  - { key: readability-identifier-naming.ClassCase,               value: CamelCase }
+  - { key: readability-identifier-naming.StructCase,              value: CamelCase }
+  - { key: readability-identifier-naming.EnumCase,                value: CamelCase }
+  - { key: readability-identifier-naming.EnumConstantCase,        value: CamelCase }
+  - { key: readability-identifier-naming.EnumConstantPrefix,      value: k }
+  - { key: readability-identifier-naming.FunctionCase,            value: lower_case }
+  - { key: readability-identifier-naming.VariableCase,            value: lower_case }
+  - { key: readability-identifier-naming.ParameterCase,           value: lower_case }
+  - { key: readability-identifier-naming.MemberCase,              value: lower_case }
+  - { key: readability-identifier-naming.PrivateMemberSuffix,     value: _ }
+  - { key: readability-identifier-naming.ConstexprVariableCase,   value: CamelCase }
+  - { key: readability-identifier-naming.ConstexprVariablePrefix, value: k }
+  - { key: readability-identifier-naming.GlobalConstantCase,      value: CamelCase }
+  - { key: readability-identifier-naming.GlobalConstantPrefix,    value: k }
+  - { key: readability-identifier-naming.StaticConstantCase,      value: CamelCase }
+  - { key: readability-identifier-naming.StaticConstantPrefix,    value: k }
+  - { key: readability-identifier-naming.TemplateParameterCase,   value: CamelCase }

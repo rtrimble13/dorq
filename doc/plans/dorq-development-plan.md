@@ -1,6 +1,7 @@
 # Plan: dorq, a Bayesian data-quality linter for financial time series
 
-- Status: **proposed**. Nothing is built yet. The open questions in §10 need answers before M1 starts.
+- Status: **accepted** (2026-10-05). The defaults in §10 are confirmed, and Q9 is answered. M0 is
+  implemented and awaiting merge.
 - Scope: this repository (the C++ CLI), plus one milestone of integration work in `rtrimble13/fafnir` (M7).
 - Status legend: ⬜ planned · 🔄 in progress · ✅ done (PR #) · ⏭ carried over · ✖ dropped (reason)
 
@@ -115,7 +116,7 @@ means a usage or config error. `3` means the input could not be read or parsed.
 - **OHLCV**: `date, open, high, low, close, volume[, vwap]`. **Point**: `date, value`.
 - The input may be unsorted. If it is sorted by `(series, date)`, which fafnir's export guarantees, dorq
   streams it with bounded memory (§5.3). Otherwise it buffers the whole input.
-- Prices are parsed with `std::from_chars` into `double`, and dorq also records how many decimal places
+- Prices are parsed with fast_float into `double` (§5.1 explains why not `std::from_chars`), and dorq also records how many decimal places
   each value had as written, for the precision check DQ106.
 - `--actions`: `series, ex_date, type(split|dividend), numerator, denominator, amount`.
 - `--meta`: `series, asset_type, nav_priced, tick_size, peer_group, exchange`.
@@ -341,18 +342,21 @@ frequency model for DQ305.
 
 ### 5.1 Language, toolchain, dependencies
 
-- **C++20**, CMake ≥ 3.24 with `CMakePresets.json`, Ninja. CI targets GCC 13 and Clang 17 on Ubuntu
-  24.04 (fafnir's host OS) and AppleClang on macOS.
-- Dependencies are fetched with `FetchContent`, pinned by tag and hash, and are all header-only or
-  small:
+- **C++20**, CMake ≥ 3.25 with `CMakePresets.json` (version 6, for workflow presets), Ninja. CI
+  targets GCC 13 and Clang 18 on Ubuntu 24.04 (fafnir's host OS, where those are the system
+  compilers) and AppleClang on macOS.
+- Dependencies are fetched with `FetchContent`, each pinned to a commit with its tag in a comment, and
+  are all header-only or small. Each one is added in the PR that first uses it. M0 brought in only
+  CLI11 and doctest.
 
   | Need | Library |
   |---|---|
   | CLI parsing | CLI11 |
+  | Number parsing | fast_float. libc++ (macOS) did not implement `std::from_chars` for floating point until LLVM 20, so it can't be relied on across the platforms dorq releases for |
   | JSON input and output | simdjson (reading JSONL) plus nlohmann/json (config and output) |
   | TOML config | toml++ |
   | Special functions (the t CDF, lgamma, incomplete beta) | Boost.Math, in its standalone header-only form |
-  | Formatting | `std::format` (GCC 13 supports it) |
+  | Formatting | {fmt}. `std::format` works on GCC 13, but Apple's libc++ only formats floating point from macOS 13.3, and floats are most of dorq's output |
   | Tests and benchmarks | doctest, Google Benchmark |
 
 - No Eigen, Arrow, or database client in v1. Parquet input is a stretch item behind a CMake option.
@@ -505,8 +509,10 @@ and recorded in `config_hash`.
 
 ## 7. Integration with fafnir (M7, in `rtrimble13/fafnir`)
 
-1. **Deploy.** Build a release binary (static where possible, `-O3 -march=x86-64-v3`), install it at
-   `/opt/dorq/bin/dorq`, and add `[dq] dorq_path` and `dorq_config` to `fafnirrc`. `fafnir status`
+1. **Deploy.** Unpack a GitHub release archive under `/opt` with `/opt/dorq` symlinked to it, or build
+   from source with the `release` preset and `cmake --install` (both are in the README). Either way
+   the binary is `/opt/dorq/bin/dorq`. Whether to build with `-march=x86-64-v3` is decided in the M6
+   performance pass (DR-0604). Then and add `[dq] dorq_path` and `dorq_config` to `fafnirrc`. `fafnir status`
    reports the dorq version.
 2. **Export → run → ingest.** Add a new module, `src/fafnir/dq/dorq.py`:
    - `COPY (SELECT security_id, trade_date, open, high, low, close, volume FROM core.daily_price WHERE …
@@ -576,12 +582,14 @@ release; items within a milestone are listed in dependency order.
 ### M0: Foundations (tag v0.0.1)
 | ID | Item | Size | Status |
 |---|---|---|---|
-| DR-0001 | CMake + presets (debug, release, asan-ubsan, coverage), FetchContent pinned deps, `dorq version` | M | ⬜ |
-| DR-0002 | CI: GCC and Clang on Linux, macOS, sanitizers, clang-format and clang-tidy gates, unit tests | M | ⬜ |
-| DR-0003 | `doc/adr/0001-stateless-deterministic-linter.md`, `0002-bayesian-core-no-mcmc.md`, `0003-check-codes.md` | S | ⬜ |
-| DR-0004 | README with a quickstart, CONTRIBUTING, and a PR template that requires docs to change with code (fafnir's docs-gate convention) | S | ⬜ |
+| DR-0001 | CMake + presets (dev, release, ci, asan, coverage), FetchContent pinned deps, `dorq --version` / `dorq version [--format json]` with the commit recorded at build time | M | 🔄 awaiting merge |
+| DR-0002 | CI: GCC 13 and Clang 18 on Linux, AppleClang on macOS, ASan+UBSan, clang-format and clang-tidy (both pinned to 18), unit and CLI contract tests | M | 🔄 awaiting merge |
+| DR-0003 | `doc/adr/0001-stateless-deterministic-linter.md`, `0002-bayesian-core-no-mcmc.md`, `0003-check-codes.md` | S | 🔄 awaiting merge |
+| DR-0004 | README with a quickstart, CONTRIBUTING, and a PR template that requires docs to change with code (fafnir's docs-gate convention) | S | 🔄 awaiting merge |
+| DR-0005 | Release workflow: a `vX.Y.Z` tag builds and tests on Linux x86-64 and macOS arm64, refuses a tag that disagrees with the binary's version, and publishes archives with `SHA256SUMS` | S | 🔄 awaiting merge |
 
-**Done when:** CI is green on an empty `dorq` binary that prints its version.
+**Done when:** CI is green on an empty `dorq` binary that prints its version, and tagging `v0.0.1`
+publishes release archives.
 
 ### M1: I/O, data model, deterministic checks (v0.1.0)
 | ID | Item | Size | Status |
@@ -671,9 +679,11 @@ time mainly in M7 (labelling, go/no-go).
 
 ---
 
-## 10. Open questions (each has a default the plan assumes)
+## 10. Open questions (answered 2026-10-05)
 
-| # | Question | Default assumed |
+The defaults below were confirmed as the decisions. Q9 was answered differently from its default.
+
+| # | Question | Decision |
 |---|---|---|
 | Q1 | Should dorq stay a pure file/stdin tool, or also read Postgres directly (libpq)? | Pure. fafnir exports and pipes (§7). This keeps dorq stateless, testable, and usable outside fafnir |
 | Q2 | Should dorq **replace** fafnir's `outlier`/`gap`/`sparse_coverage`/`stale`, or sit beside them? | Shadow first, then replace at cutover (§7.8) |
@@ -683,5 +693,5 @@ time mainly in M7 (labelling, go/no-go).
 | Q6 | Runtime budget and the fafnir host's CPU and RAM? Nightly incremental or full? | Incremental nightly with a 260-session lookback, full weekly; the targets in §8 |
 | Q7 | Asset classes and frequencies in scope for v1: US equities, ETFs, and mutual funds only? Crypto, FX, intraday? Which point series (FRED rates, NAVs, fundamentals)? | Daily US equities, ETFs, and funds, plus point series at D/W/M/Q. Crypto and FX via the `24x7` calendar only. No intraday |
 | Q8 | Is precision really preferred over recall? | Yes at `warn`/`error`; recall is preserved at `info` and by the 50% screening floor |
-| Q9 | Distribution: GitHub release tarballs, a conda package (fafnir uses `environment.yaml`), or both? | Release tarballs for Linux x86-64 and macOS arm64; a conda recipe in M7 if fafnir wants one |
+| Q9 | Distribution: GitHub release tarballs, a conda package (fafnir uses `environment.yaml`), or both? | **GitHub release binaries** (Linux x86-64, macOS arm64), **or building from source on the fafnir host**. No conda package |
 | Q10 | Check-code style: `DQ201` plus a kebab-case name, as proposed, or flake8's single letter plus number? | `DQ` + 3 digits plus a name |

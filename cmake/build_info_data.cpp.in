@@ -1,0 +1,19 @@
+// Generated at build time by cmake/WriteBuildInfo.cmake. Do not edit.
+#include "dorq/build_info.hpp"
+#include "dorq/version.hpp"
+
+namespace dorq {
+
+const BuildInfo& build_info() noexcept {
+  static constexpr BuildInfo kInfo{
+      .version = kVersion,
+      .commit = "@commit@",
+      .dirty = @dirty@,
+      .build_type = "@DORQ_BUILD_TYPE@",
+      .compiler = "@DORQ_COMPILER@",
+      .system = "@DORQ_SYSTEM@",
+  };
+  return kInfo;
+}
+
+}  // namespace dorq
