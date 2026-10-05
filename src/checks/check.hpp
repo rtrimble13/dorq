@@ -5,7 +5,10 @@
 #include <string_view>
 #include <vector>
 
+#include "checks/coverage_model.hpp"
 #include "config/config.hpp"
+#include "dorq/calendar.hpp"
+#include "dorq/frequency.hpp"
 #include "dorq/series.hpp"
 #include "dorq/violation.hpp"
 
@@ -15,6 +18,14 @@ namespace dorq {
 struct SeriesContext {
   const Series& series;
   const IntegritySettings& integrity;
+  const CoverageSettings& coverage;
+  const Calendar& calendar;
+  const SeverityThresholds& thresholds;
+  Frequency frequency = Frequency::kDaily;  // resolved: never kAuto
+  // The coverage model's view of a daily series, computed once when any DQ30x
+  // check runs; nullptr otherwise.
+  const CoverageAnalysis* analysis = nullptr;
+  GapReport gap_report = GapReport::kRun;
 };
 
 // A check reads one series and appends violations. Checks hold no state and are

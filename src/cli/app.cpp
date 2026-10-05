@@ -19,6 +19,7 @@
 #include "config/config.hpp"
 #include "core/text.hpp"
 #include "dorq/build_info.hpp"
+#include "dorq/calendar.hpp"
 #include "dorq/date.hpp"
 #include "dorq/exit_code.hpp"
 #include "dorq/version.hpp"
@@ -86,6 +87,10 @@ struct CheckOptions {
   std::string config;
   bool isolated = false;
   std::string color = "auto";
+  std::string calendar;
+  std::string calendar_file;
+  std::string calendar_exchange;
+  std::string as_of;
 };
 
 class UsageError : public std::runtime_error {
@@ -108,13 +113,13 @@ Config load_effective_config(const std::string& config_path, bool isolated, cons
 
 void validate_selection(const Config& config) {
   for (const auto* list : {&config.select, &config.extend_select, &config.ignore}) {
-    if (std::string const error = Selection::validate(*list); !error.empty()) {
+    if (const std::string error = Selection::validate(*list); !error.empty()) {
       throw ConfigError(error);
     }
   }
   for (const Profile& profile : config.profiles) {
     for (const auto* list : {&profile.select, &profile.ignore}) {
-      if (std::string const error = Selection::validate(*list); !error.empty()) {
+      if (const std::string error = Selection::validate(*list); !error.empty()) {
         throw ConfigError("profiles." + profile.name + ": " + error);
       }
     }
@@ -168,6 +173,32 @@ void apply_overrides(const CheckOptions& o, CLI::App& cmd, Config& config) {
   if (o.threads >= 0) {
     config.threads = o.threads;
   }
+  if (const auto kind = parse_calendar_name(o.calendar); cmd.count("--calendar") > 0 && kind) {
+    config.calendar = *kind;
+  }
+  if (cmd.count("--calendar-file") > 0) {
+    config.calendar_file = o.calendar_file;
+  }
+  if (cmd.count("--calendar-exchange") > 0) {
+    config.calendar_exchange = o.calendar_exchange;
+  }
+}
+
+// The built-in calendar, with the reference file over it when one is given.
+Calendar load_calendar(const Config& config, const fs::path& cwd) {
+  Calendar calendar(config.calendar);
+  if (config.calendar_file.empty()) {
+    return calendar;
+  }
+  const fs::path path =
+      config.calendar_file.is_relative() ? cwd / config.calendar_file : config.calendar_file;
+  std::ifstream file(path, std::ios::binary);
+  if (!file) {
+    throw CalendarError(config.calendar_file.string() + ": cannot open the calendar file");
+  }
+  calendar.apply_reference(
+      read_reference_calendar(file, config.calendar_file.string(), config.calendar_exchange));
+  return calendar;
 }
 
 struct InputFile {
@@ -189,6 +220,14 @@ int run_check(const CheckOptions& options, CLI::App& cmd, Io& io) {
       throw UsageError("--since: \"" + options.since + "\" is not a date (YYYY-MM-DD)");
     }
   }
+  std::optional<Date> as_of;
+  if (!options.as_of.empty()) {
+    as_of = parse_date(options.as_of);
+    if (!as_of) {
+      throw UsageError("--as-of: \"" + options.as_of + "\" is not a date (YYYY-MM-DD)");
+    }
+  }
+  const Calendar calendar = load_calendar(config, io.cwd);
 
   std::vector<InputFile> inputs;
   for (const std::string& file : options.files) {
@@ -230,7 +269,12 @@ int run_check(const CheckOptions& options, CLI::App& cmd, Io& io) {
   const std::unique_ptr<Writer> writer = make_writer(config.format, io.out, writer_options);
   Report report(*writer);
   {
-    Engine engine(config, {.threads = threads, .min_severity = config.min_severity, .since = since},
+    Engine engine(config,
+                  {.threads = threads,
+                   .min_severity = config.min_severity,
+                   .since = since,
+                   .as_of = as_of,
+                   .calendar = &calendar},
                   report);
     SeriesAssembler assembler(grouping, [&engine](Series&& s) { engine.submit(std::move(s)); });
     const ReadOptions read_options{config.input_format, config.kind, config.columns};
@@ -383,6 +427,16 @@ int run(std::span<const char* const> args, Io& io) {
                   "Read all input before checking (for large input not grouped by series)");
   check->add_option("--config", check_options.config, "Config file to use");
   check->add_flag("--isolated", check_options.isolated, "Ignore all config files");
+  check->add_option("--calendar", check_options.calendar, "Built-in calendar")
+      ->check(
+          CLI::IsMember({"XNYS", "NYSE", "XNAS", "NASDAQ", "weekdays", "24x7"}, CLI::ignore_case));
+  check->add_option("--calendar-file", check_options.calendar_file,
+                    "Reference calendar (CSV: date[, is_open][, exchange]); overrides the "
+                    "built-in calendar within its span");
+  check->add_option("--calendar-exchange", check_options.calendar_exchange,
+                    "The exchange to take from a multi-exchange calendar file");
+  check->add_option("--as-of", check_options.as_of,
+                    "Date DQ304 judges staleness against (default: the latest bar)");
   check->add_option("--color", check_options.color, "Colour text output")
       ->check(CLI::IsMember({"auto", "always", "never"}))
       ->capture_default_str();
@@ -456,6 +510,9 @@ int run(std::span<const char* const> args, Io& io) {
     io.err << "dorq: error: " << error.what() << "\n";
     return to_int(ExitCode::kUsage);
   } catch (const ConfigError& error) {
+    io.err << "dorq: error: " << error.what() << "\n";
+    return to_int(ExitCode::kUsage);
+  } catch (const CalendarError& error) {
     io.err << "dorq: error: " << error.what() << "\n";
     return to_int(ExitCode::kUsage);
   } catch (const InputError& error) {

@@ -4,8 +4,13 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
+#include <sstream>
 #include <string>
 #include <string_view>
+#include <vector>
+
+#include "cli/app.hpp"
 
 namespace dorq::test {
 
@@ -39,6 +44,46 @@ class TempDir {
 inline void write_file(const std::filesystem::path& path, std::string_view text) {
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
   out << text;
+}
+
+struct Result {
+  int status;
+  std::string out;
+  std::string err;
+};
+
+// Runs the CLI in-process, in `cwd`, with `stdin_text` as standard input.
+inline Result run_in(const std::filesystem::path& cwd, std::initializer_list<const char*> args,
+                     std::string_view stdin_text = "", bool stdin_is_tty = false) {
+  std::vector<const char*> argv{"dorq"};
+  argv.insert(argv.end(), args);
+  std::istringstream in{std::string{stdin_text}};
+  std::ostringstream out;
+  std::ostringstream err;
+  dorq::cli::Io io{in, out, err, stdin_is_tty, false, cwd};
+  const int status = dorq::cli::run(argv, io);
+  return {status, out.str(), err.str()};
+}
+
+// The same, in a fresh temporary directory.
+inline Result run(std::initializer_list<const char*> args, std::string_view stdin_text = "",
+                  bool stdin_is_tty = false) {
+  const TempDir dir;
+  return run_in(dir.path(), args, stdin_text, stdin_is_tty);
+}
+
+inline bool contains(const std::string& haystack, const std::string& needle) {
+  return haystack.find(needle) != std::string::npos;
+}
+
+// Lines of `text` that contain `needle`.
+inline std::size_t count_matching(const std::string& text, const std::string& needle) {
+  std::size_t count = 0;
+  std::istringstream lines(text);
+  for (std::string line; std::getline(lines, line);) {
+    count += contains(line, needle) ? 1U : 0U;
+  }
+  return count;
 }
 
 }  // namespace dorq::test

@@ -46,7 +46,11 @@ void append_record_key(std::string& out, const Violation& v) {
 void append_record(std::string& out, const SeriesResult& series, const Violation& v,
                    const WriterOptions& options) {
   out += R"({"series":)";
-  append_json_string(out, series.id);
+  if (series.cross_sectional) {
+    out += "null";
+  } else {
+    append_json_string(out, series.id);
+  }
   out += R"(,"label":)";
   if (series.label.empty()) {
     out += "null";
@@ -135,12 +139,17 @@ void append_summary(std::string& out, const Summary& summary, const WriterOption
   out += "}}";
 }
 
+constexpr std::string_view kAllSeries = "(all series)";
+
 class TextWriter final : public Writer {
  public:
   TextWriter(std::ostream& out, WriterOptions options) : out_(out), options_(std::move(options)) {}
 
   void series(const SeriesResult& result) override {
-    const std::string& name = result.label.empty() ? result.id : result.label;
+    std::string name{result.label.empty() ? result.id : result.label};
+    if (result.cross_sectional) {
+      name = kAllSeries;
+    }
     std::string line;
     for (const Violation& v : result.violations) {
       line.clear();
@@ -253,7 +262,9 @@ class FafnirWriter final : public Writer {
     for (const Violation& v : result.violations) {
       buffer_.clear();
       buffer_ += R"({"security_id":)";
-      if (is_integer_id(result.id)) {
+      if (result.cross_sectional) {
+        buffer_ += "null";
+      } else if (is_integer_id(result.id)) {
         buffer_ += result.id;
       } else {
         append_json_string(buffer_, result.id);
@@ -378,8 +389,10 @@ std::string statistics_text(const Summary& summary) {
 // The report owns the result; the writer only reads it, so nothing is moved.
 // NOLINTNEXTLINE(cppcoreguidelines-rvalue-reference-param-not-moved)
 void Report::series_done(SeriesResult&& result) {
-  ++summary_.series;
-  summary_.rows += result.rows;
+  if (!result.cross_sectional) {
+    ++summary_.series;
+    summary_.rows += result.rows;
+  }
   for (const Violation& v : result.violations) {
     ++summary_.violations;
     ++summary_.by_severity.at(static_cast<std::size_t>(v.severity));

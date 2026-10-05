@@ -7,6 +7,8 @@
 #include <string_view>
 #include <vector>
 
+#include "dorq/calendar.hpp"
+#include "dorq/frequency.hpp"
 #include "dorq/series.hpp"
 #include "dorq/violation.hpp"
 #include "io/columns.hpp"
@@ -42,6 +44,54 @@ struct IntegrityPatch {
   void apply_to(IntegritySettings& settings) const;
 };
 
+// Settings for the coverage checks (DQ3xx); doc/checks/DQ301.md explains the model.
+struct CoverageSettings {
+  Frequency frequency = Frequency::kAuto;  // kAuto: inferred from the dates
+  int block_sessions = 60;                 // sessions per block of the local density estimate
+  double outage_start = 1e-4;              // P(a feed outage starts on a given session)
+  double outage_end = 0.05;                // P(an outage ends on a given session)
+  double prior_density = 0.999;            // prior on the density the counts estimate
+  double prior_strength = 2.0;             // its weight, in sessions
+  double trade_size = 1000.0;              // volume per trade, for the density volume implies
+  double sparse_density = 0.8;             // DQ302 below this
+  int publication_lag = 1;                 // DQ304: latest sessions not yet expected
+};
+
+struct CoveragePatch {
+  std::optional<Frequency> frequency;
+  std::optional<int> block_sessions;
+  std::optional<double> outage_start;
+  std::optional<double> outage_end;
+  std::optional<double> prior_density;
+  std::optional<double> prior_strength;
+  std::optional<double> trade_size;
+  std::optional<double> sparse_density;
+  std::optional<int> publication_lag;
+
+  void apply_to(CoverageSettings& settings) const;
+};
+
+// How a DQ301 run is reported: one violation per run, or one per missing session
+// (the grain of fafnir's `gap` flags).
+enum class GapReport : std::uint8_t { kRun, kSession };
+
+// The cross-sectional checks (DQ303, DQ304); global, not per profile.
+struct CohortSettings {
+  int min_series = 3;               // DQ303: fewest missing series that make a cohort
+  double max_tail = 1e-6;           // DQ303: Poisson tail probability at or below which
+  double confident_density = 0.95;  // a series is expected on a session above this
+};
+
+// Probability thresholds that turn p_error into a severity.
+struct SeverityThresholds {
+  double info = 0.2;  // below this, nothing is reported
+  double warn = 0.6;
+  double error = 0.9;
+
+  // The severity for a probability, or nullopt when it is below `info`.
+  [[nodiscard]] std::optional<Severity> for_probability(double p) const noexcept;
+};
+
 // Settings that apply to the series a profile matches. Profiles are applied in
 // name order, so where two match and disagree the later name wins.
 struct Profile {
@@ -51,6 +101,7 @@ struct Profile {
   std::vector<std::string> select;        // added to the selection
   std::vector<std::string> ignore;        // added to the ignores
   IntegrityPatch integrity;
+  CoveragePatch coverage;
 
   [[nodiscard]] bool matches(const Series& series) const;
 };
@@ -67,6 +118,13 @@ struct Config {
   InputFormat input_format = InputFormat::kAuto;
   ColumnOverrides columns;
   IntegritySettings integrity;
+  CoverageSettings coverage;
+  GapReport gap_report = GapReport::kRun;
+  CohortSettings cohort;
+  SeverityThresholds severity;
+  CalendarKind calendar = CalendarKind::kXnys;
+  std::filesystem::path calendar_file;  // optional reference calendar
+  std::string calendar_exchange;
   std::vector<Profile> profiles;  // sorted by name
   std::string fafnir_table = "core.daily_price";
 

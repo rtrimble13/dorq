@@ -2,12 +2,15 @@
 add_executable(
   dorq_tests
   unit/test_build_info.cpp
+  unit/test_calendar.cpp
   unit/test_cli.cpp
   unit/test_csv_json.cpp
   unit/test_date_number.cpp
   unit/test_reader.cpp
+  unit/test_stats.cpp
   unit/test_checks.cpp
-  unit/test_config.cpp)
+  unit/test_config.cpp
+  unit/test_coverage.cpp)
 target_include_directories(dorq_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(dorq_tests PRIVATE dorq_lib doctest::doctest_with_main)
 dorq_configure_target(dorq_tests)

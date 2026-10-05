@@ -16,33 +16,10 @@
 
 namespace {
 
-struct Result {
-  int status;
-  std::string out;
-  std::string err;
-};
-
-Result run_in(const std::filesystem::path& cwd, std::initializer_list<const char*> args,
-              std::string_view stdin_text = "", bool stdin_is_tty = false) {
-  std::vector<const char*> argv{"dorq"};
-  argv.insert(argv.end(), args);
-  std::istringstream in{std::string{stdin_text}};
-  std::ostringstream out;
-  std::ostringstream err;
-  dorq::cli::Io io{in, out, err, stdin_is_tty, false, cwd};
-  const int status = dorq::cli::run(argv, io);
-  return {status, out.str(), err.str()};
-}
-
-Result run(std::initializer_list<const char*> args, std::string_view stdin_text = "",
-           bool stdin_is_tty = false) {
-  const dorq::test::TempDir dir;
-  return run_in(dir.path(), args, stdin_text, stdin_is_tty);
-}
-
-bool contains(const std::string& haystack, const std::string& needle) {
-  return haystack.find(needle) != std::string::npos;
-}
+using dorq::test::contains;
+using dorq::test::Result;
+using dorq::test::run;
+using dorq::test::run_in;
 
 std::size_t count_lines(const std::string& text) {
   return static_cast<std::size_t>(std::count(text.begin(), text.end(), '\n'));
@@ -57,7 +34,7 @@ constexpr std::string_view kBadBars =
     "AAA,2024-01-03,10,9.5,9,10,100\n"  // DQ101: high < open, close
     "AAA,2024-01-04,10,11,9,0,100\n"    // DQ101 (low > close) and DQ102 (close 0)
     "AAA,2024-01-05,10,11,9,,100\n"     // DQ104 error: close empty
-    "AAA,2024-01-06,10,11,9,10,\n"      // DQ104 warn: volume empty
+    "AAA,2024-01-08,10,11,9,10,\n"      // DQ104 warn: volume empty
     "BBB,2024-13-01,1,1,1,1,1\n";       // DQ104 error: bad date
 
 }  // namespace

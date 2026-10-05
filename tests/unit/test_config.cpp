@@ -146,3 +146,64 @@ TEST_CASE("discovery: nearest dorq.toml or pyproject [tool.dorq], stopping at .g
   CHECK(dorq::load_config(dir.path() / "a" / "pyproject.toml").select ==
         std::vector<std::string>{"DQ2"});
 }
+
+TEST_CASE("calendar, coverage and severity settings") {
+  const Config config = parse_config(R"(
+[calendar]
+name = "weekdays"
+file = "cal.csv"
+exchange = "NYSE"
+[coverage]
+report = "session"
+outage_start = 0.001
+trade_size = 100
+frequency = "daily"
+cohort_min_series = 5
+[severity]
+warn = 0.5
+[profiles.funds]
+match = { series = ["VFIAX"] }
+coverage = { publication_lag = 2 }
+)",
+                                     "t.toml", false);
+  CHECK(config.calendar == dorq::CalendarKind::kWeekdays);
+  CHECK(config.calendar_file == "cal.csv");
+  CHECK(config.calendar_exchange == "NYSE");
+  CHECK(config.gap_report == dorq::GapReport::kSession);
+  CHECK(config.coverage.outage_start == 0.001);
+  CHECK(config.coverage.trade_size == 100.0);
+  CHECK(config.coverage.frequency == dorq::Frequency::kDaily);
+  CHECK(config.cohort.min_series == 5);
+  CHECK(config.severity.warn == 0.5);
+  REQUIRE(config.profiles.size() == 1);
+  dorq::CoverageSettings coverage;
+  config.profiles[0].coverage.apply_to(coverage);
+  CHECK(coverage.publication_lag == 2);
+  // And the round trip keeps all of it.
+  const Config again = parse_config(dorq::to_toml(config), "again.toml", false);
+  CHECK(dorq::config_hash(again) == dorq::config_hash(config));
+}
+
+TEST_CASE("coverage mistakes") {
+  const auto fails = [](const std::string& text) {
+    try {
+      static_cast<void>(parse_config(text, "t.toml", false));
+    } catch (const ConfigError&) {
+      return true;
+    }
+    return false;
+  };
+  CHECK(fails("[calendar]\nname = \"LSE\"\n"));
+  CHECK(fails("[coverage]\nreport = \"day\"\n"));
+  CHECK(fails("[coverage]\nfrequency = \"hourly\"\n"));
+  CHECK(fails("[severity]\nwarn = 0.95\n"));  // above error
+  // Cohort and report settings are global.
+  CHECK(fails("[profiles.p]\ncoverage = { cohort_min_series = 4 }\n"));
+  CHECK(fails("[profiles.p]\ncoverage = { report = \"session\" }\n"));
+}
+
+TEST_CASE("a calendar file named in a config file is relative to it") {
+  const dorq::test::TempDir dir;
+  dorq::test::write_file(dir.path() / "dorq.toml", "[calendar]\nfile = \"cal.csv\"\n");
+  CHECK(dorq::load_config(dir.path() / "dorq.toml").calendar_file == dir.path() / "cal.csv");
+}

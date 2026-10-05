@@ -115,6 +115,10 @@ Date Date::from_ymd(int year, int month, int day) noexcept {
 
 int Date::year() const noexcept { return civil_from_days(days_).year; }
 
+int Date::month() const noexcept { return civil_from_days(days_).month; }
+
+int Date::day() const noexcept { return civil_from_days(days_).day; }
+
 int Date::weekday() const noexcept {
   // 1970-01-01 was a Thursday (3, counting Monday as 0).
   const int w = (days_ + 3) % 7;

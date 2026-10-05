@@ -20,11 +20,17 @@ data-quality process.
 
 ## Status
 
-**Pre-alpha: milestone M1 (reading input, output formats, integrity checks).** dorq
-reads CSV, TSV, JSON Lines and JSON arrays, and reports in five formats. It runs
-the deterministic integrity checks (DQ1xx). The Bayesian checks, which are dorq's
-reason to exist, arrive from M2 onward; the
-[development plan](doc/plans/dorq-development-plan.md) sets out what comes when.
+**Pre-alpha: milestone M2 (calendar and coverage).** dorq reads CSV, TSV, JSON Lines
+and JSON arrays, and reports in five formats. It runs:
+
+- the deterministic integrity checks (DQ1xx);
+- the date-shift check (DQ206);
+- the first Bayesian checks: coverage (DQ3xx).
+
+Coverage judges a missing session by how often *this* series trades, and reports
+a failed load once rather than once per series. The price-action models arrive
+in M3. The [development plan](doc/plans/dorq-development-plan.md) sets out what
+comes when.
 
 ```console
 $ dorq tests/data/bad_bars.csv
@@ -32,11 +38,25 @@ AAA  2024-01-03  DQ101 error  ohlc-bounds  high 9.5 < open 10; high 9.5 < close 
 AAA  2024-01-04  DQ101 error  ohlc-bounds  low 9 > close 0  (line 4)
 AAA  2024-01-04  DQ102 error  non-positive  close is 0  (line 4)
 AAA  2024-01-05  DQ104 error  missing-field  close is empty  (line 5)
-AAA  2024-01-06  DQ104 warn  missing-field  volume is empty  (line 6)
+AAA  2024-01-08  DQ104 warn  missing-field  volume is empty  (line 6)
 BBB  line 7  DQ104 error  missing-field  date "2024-13-01" is not a date; the row is skipped
 $ echo $?
 1
 ```
+
+On a year of 30 liquid names and 10 thin ones, with a failed load on 2023-06-15
+that 20 of the liquid names miss:
+
+```console
+$ dorq universe.csv
+L25  2023-03-14  DQ301 warn  missing-run  1 session with no bar; nearby the series has a bar on 99.2% of sessions and trades a median 1,014,993 a day; P(feed outage) = 0.83
+T0  2023-07-27..2023-12-11  DQ301 error  missing-run  96 sessions with no bar; nearby the series has a bar on 13.9% of sessions; P(feed outage) = >0.99
+(all series)  2023-06-15  DQ303 error  cohort-gap  20 of 30 series that have a bar on nearly every session have none on this one, where healthy feeds would explain about 0.1; a failed load, not 20 separate gaps
+```
+
+The thin names' ordinary gaps aren't reported (`--show-info` shows them as
+DQ302 sparse-series notes). The 20 members of the failed load are downgraded to
+info, pointing at the cohort.
 
 ## Usage
 
@@ -45,6 +65,8 @@ dorq prices.csv                              # check a file ("check" is the defa
 psql -c "COPY (...) TO STDOUT CSV HEADER" | dorq --format fafnir -   # or stdin
 dorq --format jsonl --select DQ1 --ignore DQ106 a.csv b.jsonl
 dorq --show-info --statistics prices.csv     # info too, then counts per check
+dorq --calendar-file sessions.csv prices.csv # a reference calendar (default: built-in XNYS)
+dorq --as-of 2026-10-05 prices.csv           # judge staleness (DQ304) against a date
 dorq list-checks                             # every check, its severity and what it needs
 dorq explain DQ106                           # a check's full documentation
 dorq config show                             # the effective settings and their hash
@@ -57,8 +79,9 @@ ignoring case and punctuation: `date`/`trade_date`, `open`, `high`, `low`,
 need open, high, low and close; a series with only a value column is a point
 series. When the names don't match, use `--columns date=asof,value=DGS10`.
 [doc/configuration.md](doc/configuration.md) covers columns, the config file and
-profiles. [doc/output.md](doc/output.md) covers each output format, including the
-`fafnir` format that maps onto `ops.data_quality_flag`.
+profiles. [doc/calendar.md](doc/calendar.md) covers the built-in calendars and
+reference files. [doc/output.md](doc/output.md) covers each output format,
+including the `fafnir` format that maps onto `ops.data_quality_flag`.
 
 | Check | Name | Reports |
 |---|---|---|
@@ -66,8 +89,15 @@ profiles. [doc/output.md](doc/output.md) covers each output format, including th
 | [DQ102](doc/checks/DQ102.md) | non-positive | a price at or below zero, or a negative volume |
 | [DQ103](doc/checks/DQ103.md) | duplicate-date | more than one row for a date |
 | [DQ104](doc/checks/DQ104.md) | missing-field | an empty or unparseable value |
+| [DQ105](doc/checks/DQ105.md) | non-session-bar | a bar on a day the calendar has no session |
 | [DQ106](doc/checks/DQ106.md) | precision-shift | computed (e.g. back-adjusted) prices among quoted ones |
 | [DQ107](doc/checks/DQ107.md) | zero-range-with-volume | a flat bar on the series' typical volume |
+| [DQ206](doc/checks/DQ206.md) | date-shift | a history dated a day early or late |
+| [DQ301](doc/checks/DQ301.md) | missing-run | sessions with no bar that look like a feed outage, given how the series trades |
+| [DQ302](doc/checks/DQ302.md) | sparse-series | info: a series that trades on few of its sessions |
+| [DQ303](doc/checks/DQ303.md) | cohort-gap | many series missing the same session: a failed load |
+| [DQ304](doc/checks/DQ304.md) | stale-feed | a series that stops before the as-of date |
+| [DQ305](doc/checks/DQ305.md) | frequency-gap | missing periods in a weekly, monthly, quarterly or annual series |
 
 ### Exit status
 
@@ -93,7 +123,7 @@ archives, plus a `SHA256SUMS` file:
 | `dorq-<version>-macos-arm64.tar.gz` | macOS on Apple silicon |
 
 ```bash
-version=0.1.0
+version=0.2.0
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/dorq-${version}-linux-x86_64.tar.gz"
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
@@ -114,7 +144,7 @@ Clang 18+).
 ```bash
 sudo apt-get install -y build-essential cmake ninja-build git
 git clone https://github.com/rtrimble13/dorq.git && cd dorq
-git checkout v0.1.0                        # or stay on main for the latest
+git checkout v0.2.0                        # or stay on main for the latest
 cmake --workflow --preset release          # configure, build, run the tests
 sudo cmake --install build/release --prefix /opt/dorq
 /opt/dorq/bin/dorq version                 # names the commit it was built from
@@ -155,6 +185,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 ## Documentation
 
 - [Configuration](doc/configuration.md): the config file, profiles, columns, input
+- [Calendars](doc/calendar.md): built-in calendars and reference calendar files
 - [Output formats](doc/output.md): text, json, jsonl, csv, fafnir
 - [Checks](doc/checks/): one page per check, also printed by `dorq explain`
 - [Development plan](doc/plans/dorq-development-plan.md): goals, checks, models, milestones

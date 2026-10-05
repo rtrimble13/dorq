@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "checks/check.hpp"
+#include "checks/coverage.hpp"
 #include "checks/integrity.hpp"
 #include "core/text.hpp"
 
@@ -51,9 +52,18 @@ std::span<const Check* const> all_checks() {
   static const DuplicateDate kDuplicateDate;
   static const MissingField kMissingField;
   static const PrecisionShift kPrecisionShift;
+  static const NonSessionBar kNonSession;
   static const ZeroRangeWithVolume kZeroRange;
-  static const std::array<const Check*, 6> kChecks = {
-      &kOhlcBounds, &kNonPositive, &kDuplicateDate, &kMissingField, &kPrecisionShift, &kZeroRange};
+  static const DateShift kDateShift;
+  static const MissingRunCheck kMissingRun;
+  static const SparseSeries kSparse;
+  static const CohortGap kCohort;
+  static const StaleFeed kStale;
+  static const FrequencyGap kFrequencyGap;
+  static const std::array<const Check*, 13> kChecks = {
+      &kOhlcBounds,     &kNonPositive, &kDuplicateDate, &kMissingField, &kNonSession,
+      &kPrecisionShift, &kZeroRange,   &kDateShift,     &kMissingRun,   &kSparse,
+      &kCohort,         &kStale,       &kFrequencyGap};
   return kChecks;
 }
 

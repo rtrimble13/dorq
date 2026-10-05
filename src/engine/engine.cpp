@@ -9,10 +9,50 @@
 #include <utility>
 #include <vector>
 
+#include "checks/coverage_model.hpp"
+#include "dorq/frequency.hpp"
+
 namespace dorq {
+namespace {
+
+const Calendar& default_calendar() {
+  static const Calendar kXnys(CalendarKind::kXnys);
+  return kXnys;
+}
+
+bool enables(const Selection& selection, std::string_view code) {
+  const Check* check = find_check(code);
+  return check != nullptr && selection.enabled(check->info());
+}
+
+std::vector<std::string> concat(const std::vector<std::string>& a,
+                                const std::vector<std::string>& b) {
+  std::vector<std::string> out = a;
+  out.insert(out.end(), b.begin(), b.end());
+  return out;
+}
+
+}  // namespace
 
 Engine::Engine(const Config& config, EngineOptions options, ResultSink& sink)
-    : config_(config), options_(options), sink_(sink) {
+    : config_(config),
+      options_(options),
+      sink_(sink),
+      calendar_(options.calendar != nullptr ? *options.calendar : default_calendar()) {
+  // Hold results when a cross-sectional check can run for any series: under the
+  // global selection, or under any profile's.
+  const std::vector<std::string> select = concat(config.select, config.extend_select);
+  std::vector<Selection> selections = {Selection(select, config.ignore)};
+  for (const Profile& profile : config.profiles) {
+    selections.emplace_back(concat(select, profile.select), concat(config.ignore, profile.ignore));
+  }
+  for (const Selection& selection : selections) {
+    holding_ = holding_ || enables(selection, "DQ303") || enables(selection, "DQ304");
+  }
+  if (holding_) {
+    cross_ = std::make_unique<CrossSection>(calendar_, config.cohort, config.severity,
+                                            config.coverage, options.as_of);
+  }
   if (options_.threads > 1) {
     workers_.reserve(options_.threads);
     for (unsigned i = 0; i < options_.threads; ++i) {
@@ -45,33 +85,46 @@ const Engine::Settings& Engine::settings_for(const Series& series) {
   if (!slot) {
     slot = std::make_unique<Settings>();
     slot->integrity = config_.integrity;
-    std::vector<std::string> select = config_.select;
-    select.insert(select.end(), config_.extend_select.begin(), config_.extend_select.end());
+    slot->coverage = config_.coverage;
+    std::vector<std::string> select = concat(config_.select, config_.extend_select);
     std::vector<std::string> ignore = config_.ignore;
     for (const Profile& profile : config_.profiles) {
       if (profile.matches(series)) {
         select.insert(select.end(), profile.select.begin(), profile.select.end());
         ignore.insert(ignore.end(), profile.ignore.begin(), profile.ignore.end());
         profile.integrity.apply_to(slot->integrity);
+        profile.coverage.apply_to(slot->coverage);
       }
     }
     const Selection selection(select, ignore);
     for (const Check* check : all_checks()) {
       const CheckInfo& info = check->info();
-      if (info.applies == Applies::kOhlcvOnly && series.kind != SeriesKind::kOhlcv) {
+      if (!selection.enabled(info)) {
         continue;
       }
-      if (selection.enabled(info)) {
-        slot->checks.push_back(check);
+      if (info.code == "DQ303") {
+        slot->cohort = true;
+      } else if (info.code == "DQ304") {
+        slot->stale = true;
       }
+      if (info.code == "DQ301" || info.code == "DQ302" || info.cross_sectional) {
+        slot->coverage_model = true;
+      }
+      if (info.cross_sectional ||
+          (info.applies == Applies::kOhlcvOnly && series.kind != SeriesKind::kOhlcv)) {
+        continue;
+      }
+      slot->checks.push_back(check);
     }
   }
   return *slot;
 }
 
-SeriesResult Engine::process(Work& work) const {
+Engine::Processed Engine::process(Work& work) const {
   const Series& series = work.series;
-  SeriesResult result;
+  const Settings& settings = *work.settings;
+  Processed out;
+  SeriesResult& result = out.result;
   result.sequence = work.sequence;
   result.id = series.id;
   result.label = series.label;
@@ -81,20 +134,47 @@ SeriesResult Engine::process(Work& work) const {
                                     series.issues.begin(), series.issues.end(),
                                     [](const FieldIssue& issue) { return !issue.has_date; }));
 
-  const SeriesContext context{series, work.settings->integrity};
-  std::vector<Violation> found;
-  for (const Check* check : work.settings->checks) {
-    check->run(context, found);
+  const Frequency frequency = settings.coverage.frequency == Frequency::kAuto
+                                  ? infer_frequency(series.date)
+                                  : settings.coverage.frequency;
+  std::optional<CoverageAnalysis> analysis;
+  if (frequency == Frequency::kDaily && settings.coverage_model) {
+    analysis =
+        analyze_coverage(series, calendar_, settings.coverage, config_.cohort.confident_density);
   }
-  for (Violation& v : found) {
-    if (v.severity < options_.min_severity) {
-      continue;
-    }
-    if (options_.since && v.date && *v.date < *options_.since) {
-      continue;
-    }
-    result.violations.push_back(std::move(v));
+  const SeriesContext context{
+      .series = series,
+      .integrity = settings.integrity,
+      .coverage = settings.coverage,
+      .calendar = calendar_,
+      .thresholds = config_.severity,
+      .frequency = frequency,
+      .analysis = analysis ? &*analysis : nullptr,
+      .gap_report = config_.gap_report,
+  };
+  for (const Check* check : settings.checks) {
+    check->run(context, result.violations);
   }
+
+  CrossSummary& summary = out.summary;
+  summary.cohort = settings.cohort;
+  summary.stale = settings.stale;
+  summary.coverage = settings.coverage;
+  if (analysis && analysis->applicable) {
+    summary.daily = true;
+    summary.last = analysis->last;
+    summary.tail_density = analysis->tail_density;
+    summary.confident_ranges = std::move(analysis->confident_ranges);
+    summary.confident_missing = std::move(analysis->confident_missing);
+  }
+  return out;
+}
+
+void Engine::filter_and_send(SeriesResult&& result) {
+  std::erase_if(result.violations, [this](const Violation& v) {
+    return v.severity < options_.min_severity ||
+           (options_.since && v.date && *v.date < *options_.since);
+  });
   // By date (rows without one first, by line), then code. Stable, so a check's
   // own order breaks any remaining tie.
   std::stable_sort(result.violations.begin(), result.violations.end(),
@@ -110,14 +190,23 @@ SeriesResult Engine::process(Work& work) const {
                      }
                      return a.check->code < b.check->code;
                    });
-  return result;
+  sink_.series_done(std::move(result));
+}
+
+void Engine::deliver(Processed processed) {
+  if (holding_) {
+    cross_->add(processed.summary);
+    held_.push_back(std::move(processed.result));
+    return;
+  }
+  filter_and_send(std::move(processed.result));
 }
 
 void Engine::submit(Series&& series) {
   const Settings& settings = settings_for(series);
   Work work{next_sequence_++, std::move(series), &settings};
   if (workers_.empty()) {
-    sink_.series_done(process(work));
+    deliver(process(work));
     return;
   }
   {
@@ -150,11 +239,11 @@ void Engine::worker_loop() {
       work.emplace(std::move(queue_.front()));
       queue_.pop_front();
     }
-    SeriesResult result = process(*work);
+    Processed processed = process(*work);
     work.reset();  // free the series before taking the next
     {
       const std::scoped_lock lock(mutex_);
-      done_.emplace(result.sequence, std::move(result));
+      done_.emplace(processed.result.sequence, std::move(processed));
     }
     result_ready_.notify_all();
   }
@@ -162,38 +251,55 @@ void Engine::worker_loop() {
 
 void Engine::deliver_ready() {
   while (true) {
-    SeriesResult result;
+    std::optional<Processed> processed;
     {
       const std::scoped_lock lock(mutex_);
       const auto it = done_.find(next_to_deliver_);
       if (it == done_.end()) {
         return;
       }
-      result = std::move(it->second);
+      processed.emplace(std::move(it->second));
       done_.erase(it);
       ++next_to_deliver_;
       --in_flight_;
     }
-    sink_.series_done(std::move(result));
+    deliver(std::move(*processed));
   }
 }
 
 void Engine::finish() {
-  if (workers_.empty()) {
+  if (!workers_.empty()) {
+    while (true) {
+      {
+        std::unique_lock lock(mutex_);
+        result_ready_.wait(lock, [this] {
+          return next_to_deliver_ == next_sequence_ || done_.contains(next_to_deliver_);
+        });
+        if (next_to_deliver_ == next_sequence_) {
+          break;
+        }
+      }
+      deliver_ready();
+    }
+  }
+  if (!holding_) {
     return;
   }
-  while (true) {
-    {
-      std::unique_lock lock(mutex_);
-      result_ready_.wait(lock, [this] {
-        return next_to_deliver_ == next_sequence_ || done_.contains(next_to_deliver_);
-      });
-      if (next_to_deliver_ == next_sequence_) {
-        return;
-      }
-    }
-    deliver_ready();
+  std::vector<Violation> cohort = cross_->finalize(held_);
+  for (SeriesResult& result : held_) {
+    filter_and_send(std::move(result));
+  }
+  held_.clear();
+  if (!cohort.empty()) {
+    SeriesResult cross;
+    cross.sequence = next_sequence_;
+    cross.cross_sectional = true;
+    cross.source = calendar_.description();
+    cross.violations = std::move(cohort);
+    filter_and_send(std::move(cross));
   }
 }
+
+std::optional<Date> Engine::as_of() const { return cross_ ? cross_->as_of() : std::nullopt; }
 
 }  // namespace dorq

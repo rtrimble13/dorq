@@ -14,9 +14,11 @@
 
 #include "checks/check.hpp"
 #include "config/config.hpp"
+#include "dorq/calendar.hpp"
 #include "dorq/date.hpp"
 #include "dorq/series.hpp"
 #include "dorq/violation.hpp"
+#include "engine/cross_section.hpp"
 
 namespace dorq {
 
@@ -28,7 +30,10 @@ struct SeriesResult {
   std::string source;
   SeriesKind kind = SeriesKind::kOhlcv;
   std::size_t rows = 0;
-  std::vector<Violation> violations;  // sorted; already filtered
+  std::vector<Violation> violations;  // sorted; filtered by the time a sink sees them
+  // The DQ303 violations, which belong to no one series, arrive last as a result
+  // of their own with this set.
+  bool cross_sectional = false;
 };
 
 // Receives results in input order, on the thread that calls Engine::submit() and
@@ -47,12 +52,18 @@ class ResultSink {
 struct EngineOptions {
   unsigned threads = 1;
   Severity min_severity = Severity::kWarn;
-  std::optional<Date> since;  // drop violations dated before this
+  std::optional<Date> since;           // drop violations dated before this
+  std::optional<Date> as_of;           // DQ304's reference date; default: the latest bar
+  const Calendar* calendar = nullptr;  // default: built-in XNYS
 };
 
 // Runs the enabled checks over each series, on a pool of worker threads, and hands
 // results to the sink in input order. The output therefore never depends on the
 // number of threads or on scheduling (doc/adr/0001).
+//
+// The cross-sectional checks (DQ303, DQ304) can only be judged once every series is
+// in. While either is enabled, results are held until finish() and handed on then,
+// still in input order, followed by the DQ303 result.
 class Engine {
  public:
   Engine(const Config& config, EngineOptions options, ResultSink& sink);
@@ -67,28 +78,47 @@ class Engine {
   // Waits for every submitted series and delivers the remaining results.
   void finish();
 
+  // The as-of date DQ304 used, once finish() has run.
+  [[nodiscard]] std::optional<Date> as_of() const;
+
  private:
-  // The resolved settings for one combination of matching profiles.
+  // The resolved settings for one combination of kind and matching profiles.
   struct Settings {
     IntegritySettings integrity;
-    std::vector<const Check*> checks;
+    CoverageSettings coverage;
+    std::vector<const Check*> checks;  // per-series checks to run
+    bool coverage_model = false;       // a DQ30x check needs the coverage analysis
+    bool cohort = false;               // DQ303 enabled
+    bool stale = false;                // DQ304 enabled
   };
   struct Work {
     std::size_t sequence = 0;
     Series series;
     const Settings* settings = nullptr;
   };
+  struct Processed {
+    SeriesResult result;
+    CrossSummary summary;
+  };
 
   const Settings& settings_for(const Series& series);
-  [[nodiscard]] SeriesResult process(Work& work) const;
+  [[nodiscard]] Processed process(Work& work) const;
+  void deliver(Processed processed);
+  void filter_and_send(SeriesResult&& result);
   void worker_loop();
   void deliver_ready();  // caller holds no lock
 
   const Config& config_;
   EngineOptions options_;
   ResultSink& sink_;
+  const Calendar& calendar_;
   std::unordered_map<std::string, std::unique_ptr<Settings>> settings_;
   std::size_t next_sequence_ = 0;
+
+  // Cross-sectional checks.
+  bool holding_ = false;
+  std::unique_ptr<CrossSection> cross_;
+  std::vector<SeriesResult> held_;
 
   // Threaded mode only.
   std::vector<std::thread> workers_;
@@ -96,7 +126,7 @@ class Engine {
   std::condition_variable work_ready_;
   std::condition_variable result_ready_;
   std::deque<Work> queue_;
-  std::map<std::size_t, SeriesResult> done_;
+  std::map<std::size_t, Processed> done_;
   std::size_t next_to_deliver_ = 0;
   std::size_t in_flight_ = 0;
   bool stopping_ = false;

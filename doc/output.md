@@ -10,6 +10,12 @@ the same order:
 
 That order doesn't depend on `--threads` ([ADR 0001](adr/0001-stateless-deterministic-linter.md)).
 
+The cross-sectional checks, DQ303 (cohort gaps) and DQ304 (stale feeds), can only
+be judged once every series has been read. While either is enabled (the default),
+dorq holds every series' violations until the input ends and then writes them all,
+in the same order. The DQ303 violations belong to no single series, so they come
+last. To get output as each series finishes, ignore both checks.
+
 `--min-severity` (default `warn`) and `--since` decide which violations are
 reported. `--fail-on` (default `warn`) decides the exit status: 1 if any
 **reported** violation is at or above it, otherwise 0. `--exit-zero` always
@@ -26,7 +32,8 @@ BBB  line 7  DQ104 error  missing-field  date "2024-13-01" is not a date; the ro
 
 The fields are:
 
-- **name**: the series label (e.g. a ticker) if there is one, otherwise the series id.
+- **name**: the series label (e.g. a ticker) if there is one, otherwise the series
+  id; `(all series)` for a DQ303 cohort.
 - **date**: the date, or `line N` when the row had no usable date.
 - **code and severity**.
 - **check name**.
@@ -53,7 +60,7 @@ One JSON object per line. This is the record every machine format is built from:
 
 | Field | Meaning |
 |---|---|
-| `series` | The series id: the series column, or the file's stem when there is none |
+| `series` | The series id: the series column, or the file's stem when there is none. `null` for a cross-sectional violation (DQ303) |
 | `label` | The label column (e.g. a ticker), or `null` |
 | `source` | The input file, or `<stdin>` |
 | `date` | The date the violation is about; `null` for a row with no usable date |
@@ -106,7 +113,8 @@ One JSON object per line, shaped as a row of fafnir's `ops.data_quality_flag`:
 ```
 
 - `security_id` is the series id. It is written as a JSON number when it is an
-  integer, and as a string otherwise.
+  integer, as a string otherwise, and as `null` for a DQ303 cohort, which belongs
+  to no one security (fafnir's column is nullable).
 - `table_name` comes from `fafnir.table_name` in the config (default `core.daily_price`).
 - `check_name` is `dorq_` followed by the check name, with `-` turned into `_`.
 - `record_key` keeps fafnir's `{"trade_date": ...}` shape, so fafnir's

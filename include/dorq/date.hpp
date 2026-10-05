@@ -23,6 +23,8 @@ class Date {
 
   [[nodiscard]] constexpr std::int32_t days() const noexcept { return days_; }
   [[nodiscard]] int year() const noexcept;
+  [[nodiscard]] int month() const noexcept;  // 1-12
+  [[nodiscard]] int day() const noexcept;    // 1-31
   // 0 = Monday ... 6 = Sunday.
   [[nodiscard]] int weekday() const noexcept;
   // YYYY-MM-DD.

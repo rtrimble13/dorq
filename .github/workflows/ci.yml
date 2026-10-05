@@ -88,8 +88,8 @@ jobs:
       - name: clang-tidy
         run: scripts/tidy.sh build/ci
 
-  # libFuzzer over the input readers (and every check behind them) and the config
-  # parser, a minute each. A crash fails the job and its input is kept as an
+  # libFuzzer over the input readers (and every check behind them), the config
+  # parser and the calendar reader, a minute each. A crash fails the job and its input is kept as an
   # artifact; add it to fuzz/corpus/ with the fix.
   fuzz:
     runs-on: ubuntu-24.04
@@ -113,6 +113,10 @@ jobs:
         run: |
           mkdir -p corpus/config
           build/fuzz/fuzz/fuzz_config -max_total_time=60 -timeout=10 corpus/config fuzz/corpus/config
+      - name: fuzz_calendar
+        run: |
+          mkdir -p corpus/calendar
+          build/fuzz/fuzz/fuzz_calendar -max_total_time=60 -timeout=10 corpus/calendar fuzz/corpus/calendar
       - name: Keep crashing inputs
         if: failure()
         uses: actions/upload-artifact@v4

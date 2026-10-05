@@ -35,6 +35,8 @@ struct CheckInfo {
   std::string_view summary;  // one line, for list-checks
   Severity default_severity = Severity::kError;
   Applies applies = Applies::kAny;
+  // Judged across all series at the end of a run (DQ303, DQ304), not per series.
+  bool cross_sectional = false;
 };
 
 // One value in a violation's `detail` object. Keys keep the order checks add them
