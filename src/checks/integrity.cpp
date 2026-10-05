@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -51,32 +52,6 @@ double median(std::vector<double> values) {
 
 std::string percent(double share) {
   return std::to_string(static_cast<int>(std::lround(share * 100.0))) + "%";
-}
-
-// The smallest step prices take in rows [from, to): the least gap between the
-// distinct open, high, low and close values there. Prices can sit on a lattice
-// coarser than the decimals they are written with: a cent grid adjusted for a 1:9
-// split moves in steps of 0.0009, written to four decimals. 0 when there is one
-// price or none.
-double smallest_step(const Series& s, std::size_t from, std::size_t to) {
-  std::vector<double> prices;
-  for (std::size_t j = from; j < to; ++j) {
-    for (const double p : {s.open[j], s.high[j], s.low[j], s.close[j]}) {
-      if (std::isfinite(p) && p > 0.0) {
-        prices.push_back(p);
-      }
-    }
-  }
-  std::sort(prices.begin(), prices.end());
-  double step = std::numeric_limits<double>::infinity();
-  for (std::size_t k = 1; k < prices.size(); ++k) {
-    const double gap = prices[k] - prices[k - 1];
-    // Equal as written, or apart by a rounding error.
-    if (gap > 1e-9 * prices[k]) {
-      step = std::min(step, gap);
-    }
-  }
-  return std::isfinite(step) ? step * (1.0 - 1e-9) : 0.0;
 }
 
 }  // namespace
@@ -446,7 +421,7 @@ void ZeroRangeWithVolume::run(const SeriesContext& context, std::vector<Violatio
     // 0.03 is not exactly two cents in binary.
     const std::size_t from = i >= kNearby ? i - kNearby : 0;
     const std::size_t to = std::min(s.size(), i + kNearby + 1);
-    const double grid = std::max({tick_size(s.date[i], c), written, smallest_step(s, from, to)});
+    const double grid = std::max({tick_size(s.date[i], c), written, observed_step(s, from, to)});
     std::vector<double> nearby;
     std::size_t traded_nearby = 0;
     std::size_t flat_nearby = 0;
@@ -483,6 +458,42 @@ void ZeroRangeWithVolume::run(const SeriesContext& context, std::vector<Violatio
     if (std::isfinite(usual)) {
       v.detail.push_back({"nearby_range_steps", usual});
     }
+    out.push_back(std::move(v));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// DQ108 out-of-bounds
+
+const CheckInfo& OutOfBounds::info() const noexcept {
+  static const CheckInfo kInfo{
+      .code = "DQ108",
+      .name = "out-of-bounds",
+      .summary = "a value outside the range configured for the series ([integrity] bounds)",
+      .default_severity = Severity::kError,
+      .applies = Applies::kAny,
+  };
+  return kInfo;
+}
+
+void OutOfBounds::run(const SeriesContext& context, std::vector<Violation>& out) const {
+  const std::optional<Bounds>& bounds = context.integrity.bounds;
+  if (!bounds) {
+    return;
+  }
+  const Series& s = context.series;
+  const std::string_view field = field_name(Field::kClose, s.kind);
+  const std::string range =
+      "[" + format_number(bounds->low) + ", " + format_number(bounds->high) + "]";
+  for (std::size_t i = 0; i < s.size(); ++i) {
+    const double value = s.close[i];
+    if (!std::isfinite(value) || (value >= bounds->low && value <= bounds->high)) {
+      continue;
+    }
+    Violation v = make_violation(
+        info(), Severity::kError, s, i,
+        std::string{field} + " " + format_number(value) + " is outside the bounds " + range);
+    v.detail = {{std::string{field}, value}, {"low", bounds->low}, {"high", bounds->high}};
     out.push_back(std::move(v));
   }
 }

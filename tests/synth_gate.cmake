@@ -1,7 +1,7 @@
 # Generates a synthetic universe, checks it with dorq, and scores the result
 # against the injected faults' labels and tools/synth/gates.txt.
 #
-#   cmake -DSYNTH=... -DDORQ=... -DGATES=... -DOUT=... -DSEED=N -P synth_gate.cmake
+#   cmake -DSYNTH=... -DDORQ=... -DGATES=... -DCONFIG=... -DOUT=... -DSEED=N -P synth_gate.cmake
 file(REMOVE_RECURSE "${OUT}")
 execute_process(COMMAND "${SYNTH}" generate --seed "${SEED}" --out "${OUT}"
                 RESULT_VARIABLE status)
@@ -9,7 +9,8 @@ if(NOT status EQUAL 0)
   message(FATAL_ERROR "dorq-synth generate failed (${status})")
 endif()
 execute_process(
-  COMMAND "${DORQ}" "${OUT}/bars.csv" --isolated --exit-zero --format csv --threads 4
+  COMMAND "${DORQ}" "${OUT}/bars.csv" "${OUT}/points.csv" --config "${CONFIG}" --exit-zero
+          --format csv --threads 4
   OUTPUT_FILE "${OUT}/results.csv"
   RESULT_VARIABLE status)
 if(NOT status EQUAL 0)

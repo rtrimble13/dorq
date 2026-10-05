@@ -10,6 +10,8 @@
 #include "checks/coverage.hpp"
 #include "checks/integrity.hpp"
 #include "checks/price.hpp"
+#include "checks/stale.hpp"
+#include "checks/volume.hpp"
 #include "core/text.hpp"
 
 namespace dorq {
@@ -55,6 +57,7 @@ std::span<const Check* const> all_checks() {
   static const PrecisionShift kPrecisionShift;
   static const NonSessionBar kNonSession;
   static const ZeroRangeWithVolume kZeroRange;
+  static const OutOfBounds kOutOfBounds;
   static const PriceCheck kBadPrint(bad_print_info());
   static const PriceCheck kScaleShift(scale_shift_info());
   static const PriceCheck kUnreportedSplit(unreported_split_info());
@@ -67,11 +70,17 @@ std::span<const Check* const> all_checks() {
   static const CohortGap kCohort;
   static const StaleFeed kStale;
   static const FrequencyGap kFrequencyGap;
-  static const std::array<const Check*, 19> kChecks = {
-      &kOhlcBounds,     &kNonPositive,    &kDuplicateDate, &kMissingField, &kNonSession,
-      &kPrecisionShift, &kZeroRange,      &kBadPrint,      &kScaleShift,   &kUnreportedSplit,
-      &kCloseMismatch,  &kHistorySegment, &kDateShift,     &kLargeMove,    &kMissingRun,
-      &kSparse,         &kCohort,         &kStale,         &kFrequencyGap};
+  static const VolumeScaleShift kVolumeShift;
+  static const VolumeSpikeNoMove kVolumeSpike;
+  static const MoveOnZeroVolume kZeroVolumeMove;
+  static const RepeatedPrice kRepeatedPrice;
+  static const CarryBar kCarryBar;
+  static const std::array<const Check*, 25> kChecks = {
+      &kOhlcBounds,      &kNonPositive,   &kDuplicateDate,  &kMissingField,  &kNonSession,
+      &kPrecisionShift,  &kZeroRange,     &kOutOfBounds,    &kBadPrint,      &kScaleShift,
+      &kUnreportedSplit, &kCloseMismatch, &kHistorySegment, &kDateShift,     &kLargeMove,
+      &kMissingRun,      &kSparse,        &kCohort,         &kStale,         &kFrequencyGap,
+      &kVolumeShift,     &kVolumeSpike,   &kZeroVolumeMove, &kRepeatedPrice, &kCarryBar};
   return kChecks;
 }
 

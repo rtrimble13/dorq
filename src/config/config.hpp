@@ -21,6 +21,13 @@ enum class OutputFormat : std::uint8_t { kText, kJson, kJsonl, kCsv, kFafnir };
 [[nodiscard]] std::optional<OutputFormat> parse_output_format(std::string_view text) noexcept;
 [[nodiscard]] std::string_view to_string(OutputFormat format) noexcept;
 
+// The range a series' values must lie in (DQ108), inclusive.
+struct Bounds {
+  double low = 0.0;
+  double high = 0.0;
+  auto operator<=>(const Bounds&) const = default;
+};
+
 // Settings for the DQ1xx checks.
 struct IntegritySettings {
   // DQ102 on point series. Off by default: rates and spreads can be negative.
@@ -34,6 +41,9 @@ struct IntegritySettings {
   // DQ107: a flat bar is expected where the bars nearby usually span this many
   // steps of the price grid or fewer (see doc/checks/DQ107.md).
   double flat_bar_steps = 3.0;
+  // DQ108: the range a value (a point series' value, a bar's close) must lie in;
+  // none by default. A profile sets it, e.g. [-5, 25] for a 10-year yield.
+  std::optional<Bounds> bounds = std::nullopt;
 };
 
 // A partial IntegritySettings: what one config table sets.
@@ -44,6 +54,7 @@ struct IntegrityPatch {
   std::optional<int> precision_min_segment;
   std::optional<double> precision_min_contrast;
   std::optional<double> flat_bar_steps;
+  std::optional<Bounds> bounds;
 
   void apply_to(IntegritySettings& settings) const;
 };
@@ -90,6 +101,15 @@ struct SplitRatio {
 
 [[nodiscard]] std::optional<SplitRatio> parse_split_ratio(std::string_view text) noexcept;
 
+// How a point series' values become the scale its moves are judged on: the log
+// (moves are ratios; every value must be positive) or the difference (moves are
+// changes; rates and spreads that cross zero). `auto` takes the log when every
+// value is positive. Bars (OHLCV) are always on the log scale.
+enum class Transform : std::uint8_t { kAuto, kLog, kDiff };
+
+[[nodiscard]] std::optional<Transform> parse_transform(std::string_view text) noexcept;
+[[nodiscard]] std::string_view to_string(Transform transform) noexcept;
+
 // The hypotheses' prior weights per candidate bar (plan section 4.3), normalized
 // over the hypotheses that apply to it. `dorq calibrate` (M6) will fit them.
 struct PricePriors {
@@ -100,6 +120,9 @@ struct PricePriors {
   double scale_error = 0.02;
   double tick_move = 0.01;
   double history_segment = 0.05;  // only after a gap of segment_gap sessions
+  // DQ501: the prior chance that a run of repeated closes starting at a bar is a
+  // stale feed rather than an unchanged price (per bar, not normalized with the rest).
+  double stale_run = 3e-5;
 };
 
 // Settings for the price action checks (DQ2xx); doc/checks/DQ201.md explains the
@@ -122,6 +145,7 @@ struct PriceSettings {
   double jump_scale = 6.0;            // a jump's scale, in ordinary returns
   double min_price = 1e-5;            // prices outside [min, max] are implausible
   double max_price = 1e6;
+  Transform transform = Transform::kAuto;  // point series only
   PricePriors priors;
 };
 
@@ -141,6 +165,7 @@ struct PricePatch {
   std::optional<double> jump_scale;
   std::optional<double> min_price;
   std::optional<double> max_price;
+  std::optional<Transform> transform;
   // [priors]
   std::optional<double> market_move;
   std::optional<double> bad_print;
@@ -149,6 +174,7 @@ struct PricePatch {
   std::optional<double> scale_error;
   std::optional<double> tick_move;
   std::optional<double> history_segment;
+  std::optional<double> stale_run;
 
   void apply_to(PriceSettings& settings) const;
 };

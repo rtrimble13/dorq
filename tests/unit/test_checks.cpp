@@ -198,7 +198,7 @@ TEST_CASE("DQ101 reports every failing relation, and skips incomplete bars") {
   CHECK(found[1].p_error == 1.0);
 }
 
-TEST_CASE("DQ102: prices at or below zero, negative volume; point series only on request") {
+TEST_CASE("DQ102: prices at or below zero, negative volume, and point series only on request") {
   const auto ohlcv = one_series(bars({"2024-01-02,0,1,0,1,0", "2024-01-03,1,1,1,1,-5"}));
   const auto found = run_check(dorq::NonPositive{}, ohlcv);
   REQUIRE(found.size() == 2);

@@ -53,13 +53,14 @@ series = "security_id"
 label = "symbol"
 value = "DGS10"        # a point series' value ("close" means the same)
 
-[integrity]            # see doc/checks/DQ102.md and DQ106.md
+[integrity]            # see doc/checks/DQ102.md, DQ106.md, DQ107.md and DQ108.md
 positive_point_series = false
 precision_high_decimals = 5
 precision_high_sig_figs = 5
 precision_min_segment = 20
 precision_min_contrast = 0.8
 flat_bar_steps = 3    # DQ107: flat bars are ordinary where bars span this many grid steps
+# bounds = [-5, 25]   # DQ108: the range values must lie in; none by default
 
 [coverage]            # DQ3xx; see doc/checks/DQ301.md for the model
 frequency = "auto"    # or daily, weekly, monthly, quarterly, annual, irregular
@@ -93,6 +94,7 @@ jump_prob = 0.03
 jump_scale = 6
 min_price = 1e-05     # prices outside [min_price, max_price] are implausible
 max_price = 1000000
+transform = "auto"    # point series: "log", "diff" (rates, spreads) or "auto" (log if all > 0)
 
 [priors]              # each explanation's prior weight for a scored bar
 market_move = 0.9
@@ -102,6 +104,7 @@ unreported_split = 0.02
 scale_error = 0.02
 tick_move = 0.01
 history_segment = 0.05
+stale_run = 3e-05     # DQ501: a run of repeated closes being a stale feed, per bar
 
 [severity]            # p_error -> severity, for the probabilistic checks
 info = 0.2            # below this, nothing is reported
@@ -129,6 +132,8 @@ no `match` table applies to every series.
 [profiles.rates]
 match = { kind = "point" }
 ignore = ["DQ106"]
+price = { transform = "diff" }           # moves are changes: rates cross zero
+integrity = { bounds = [-5, 25] }        # a yield in percent (DQ108)
 
 [profiles.nav_funds]
 match = { series = ["VFIAX", "TDEAX"] }

@@ -1,7 +1,8 @@
 # Plan: dorq, a Bayesian data-quality linter for financial time series
 
 - Status: **accepted** (2026-10-05). The defaults in §10 are confirmed, and Q9 is answered. M0 is done
-  (PR #1), M1 is done (PR #2), M2 is done (PR #3), and M3 is implemented and awaiting merge.
+  (PR #1), M1 is done (PR #2), M2 is done (PR #3), M3 is done (PR #4), and M4 is implemented and
+  awaiting merge.
 - Scope: this repository (the C++ CLI), plus one milestone of integration work in `rtrimble13/fafnir` (M7).
 - Status legend: ⬜ planned · 🔄 in progress · ✅ done (PR #) · ⏭ carried over · ✖ dropped (reason)
 
@@ -420,10 +421,30 @@ against a carry-forward hypothesis with a small prior. Where volatility is high 
 three unchanged prints on heavy volume are very unlikely, so they are reported. For a thin sub-dime
 stock they are expected, so they are not.
 
+**As built in M4** (doc/checks/DQ501.md is the reference): `q` is the larger of
+the model's chance and the series' own repeat rate nearby (counted as a chain:
+repeats after a move, repeats after a repeat), so a stock whose repeats come in
+stretches is judged by them. The grid includes the lattice the prices nearby sit
+on, read on each side of the run. Prices 20 grid steps wide or fewer are not
+judged. The prior is `stale_run` = 3 × 10⁻⁵ per bar: at 10⁻⁴, chance runs across
+a universe of 300,000 bars outnumbered the stale feeds. Whole-bar repeats are
+reported, but not used as evidence, because a quiet low-priced stock repeats its
+open, high and low with its close.
+
 ### 4.5 Volume (DQ401–DQ403)
 
 `log(1 + v)` is modelled with a robust local level (Hampel) and a discounted NIG scale. DQ401 applies
 the same clean-ratio mixture as DQ203 to a level shift in volume that has **no** matching price shift.
+
+**As built in M4** (doc/checks/DQ401.md): the level step is the difference of
+40-bar medians of log volume. Its uncertainty uses an effective sample size that
+allows for autocorrelation. Volume runs in spells, and without that, ×165 read as
+too far from ×100. A natural shift is Student t (scale 0.5) against the
+clean-ratio mixture (prior 5%). Steps that a price finding or an inverse price
+level explains are left to DQ2xx. Two opposite steps at the same clean ratio
+form one era. DQ402 is info: a spike of ×10 or more on a quiet day, classified
+as an error only on a clean ratio. DQ403 weighs one zero-volume move against
+the series' own rate of them.
 
 ### 4.6 Point series
 
@@ -431,6 +452,15 @@ The same machinery applies to `value` with the configured transform. Point-speci
 configured `bounds` (e.g. a 10-year yield in [−5, 25]); unit-shift ratios {100, 1000, 10⁶} in the
 `scale_error` prior, to catch percentages stored as decimals or thousands stored as millions; and a
 frequency model for DQ305.
+
+**As built in M4** (doc/checks/DQ201.md, "Point series"): `[price] transform`
+picks the scale. `diff` puts moves on the value itself; `auto` takes the log
+when every value is positive. On the value scale a wrong value's jump scales with
+the series' magnitude, and a unit shift multiplies (`f(v/k − prev)/k`). Only
+ratios of 100 or more apply, and the size of the moves either side is evidence:
+a unit change scales them too. Without that term, a rate falling a quarter point
+to zero looked like the end of a ×100 era. `bounds` drives both DQ108 and the
+model's plausibility term.
 
 ---
 
@@ -718,14 +748,14 @@ date, DQ303 fires once, thin names produce no DQ301, and a single missing day on
 ### M3: The price action model (v0.3.0), the core milestone
 | ID | Item | Size | Status |
 |---|---|---|---|
-| DR-0301 | `stats/student_t` (dorq's own, over M2's incomplete beta; not Boost.Math), `stats/nig` (discounted Normal-Inverse-Gamma), `stats/robust` (median, MAD), tick size by era and price plus the grid prices are written on | M | 🔄 awaiting merge |
-| DR-0302 | Shared feature pass (§4.1): bars without carry bars, session-scaled returns, forward and backward volatility; the class prior combined with the series' own scale (within the series, not a cross-series pre-pass; see §4.1) | L | 🔄 awaiting merge |
-| DR-0303 | Candidate screening: tail probability, the 50% floor, long gaps, a close outside a range that holds the open | S | 🔄 awaiting merge |
-| DR-0304 | Hypothesis scoring: market_move, tick_move, bad_print (k ≤ K), bad_close, history_segment; evidence terms with log Bayes factors | L | 🔄 awaiting merge |
-| DR-0305 | The clean-ratio mixture (weighted by frequency and by price level), unreported_split vs scale_error by the volume shift, plausible price levels | L | 🔄 awaiting merge |
-| DR-0306 | DQ201–DQ205, DQ209; provisional handling of the newest bars; `suggested_action`; scale eras reported once | M | 🔄 awaiting merge |
-| DR-0307 | `--show-evidence` in text; `hypotheses`, `evidence`, `suggested_action` and `provisional` on every JSON record | S | 🔄 awaiting merge |
-| DR-0308 | `dorq-synth` v1 (faults used by M2 and M3, and hard negatives) and a CTest gate on precision and recall per check (`tools/synth/gates.txt`, seeds 1 and 2) | L | 🔄 awaiting merge |
+| DR-0301 | `stats/student_t` (dorq's own, over M2's incomplete beta; not Boost.Math), `stats/nig` (discounted Normal-Inverse-Gamma), `stats/robust` (median, MAD), tick size by era and price plus the grid prices are written on | M | ✅ PR #4 |
+| DR-0302 | Shared feature pass (§4.1): bars without carry bars, session-scaled returns, forward and backward volatility; the class prior combined with the series' own scale (within the series, not a cross-series pre-pass; see §4.1) | L | ✅ PR #4 |
+| DR-0303 | Candidate screening: tail probability, the 50% floor, long gaps, a close outside a range that holds the open | S | ✅ PR #4 |
+| DR-0304 | Hypothesis scoring: market_move, tick_move, bad_print (k ≤ K), bad_close, history_segment; evidence terms with log Bayes factors | L | ✅ PR #4 |
+| DR-0305 | The clean-ratio mixture (weighted by frequency and by price level), unreported_split vs scale_error by the volume shift, plausible price levels | L | ✅ PR #4 |
+| DR-0306 | DQ201–DQ205, DQ209; provisional handling of the newest bars; `suggested_action`; scale eras reported once | M | ✅ PR #4 |
+| DR-0307 | `--show-evidence` in text; `hypotheses`, `evidence`, `suggested_action` and `provisional` on every JSON record | S | ✅ PR #4 |
+| DR-0308 | `dorq-synth` v1 (faults used by M2 and M3, and hard negatives) and a CTest gate on precision and recall per check (`tools/synth/gates.txt`, seeds 1 and 2) | L | ✅ PR #4 |
 
 **Done when:** on `dorq-synth` data, DQ201 and DQ203 each reach precision ≥ 0.9 at `warn`, and the
 hard-negative set (earnings gaps, crash days, tick moves) produces no `warn`.
@@ -746,9 +776,19 @@ copied-close bar is still found (doc/checks/DQ107.md).
 ### M4: Volume, stale values, point series (v0.4.0)
 | ID | Item | Size | Status |
 |---|---|---|---|
-| DR-0401 | DQ401–DQ403 | M | ⬜ |
-| DR-0402 | DQ501 repeated-price, DQ502 carry-bar | M | ⬜ |
-| DR-0403 | Point series: transforms (log, diff, auto), bounds, unit-shift ratios, a `rates` example profile | M | ⬜ |
+| DR-0401 | DQ401–DQ403 | M | 🔄 awaiting merge |
+| DR-0402 | DQ501 repeated-price, DQ502 carry-bar | M | 🔄 awaiting merge |
+| DR-0403 | Point series: transforms (log, diff, auto), bounds (DQ108), unit-shift ratios, a `rates` example profile | M | 🔄 awaiting merge |
+
+**Result:** dorq-synth gained volume-unit eras, moves on zero volume, stale-feed
+runs, and eight rate series (`points.csv`, read with the `rates` profile in
+`tools/synth/dorq.toml`) with a ×100 print, a ×0.01 era, an out-of-bounds value,
+and quarter-point policy moves near zero as hard negatives. On seeds 1–6, DQ108,
+DQ403 and the rates' DQ201/DQ202 are at precision and recall 1.0. DQ401 has
+precision 1.0 and recall 0.83–1.0. DQ501 has precision 0.83–1.0 and recall
+0.63–1.0: its misses are two-repeat runs, which a quiet stock prints now and
+then. A rate's quarter-point move that half-reverts the next day is reported on
+at most one series a universe, and the gate allows one.
 
 ### M5: Context inputs (v0.5.0)
 | ID | Item | Size | Status |

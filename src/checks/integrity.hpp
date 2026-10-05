@@ -51,4 +51,11 @@ class ZeroRangeWithVolume final : public Check {
   void run(const SeriesContext& context, std::vector<Violation>& out) const override;
 };
 
+// DQ108
+class OutOfBounds final : public Check {
+ public:
+  [[nodiscard]] const CheckInfo& info() const noexcept override;
+  void run(const SeriesContext& context, std::vector<Violation>& out) const override;
+};
+
 }  // namespace dorq

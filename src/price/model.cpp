@@ -29,9 +29,6 @@ constexpr double kNegInf = -std::numeric_limits<double>::infinity();
 
 constexpr std::size_t idx(H h) noexcept { return static_cast<std::size_t>(h); }
 
-// The size of an error's jump, on the log scale: anything from a few percent to
-// orders of magnitude (a Cauchy distribution with scale 0.3).
-constexpr double kErrorJumpScale = 0.3;
 // Log ratio between two unrelated securities' prices, for a history segment.
 constexpr double kSegmentSpread = 1.2;
 // Fewest bars a window needs to say anything about a volume or precision level.
@@ -41,6 +38,12 @@ constexpr double kRangeNoise = 1e-3;
 // The weight a scale error puts on ratios that are no power of ten; the
 // plausible_level term carries the case for those (AKR's 149,613,176).
 constexpr double kScaleBroad = 0.001;
+// The log ratio of two windows' typical move sizes, when the units do not change:
+// a robust spread, wide enough for a change of volatility regime.
+constexpr double kNoiseSpread = 0.7;
+double noise_ll(double log_ratio) noexcept {
+  return stats::student_t_log_pdf(log_ratio, 4.0, kNoiseSpread);
+}
 // A bad print's block of k bars has prior weight proportional to this to the k.
 constexpr double kBlockDecay = 0.5;
 // Volume on the day of a real large move, against the usual: about e times.
@@ -152,12 +155,14 @@ struct VolumeWindow {
 
 class Scorer {
  public:
-  Scorer(const Series& series, const PriceFeatures& f, const PriceSettings& settings)
+  Scorer(const Series& series, const PriceFeatures& f, const PriceSettings& settings,
+         std::optional<Bounds> bounds)
       : series_(series),
         f_(f),
         settings_(settings),
         n_(f.size()),
-        has_ohlc_(series.kind == SeriesKind::kOhlcv) {
+        has_ohlc_(series.kind == SeriesKind::kOhlcv),
+        bounds_(bounds) {
     const double nu = settings.tail_dof;
     t_scale_ = nu > 2.0 ? std::sqrt((nu - 2.0) / nu) : 1.0;
     double total = 0.0;
@@ -192,6 +197,9 @@ class Scorer {
   // coarser grid the prices are written on (a sub-dime stock quoted in cents
   // moves a cent at a time).
   [[nodiscard]] double price_grid(std::size_t a, std::size_t b) const {
+    if (!has_ohlc_) {  // the exchange's tick is a fact about equities
+      return written_grid_;
+    }
     return std::max(tick_size(date(b), std::min(close(a), close(b))), written_grid_);
   }
 
@@ -203,7 +211,10 @@ class Scorer {
     for (std::size_t i = a + 1; i <= b; ++i) {
       sessions += f_.elapsed[i];
     }
-    const double bounce = kBounce * price_grid(a, b) / std::min(close(a), close(b));
+    // On the log scale a grid step is a share of the price; on the value scale it
+    // is the step itself.
+    const double bounce = f_.log_scale ? kBounce * price_grid(a, b) / std::min(close(a), close(b))
+                                       : kBounce * price_grid(a, b);
     return std::hypot(sig * std::sqrt(static_cast<double>(sessions)), bounce);
   }
 
@@ -258,16 +269,54 @@ class Scorer {
     return values.empty() ? 0.0 : stats::median(values);
   }
 
+  // The typical size of a move over bars [from, to), on a point series' value
+  // scale: the median absolute change, else the mean, else half the grid (a run
+  // of unchanged values); 0 when fewer than kMinSpread moves.
+  [[nodiscard]] double local_spread(std::size_t from, std::size_t to) const {
+    constexpr std::size_t kMinSpread = 3;
+    const std::size_t first = std::max<std::size_t>(from, 1);
+    const std::size_t last = std::min(to, n_);
+    if (last < first + kMinSpread) {
+      return 0.0;
+    }
+    std::vector<double> moves(last - first);
+    double sum = 0.0;
+    for (std::size_t i = first; i < last; ++i) {
+      moves[i - first] = std::fabs(f_.ret[i]);
+      sum += moves[i - first];
+    }
+    const auto count = static_cast<double>(moves.size());
+    double spread = stats::median(std::move(moves));
+    if (spread <= 0.0) {
+      spread = sum / count;
+    }
+    return spread > 0.0 ? spread : 0.5 * price_grid(first, last - 1);
+  }
+
+  // A price no security trades at, or a point series' value outside its bounds.
   [[nodiscard]] bool plausible(double price) const {
+    if (!has_ohlc_) {
+      return !bounds_ || (price >= bounds_->low && price <= bounds_->high);
+    }
     return price >= settings_.min_price && price <= settings_.max_price;
   }
 
   [[nodiscard]] PriceFinding score(std::size_t t) const;
+  [[nodiscard]] std::vector<StaleRun> stale_runs() const;
+  [[nodiscard]] std::vector<double> move_z() const {
+    std::vector<double> z(n_, 0.0);
+    for (std::size_t t = 1; t < n_; ++t) {
+      z[t] = f_.ret[t] / move_sd(sigma(t, 0), t - 1, t);
+    }
+    return z;
+  }
 
   [[nodiscard]] bool screened(std::size_t t) const {
     const double r = f_.ret[t];
     const int elapsed = f_.elapsed[t];
-    if (std::fabs(r) > std::log1p(settings_.floor_move) || elapsed >= settings_.segment_gap) {
+    // The 50% floor is a rule about prices; a rate's 0.05 to 0.08 is not news.
+    const bool floor = f_.log_scale && std::fabs(r) > std::log1p(settings_.floor_move);
+    if (floor || elapsed >= settings_.segment_gap) {
       return true;
     }
     if (has_ohlc_ && close_outside_range(t)) {
@@ -306,6 +355,7 @@ class Scorer {
   const PriceSettings& settings_;
   std::size_t n_;
   bool has_ohlc_ = false;
+  std::optional<Bounds> bounds_;  // a point series' plausible range
   double t_scale_ = 1.0;
   double written_grid_ = 0.0;  // 10^-d for the decimals most prices are written with
   std::vector<std::pair<SplitRatio, double>> splits_;
@@ -381,16 +431,48 @@ double Scorer::split_ll(const Candidate& c, PriceFinding& out) const {
   return total;
 }
 
-// A scale error shifts the level by a power of ten. Sets the nearest power.
+// A scale error shifts the level by a power of ten. Sets the nearest power. On the
+// log scale the shift adds; on the value scale it multiplies: a value stored k
+// times too large has density f(v / k - previous) / k, and the first value back
+// at the right scale after such an era has f(v - previous / k).
 double Scorer::scale_ll(const Candidate& c, PriceFinding& out) const {
-  const double sd = std::hypot(c.base_sd, settings_.ratio_tolerance);
-  double total = std::log(kScaleBroad) + log_cauchy(c.r, kErrorJumpScale);
+  const double slack = settings_.ratio_tolerance * (f_.log_scale ? 1.0 : f_.level);
+  const double sd = std::hypot(c.base_sd, slack);
+  double total = std::log(kScaleBroad) + log_cauchy(c.r, f_.error_scale);
   double best = kNegInf;
+  // On the value scale a change of units changes the size of the moves too: the
+  // log ratio of the moves' size before the bar to after it. A rate that falls by
+  // a quarter point to zero lands near a hundredth of where it was, but its moves
+  // are as large as before.
+  std::optional<double> noise;
+  if (!f_.log_scale) {
+    constexpr std::size_t kNoiseBars = 10;
+    const double before = local_spread(c.t > kNoiseBars ? c.t - kNoiseBars : 1, c.t);
+    const double after = local_spread(c.t + 1, c.t + 1 + kNoiseBars);
+    if (before > 0.0 && after > 0.0) {
+      noise = std::log(before / after);
+    }
+  }
   for (std::size_t k = 0; k < kPowerWeights.size(); ++k) {
     for (const int sign : {-1, 1}) {
       const double power = sign * static_cast<double>(k + 1);
-      const double ll = std::log((1.0 - kScaleBroad) * kPowerWeights.at(k) / 2.0) +
-                        ordinary(c.r - power * std::numbers::ln10, sd);
+      const double weight = std::log((1.0 - kScaleBroad) * kPowerWeights.at(k) / 2.0);
+      double ll = weight + ordinary(c.r - power * std::numbers::ln10, sd);
+      if (!f_.log_scale && std::fabs(power) < 2.0) {
+        continue;  // a point series' units shift by 100, 1000, 10^4 or 10^6, not 10
+      }
+      if (!f_.log_scale) {
+        const double factor = std::pow(10.0, power);
+        double starts = ordinary(c.this_close / factor - c.prev_close, sd) - std::log(factor);
+        double ends = ordinary(c.this_close - c.prev_close / factor, sd);
+        if (noise) {
+          // Values stored `factor` times too large move `factor` times as much.
+          const double shift = power * std::numbers::ln10;
+          starts += noise_ll(*noise + shift) - noise_ll(*noise);
+          ends += noise_ll(*noise - shift) - noise_ll(*noise);
+        }
+        ll = weight + std::log(0.5) + stats::log_add(starts, ends);
+      }
       total = stats::log_add(total, ll);
       if (ll > best) {
         best = ll;
@@ -405,12 +487,14 @@ double Scorer::scale_ll(const Candidate& c, PriceFinding& out) const {
 Term Scorer::return_term(const Candidate& c, PriceFinding& out) const {
   Term term{"return", out.factor, {}, {}};
   at(term, H::kMarketMove) = ordinary(c.r, c.base_sd);
-  at(term, H::kTickMove) = std::log(c.this_close) - std::log(4.0 * c.grid);
-  at(term, H::kBadPrint) = log_cauchy(c.r, kErrorJumpScale);
-  at(term, H::kBadClose) = log_cauchy(c.r, kErrorJumpScale);
+  // A tick's density: uniform over two steps either way, in r's units.
+  at(term, H::kTickMove) = (f_.log_scale ? std::log(c.this_close) : 0.0) - std::log(4.0 * c.grid);
+  at(term, H::kBadPrint) = log_cauchy(c.r, f_.error_scale);
+  at(term, H::kBadClose) = log_cauchy(c.r, f_.error_scale);
   at(term, H::kUnreportedSplit) = split_ll(c, out);
   at(term, H::kScaleError) = scale_ll(c, out);
-  at(term, H::kHistorySegment) = log_normal_pdf(c.r, 0.0, std::hypot(kSegmentSpread, c.base_sd));
+  const double spread = kSegmentSpread * (f_.log_scale ? 1.0 : f_.level);
+  at(term, H::kHistorySegment) = log_normal_pdf(c.r, 0.0, std::hypot(spread, c.base_sd));
   if (out.split) {
     term.note = "nearest split " + out.split->to_string();
   }
@@ -601,13 +685,15 @@ std::optional<Term> Scorer::precision_term(const Candidate& c) const {
 
 // A history segment: a listing price, and a new volatility regime.
 void Scorer::segment_terms(const Candidate& c, std::vector<Term>& terms) const {
-  const bool round = std::any_of(kListingPrices.begin(), kListingPrices.end(), [&](double p) {
-    return std::fabs(c.this_close / p - 1.0) <= 0.0025;
-  });
-  Term listing =
-      uniform_term("listing_price", c.this_close, round ? std::log(0.01) : std::log(0.99));
-  at(listing, H::kHistorySegment) = round ? std::log(0.3) : std::log(0.7);
-  terms.push_back(std::move(listing));
+  if (has_ohlc_) {  // listing prices are a fact about securities
+    const bool round = std::any_of(kListingPrices.begin(), kListingPrices.end(), [&](double p) {
+      return std::fabs(c.this_close / p - 1.0) <= 0.0025;
+    });
+    Term listing =
+        uniform_term("listing_price", c.this_close, round ? std::log(0.01) : std::log(0.99));
+    at(listing, H::kHistorySegment) = round ? std::log(0.3) : std::log(0.7);
+    terms.push_back(std::move(listing));
+  }
 
   const double shift = 0.5 * std::log(f_.backward[c.t].variance() / f_.forward[c.t].variance());
   Term vol = uniform_term("volatility_shift", std::exp(shift), log_normal_pdf(shift, 0.0, 0.35));
@@ -718,7 +804,7 @@ void pair_scale_eras(std::vector<PriceFinding>& findings, const PriceSettings& s
       const PriceFinding& b = findings[i + 1];
       const double tolerance = std::max(0.1, 3.0 * settings.ratio_tolerance);
       if (b.hypothesis == H::kScaleError && a.p_error >= 0.5 && b.p_error >= 0.5 &&
-          std::fabs(std::log(a.factor) + std::log(b.factor)) < tolerance) {
+          std::fabs(std::log(std::fabs(a.factor)) + std::log(std::fabs(b.factor))) < tolerance) {
         a.end_bar = b.bar - 1;
         a.p_error = std::max(a.p_error, b.p_error);
         a.provisional = false;
@@ -754,8 +840,107 @@ std::string_view to_string(PriceHypothesis hypothesis) noexcept {
   return "market_move";
 }
 
+// Runs of traded bars whose close repeats the bar before (DQ501). Each repeat is a
+// coincidence of probability q under a healthy feed: the move from the previous
+// close is smaller than half a step of the price grid. q comes from the series'
+// own volatility outside the run, with the bid-ask bounce, so on a coarse grid a
+// repeat is expected and on a liquid name it is not. A repeat of the whole bar
+// (open, high, low and close) counts as two coincidences.
+std::vector<StaleRun> Scorer::stale_runs() const {
+  std::vector<StaleRun> runs;
+  if (!has_ohlc_ || !series_.has_volume) {
+    return runs;
+  }
+  constexpr std::size_t kNearby = 40;    // bars either side that show how sticky prices are
+  constexpr double kCoarseSteps = 20.0;  // a price this many grid steps wide, or fewer, is coarse
+  const auto traded = [this](std::size_t i) {
+    const double v = volume(i);
+    return std::isfinite(v) && v > 0.0;
+  };
+  const auto repeats = [&](std::size_t i) { return close(i) == close(i - 1) && traded(i); };
+  const auto whole = [this](std::size_t i) {
+    const std::size_t row = f_.row[i];
+    const std::size_t prev = f_.row[i - 1];
+    return series_.open[row] == series_.open[prev] && series_.high[row] == series_.high[prev] &&
+           series_.low[row] == series_.low[prev];
+  };
+  const double prior = settings_.priors.stale_run;
+  for (std::size_t i = 1; i < n_;) {
+    if (!repeats(i)) {
+      ++i;
+      continue;
+    }
+    StaleRun run;
+    run.first = i;
+    run.last = i;
+    while (run.last + 1 < n_ && repeats(run.last + 1)) {
+      ++run.last;
+    }
+    // How often prices repeat nearby, the run left out: a stock whose moves are
+    // smaller than half a tick repeats its close day after day, and repeats come
+    // in stretches. Counted as a chain: repeats after a move, and repeats after a
+    // repeat.
+    const std::size_t from = run.first > kNearby ? run.first - kNearby : 2;
+    const std::size_t to = std::min(n_, run.last + 1 + kNearby);
+    double after_move = 0.0;
+    double repeat_after_move = 0.0;
+    double after_repeat = 0.0;
+    double repeat_after_repeat = 0.0;
+    for (std::size_t j = std::max<std::size_t>(from, 2); j < to; ++j) {
+      if ((j >= run.first && j <= run.last + 1) || !traded(j)) {
+        continue;
+      }
+      const bool was = close(j - 1) == close(j - 2);
+      const bool is = close(j) == close(j - 1);
+      (was ? after_repeat : after_move) += 1.0;
+      (was ? repeat_after_repeat : repeat_after_move) += is ? 1.0 : 0.0;
+    }
+    // The grid, with the lattice the prices nearby sit on. A price only a few steps
+    // of it wide (a sub-dime stock in cents, an eighth-dollar stock in sixteenths)
+    // seldom moves a whole step: runs are how it trades. The lattice is read on
+    // each side of the run, the coarser kept: a stock quoted on a coarse grid for a
+    // spell sits next to bars on a fine one.
+    constexpr std::size_t kLattice = 20;  // bars either side that show the lattice
+    const std::size_t before = run.first > kLattice ? run.first - kLattice : 0;
+    const std::size_t after = std::min(n_, run.last + 1 + kLattice);
+    const double lattice =
+        std::max(observed_step(series_, f_.row[before], f_.row[run.last] + 1),
+                 observed_step(series_, f_.row[run.first - 1], f_.row[after - 1] + 1));
+    const double grid = std::max(price_grid(run.first - 1, run.first), lattice);
+    if (close(run.first) <= kCoarseSteps * grid) {
+      i = run.last + 1;
+      continue;
+    }
+    // Volatility from either side of the run, the run's own zeros left out.
+    const double sig =
+        std::sqrt(stats::combine(f_.forward[run.first], f_.backward[run.last]).variance());
+    constexpr double kWeight = 10.0;  // the model's q counts as this many bars
+    for (std::size_t j = run.first; j <= run.last; ++j) {
+      // The true price's move, without the bid-ask bounce: a close stays put while
+      // the price moves less than half a step, whichever side the last trade hit.
+      const double sd = sig * std::sqrt(static_cast<double>(f_.elapsed[j]));
+      const double half_step = 0.5 * std::max(price_grid(j - 1, j), lattice);
+      const double h = f_.log_scale ? std::log1p(half_step / close(j - 1)) : half_step;
+      const double model = std::clamp(1.0 - tail(h, sd), 1e-300, 1.0);
+      // The model's chance of a repeat, or the series' own nearby if higher.
+      const bool first = j == run.first;
+      const double seen = first
+                              ? (repeat_after_move + kWeight * model) / (after_move + kWeight)
+                              : (repeat_after_repeat + kWeight * model) / (after_repeat + kWeight);
+      run.log_q += std::log(std::max(model, seen));
+      run.full_bars += whole(j) ? 1 : 0;
+    }
+    const double stale = std::log(prior);
+    const double healthy = std::log1p(-prior) + run.log_q;
+    run.p_error = std::exp(stale - stats::log_add(stale, healthy));
+    runs.push_back(run);
+    i = run.last + 1;
+  }
+  return runs;
+}
+
 PriceAnalysis analyze_prices(const Series& series, const Calendar& calendar,
-                             const PriceSettings& settings) {
+                             const PriceSettings& settings, std::optional<Bounds> bounds) {
   PriceAnalysis out;
   out.features = compute_price_features(series, calendar, settings);
   const std::size_t n = out.features.size();
@@ -763,7 +948,7 @@ PriceAnalysis analyze_prices(const Series& series, const Calendar& calendar,
     return out;
   }
   out.applicable = true;
-  const Scorer scorer(series, out.features, settings);
+  const Scorer scorer(series, out.features, settings, bounds);
   std::size_t skip_through = 0;  // returns explained by an earlier bad print
   for (std::size_t t = 1; t < n; ++t) {
     if (t <= skip_through || !scorer.screened(t)) {
@@ -780,6 +965,8 @@ PriceAnalysis analyze_prices(const Series& series, const Calendar& calendar,
     out.findings.push_back(std::move(finding));
   }
   pair_scale_eras(out.findings, settings);
+  out.stale_runs = scorer.stale_runs();
+  out.move_z = scorer.move_z();
   return out;
 }
 

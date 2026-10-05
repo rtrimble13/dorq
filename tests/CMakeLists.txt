@@ -11,7 +11,8 @@ add_executable(
   unit/test_checks.cpp
   unit/test_config.cpp
   unit/test_coverage.cpp
-  unit/test_price.cpp)
+  unit/test_price.cpp
+  unit/test_volume_stale.cpp)
 target_include_directories(dorq_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(dorq_tests PRIVATE dorq_lib doctest::doctest_with_main)
 dorq_configure_target(dorq_tests)
@@ -56,6 +57,7 @@ foreach(seed 1 2)
     COMMAND
       "${CMAKE_COMMAND}" "-DSYNTH=$<TARGET_FILE:dorq-synth>" "-DDORQ=$<TARGET_FILE:dorq>"
       "-DGATES=${PROJECT_SOURCE_DIR}/tools/synth/gates.txt"
+      "-DCONFIG=${PROJECT_SOURCE_DIR}/tools/synth/dorq.toml"
       "-DOUT=${CMAKE_CURRENT_BINARY_DIR}/synth-${seed}" "-DSEED=${seed}" -P
       "${CMAKE_CURRENT_SOURCE_DIR}/synth_gate.cmake")
 endforeach()

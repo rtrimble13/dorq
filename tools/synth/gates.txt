@@ -25,6 +25,9 @@ DQ205 recall 0.80
 # names, which a deterministic check reports.
 DQ107 fault_precision 0.5
 DQ107 recall 0.9
+# DQ108 on the rates (points.csv), with the bounds tools/synth/dorq.toml sets.
+DQ108 precision 1.0
+DQ108 recall 1.0
 
 # Coverage (M2).
 DQ301 precision 0.90
@@ -34,10 +37,21 @@ DQ303 recall 1.0
 DQ304 precision 1.0
 DQ304 recall 1.0
 
+# Volume and stale values (M4). DQ501 misses some short runs: two or three
+# repeats are what a quiet stock does now and then, so only longer runs are certain.
+DQ401 precision 0.90
+DQ401 recall 0.80
+DQ403 precision 0.90
+DQ403 recall 0.90
+DQ501 precision 0.80
+DQ501 recall 0.60
+
 # Hard negatives: real events that must not be reported. Earnings gaps, the crash
 # day and tick moves never; thin names' spike-and-revert trades are genuinely
-# ambiguous, and a couple are allowed.
+# ambiguous, and a couple are allowed; so is a rate's quarter-point move that
+# half-reverts the next day.
 hn_earnings max 0
 hn_crash max 0
 hn_tick max 0
 hn_thin max 2
+hn_rate max 1

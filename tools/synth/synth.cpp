@@ -1,7 +1,7 @@
 // dorq-synth: synthetic market data with labelled faults, and a scorer for dorq's
 // output against the labels. See tools/synth/README.md.
 //
-//   dorq-synth generate [--seed N] --out DIR     writes DIR/bars.csv, DIR/labels.csv
+//   dorq-synth generate [--seed N] --out DIR     writes DIR/bars.csv, points.csv, labels.csv
 //   dorq-synth score --labels F --results F [--gates F] [--verbose]
 //
 // The generator draws from its own PRNG (xoshiro256**) and its own normal and t
@@ -116,7 +116,9 @@ struct SeriesPlan {
   std::vector<Bar> bars;
 };
 
-double round_to(double value, double grid) { return std::round(value / grid) * grid; }
+double round_to(double value, double grid) {
+  return std::round(value / grid) * grid + 0.0;  // + 0.0: no "-0"
+}
 
 // A price as an exporter writes it: fixed decimals for its grid.
 std::string price_text(double price, Class cls) {
@@ -160,7 +162,7 @@ class Generator {
  public:
   explicit Generator(std::uint64_t seed) : rng_(seed), calendar_(dorq::CalendarKind::kXnys) {}
 
-  void run(std::ostream& bars, std::ostream& labels);
+  void run(std::ostream& bars, std::ostream& points, std::ostream& labels);
 
  private:
   [[nodiscard]] std::vector<Date> sessions(Date from, int count) const {
@@ -184,6 +186,10 @@ class Generator {
   void inject_segments(Pool& thin_or_mid);
   void inject_outages(Pool& liquid);
   void inject_flat_bars(Pool& liquid);
+  void inject_volume_units(Pool& liquid);
+  void inject_zero_volume_moves(Pool& liquid);
+  void inject_stale(Pool& tradable);
+  void rates(const std::vector<Date>& dates, std::ostream& points);
   void inject_failed_load(Pool& liquid);
   SeriesPlan& any(Pool& from);
   void label(const SeriesPlan& plan, std::size_t first, std::size_t last, const char* kind,
@@ -531,6 +537,130 @@ void Generator::inject_failed_load(Pool& liquid) {
   labels_.push_back({"*", date, date, "failed_load", "DQ303", ""});
 }
 
+// Volume in the wrong units, or adjusted for a split, for an era or to the end;
+// prices untouched.
+void Generator::inject_volume_units(Pool& liquid) {
+  static constexpr std::array<double, 4> kFactors = {100.0, 0.01, 1000.0, 100.0};
+  for (int done = 0; done < 6;) {
+    SeriesPlan& plan = any(liquid);
+    const bool to_end = done % 3 == 2;
+    const std::size_t t = pick_bar(plan, 80);
+    const std::size_t end = to_end ? plan.bars.size() - 1
+                                   : std::min(plan.bars.size() - 50,
+                                              t + static_cast<std::size_t>(rng_.integer(60, 200)));
+    if (!reserve(plan.id, t, end)) {
+      continue;
+    }
+    const double factor = kFactors.at(static_cast<std::size_t>(rng_.integer(0, 3)));
+    for (std::size_t i = t; i <= end; ++i) {
+      plan.bars[i].volume = std::round(plan.bars[i].volume * factor);
+    }
+    label(plan, t, end, "volume_units", "DQ401");
+    ++done;
+  }
+}
+
+// A bar that moved with its volume lost: an indicative quote, or a dropped field.
+void Generator::inject_zero_volume_moves(Pool& liquid) {
+  for (int done = 0; done < 6;) {
+    SeriesPlan& plan = any(liquid);
+    const std::size_t t = pick_bar(plan, 60);
+    Bar& bar = plan.bars[t];
+    if (!bar.present || !plan.bars[t - 1].present || bar.close == plan.bars[t - 1].close ||
+        !reserve(plan.id, t, t)) {
+      continue;
+    }
+    bar.volume = 0.0;
+    label(plan, t, t, "zero_volume_move", "DQ403");
+    ++done;
+  }
+}
+
+// A stale feed: the last close (sometimes the whole bar) repeated for two to five
+// bars, volume still arriving.
+void Generator::inject_stale(Pool& tradable) {
+  for (int done = 0; done < 8;) {
+    SeriesPlan& plan = any(tradable);
+    const std::size_t t = pick_bar(plan, 60);
+    const auto k = static_cast<std::size_t>(rng_.integer(2, 5));
+    if (!plan.bars[t - 1].present || !reserve(plan.id, t - 1, t + k)) {
+      continue;
+    }
+    const Bar source = plan.bars[t - 1];
+    const bool whole = rng_.chance(0.5);
+    for (std::size_t i = t; i < t + k; ++i) {
+      Bar& bar = plan.bars[i];
+      bar.present = true;
+      bar.close = source.close;
+      if (whole) {
+        bar.open = source.open;
+        bar.high = source.high;
+        bar.low = source.low;
+      } else {
+        bar.open =
+            std::clamp(bar.open, std::min(bar.low, source.close), std::max(bar.high, source.close));
+        bar.high = std::max(bar.high, source.close);
+        bar.low = std::min(bar.low, source.close);
+      }
+      bar.volume = bar.volume > 0.0 ? bar.volume : source.volume;
+    }
+    label(plan, t, t + k - 1, "stale_feed", "DQ501");
+    ++done;
+  }
+}
+
+// Rates: a point series per rate, mean-reverting, quoted to two decimals, with
+// policy moves of a quarter point; some hover near zero and cross it. Faults: a
+// value off by 100, an era stored as a decimal (x0.01), and a value no rate takes.
+void Generator::rates(const std::vector<Date>& dates, std::ostream& points) {
+  points << "series,date,value\n";
+  const std::size_t n = dates.size();
+  for (int r = 0; r < 8; ++r) {
+    std::ostringstream id;
+    id << "RAT0" << (r + 1);
+    const double mean = r % 3 == 0 ? 0.2 : rng_.uniform(1.0, 6.0);
+    double x = mean + rng_.normal() * 0.2;
+    std::vector<double> values(n);
+    std::size_t last_policy = 0;
+    for (std::size_t t = 0; t < n; ++t) {
+      x += 0.003 * (mean - x) + 0.03 * rng_.t4();
+      // Policy moves come at meetings, weeks apart, not days.
+      if (t >= last_policy + 30 && rng_.chance(0.004)) {
+        x += rng_.chance(0.5) ? 0.25 : -0.25;
+        last_policy = t;
+      }
+      values[t] = round_to(x, 0.01);
+    }
+    const std::string name = id.str();
+    labels_.push_back({name, dates.front(), dates.back(), "hn_rate", "", "DQ2"});
+    const auto at = static_cast<std::size_t>(rng_.integer(100, static_cast<int>(n) - 300));
+    if (r == 1 || r == 4) {
+      values[at] = round_to(values[at] * 100.0, 0.01);
+      labels_.push_back({name, dates[at], dates[at], "rate_bad_print", "DQ201", ""});
+      if (values[at] < -5.0 || values[at] > 25.0) {  // the gate's bounds (dorq.toml)
+        labels_.push_back({name, dates[at], dates[at], "rate_out_of_bounds", "DQ108", ""});
+      }
+    } else if (r == 2 || r == 5) {
+      const std::size_t end = at + static_cast<std::size_t>(rng_.integer(30, 150));
+      for (std::size_t t = at; t <= end; ++t) {
+        values[t] = round_to(values[t] * 0.01, 0.0001);
+      }
+      labels_.push_back({name, dates[at], dates[end], "rate_decimal_era", "DQ202", ""});
+    } else if (r == 3) {
+      values[at] = 999.0;
+      labels_.push_back({name, dates[at], dates[at], "rate_out_of_bounds", "DQ108", ""});
+      labels_.push_back({name, dates[at], dates[at], "rate_bad_print", "DQ201", ""});
+    }
+    for (std::size_t t = 0; t < n; ++t) {
+      std::ostringstream value;
+      value.setf(std::ios::fixed);
+      value.precision(4);
+      value << values[t];
+      points << name << ',' << dates[t].to_string() << ',' << value.str() << '\n';
+    }
+  }
+}
+
 void Generator::inject(std::vector<SeriesPlan>& universe) {
   Pool liquid;
   Pool tradable;  // liquid and mid
@@ -555,9 +685,12 @@ void Generator::inject(std::vector<SeriesPlan>& universe) {
   inject_outages(liquid);
   inject_failed_load(liquid);
   inject_flat_bars(liquid);
+  inject_volume_units(liquid);
+  inject_zero_volume_moves(liquid);
+  inject_stale(tradable);
 }
 
-void Generator::run(std::ostream& bars, std::ostream& labels) {
+void Generator::run(std::ostream& bars, std::ostream& points, std::ostream& labels) {
   const std::vector<Date> dates = sessions(Date::from_ymd(2015, 1, 2), 2000);
   const std::vector<Date> old_dates = sessions(Date::from_ymd(1998, 1, 2), 750);
   const std::size_t n = dates.size();
@@ -644,6 +777,7 @@ void Generator::run(std::ostream& bars, std::ostream& labels) {
     }
   }
   inject(universe);
+  rates(dates, points);
 
   bars << "series,date,open,high,low,close,volume\n";
   for (const SeriesPlan& plan : universe) {
@@ -1021,8 +1155,9 @@ int main(int argc, char** argv) {
       const std::uint64_t seed = std::stoull(value("--seed").value_or("1"));
       std::filesystem::create_directories(*out);
       std::ofstream bars(std::filesystem::path(*out) / "bars.csv", std::ios::binary);
+      std::ofstream points(std::filesystem::path(*out) / "points.csv", std::ios::binary);
       std::ofstream labels(std::filesystem::path(*out) / "labels.csv", std::ios::binary);
-      Generator(seed).run(bars, labels);
+      Generator(seed).run(bars, points, labels);
       return 0;
     }
     if (args[1] == "score") {

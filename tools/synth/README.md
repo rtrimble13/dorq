@@ -5,8 +5,9 @@ precision and recall against the labels (plan item DR-0308). It is built with th
 tests, and `ctest -R synth` runs the gate in [gates.txt](gates.txt) on two seeds.
 
 ```bash
-dorq-synth generate --seed 1 --out /tmp/synth          # bars.csv and labels.csv
-dorq /tmp/synth/bars.csv --isolated --exit-zero --format csv > /tmp/synth/results.csv
+dorq-synth generate --seed 1 --out /tmp/synth   # bars.csv, points.csv and labels.csv
+dorq /tmp/synth/bars.csv /tmp/synth/points.csv --config tools/synth/dorq.toml \
+     --exit-zero --format csv > /tmp/synth/results.csv
 dorq-synth score --labels /tmp/synth/labels.csv --results /tmp/synth/results.csv \
                  --gates tools/synth/gates.txt --verbose
 ```
@@ -25,6 +26,7 @@ samplers, so a seed gives the same data with any C++ library.
 | Thin (`THN`) | 20 | $1-10 | 4-6% | 300-3,000, no bar on 30% of sessions, no trade on 15% |
 | Penny (`PNY`) | 10 | $0.03-0.09 on a cent grid | 3-6% | 0.1-1M |
 | Sixteenths (`SXT`) | 5 | $0.15-0.50 on a 1/16 grid, 1998-2000 | 3-5% | 10-100k |
+| Rates (`RAT`, in `points.csv`) | 8 | a level of 0.2 (three of them) or 1-6, quoted to 0.01 | 0.03 a day, Student t | - |
 
 Returns are GARCH(1,1) with Student t (4 degrees of freedom) innovations, plus a
 market factor with one crash day (a fall of 10-15%, then a volatile aftermath).
@@ -34,6 +36,12 @@ reactions of 8-35%. Bars open between the previous close and the close, with
 highs and lows around them, rounded to the price grid. A traded day's prints land
 on both sides of the spread, so the range spans at least a tick on most days; on
 a coarse grid that is most of the range.
+
+The rates are point series that revert slowly to their level. They take
+quarter-point policy moves, at most one every 30 sessions, and the three near
+0.2 cross zero. [dorq.toml](dorq.toml) is the config the gate runs with: the
+defaults, plus a `rates` profile that puts point series on the difference scale
+(`transform = "diff"`) with bounds of [−5, 25].
 
 ## Labels
 
@@ -54,10 +62,17 @@ would be wrong under).
 | `failed_load` | DQ303 | one session missing from 70% of the liquid names |
 | `flat_bar` | DQ107 | 8 liquid bars with the close copied into open, high and low, on 1.2-3 times the median volume |
 | `series_ended` | DQ304 | the 1/16 names, which stop in 2000 |
+| `volume_units` | DQ401 | 6 eras of 60-200 bars on liquid names, every third to the end, with volume ×100, ×0.01 or ×1000 |
+| `zero_volume_move` | DQ403 | 6 liquid bars whose close moved, with their volume set to zero |
+| `stale_feed` | DQ501 | 8 runs of 2-5 bars repeating the close before them (half of them the whole bar), volume still arriving |
+| `rate_bad_print` | DQ201 | a rate value ×100 (two series), and a value of 999 (one) |
+| `rate_out_of_bounds` | DQ108 | those values, where they fall outside [−5, 25] |
+| `rate_decimal_era` | DQ202 | 30-150 values stored ×0.01 (two series) |
 | `hn_earnings` | - | each earnings reaction |
 | `hn_crash` | - | the crash day, every series |
 | `hn_tick` | - | every penny and 1/16 series, all its bars |
 | `hn_thin` | - | every thin series, all its bars (DQ20x only) |
+| `hn_rate` | - | every rate series, all its values (DQ2xx only) |
 
 Faults keep 60 sessions clear of each other and of earnings days, so each label
 is unambiguous.
@@ -85,6 +100,13 @@ precision 0.9 or better, and no earnings gap, crash day or tick move reported at
 warn. Across seeds 1-14 the gates hold on 12. Seeds 8 and 9 report three thin
 names' spike-and-revert trades (two are allowed), and seed 9 brings DQ201's
 precision to 0.88. Thin names' spike-and-revert trades are genuinely ambiguous.
+
+At M4 the gate adds DQ108 and DQ403 at 1.0 and 0.9, DQ401 at precision 0.9 and
+recall 0.8, and DQ501 at 0.8 and 0.6. On seeds 1-6, DQ501 misses one to three
+runs a universe, all of them two to four bars long. A quiet stock repeats its
+close twice now and then, so such runs are reported at info if at all. A
+rate's quarter-point move that half-reverts the next day is ambiguous; one
+such report is allowed.
 
 DQ107 is held to fault precision 0.5 and recall 0.9. It reports 10-20 bars a
 universe: every injected flat bar, other faults that leave a bar flat, and a few

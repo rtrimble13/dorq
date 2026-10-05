@@ -113,7 +113,9 @@ const Engine::Settings& Engine::settings_for(const Series& series) {
       if (info.code == "DQ301" || info.code == "DQ302" || info.cross_sectional) {
         slot->coverage_model = true;
       }
-      if (info.code.starts_with("DQ2") && info.code != "DQ206") {
+      // The price checks, and the volume and stale checks that read its features.
+      if ((info.code.starts_with("DQ2") && info.code != "DQ206") || info.code == "DQ401" ||
+          info.code == "DQ402" || info.code == "DQ501") {
         slot->price_model = true;
       }
       if (info.cross_sectional ||
@@ -150,7 +152,7 @@ Engine::Processed Engine::process(Work& work) const {
   }
   std::optional<PriceAnalysis> price;
   if (settings.price_model) {
-    price = analyze_prices(series, calendar_, settings.price);
+    price = analyze_prices(series, calendar_, settings.price, settings.integrity.bounds);
   }
   const SeriesContext context{
       .series = series,

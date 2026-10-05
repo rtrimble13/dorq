@@ -47,11 +47,21 @@ void append_json_string(std::string& out, std::string_view text) {
 }
 
 std::string with_commas(long long value) {
-  std::string digits = std::to_string(value < 0 ? -value : value);
+  // The magnitude as unsigned: -LLONG_MIN does not fit a long long.
+  const auto magnitude = value < 0 ? 0ULL - static_cast<unsigned long long>(value)
+                                   : static_cast<unsigned long long>(value);
+  std::string digits = std::to_string(magnitude);
   for (auto i = static_cast<std::ptrdiff_t>(digits.size()) - 3; i > 0; i -= 3) {
     digits.insert(static_cast<std::size_t>(i), ",");
   }
   return value < 0 ? "-" + digits : digits;
+}
+
+std::string whole_number(double value) {
+  if (!std::isfinite(value) || std::fabs(value) >= 1e18) {
+    return format_number(value);
+  }
+  return with_commas(std::llround(value));
 }
 
 std::string percent(double share) { return format_number(std::round(share * 1000.0) / 10.0) + "%"; }

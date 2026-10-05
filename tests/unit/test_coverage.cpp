@@ -78,7 +78,8 @@ std::string universe() {
 }  // namespace
 
 TEST_CASE("M2 acceptance: one cohort, the lone liquid gap, no thin-name noise") {
-  const Result result = run({"--isolated", "--format", "jsonl"}, universe());
+  // Every bar closes at 10.5 on heavy volume: DQ501's repeated price, rightly.
+  const Result result = run({"--isolated", "--format", "jsonl", "--ignore", "DQ501"}, universe());
   CAPTURE(result.err);
   // DQ303 fires once, for the failed load.
   CHECK(count_matching(result.out, R"("code":"DQ303")") == 1);
@@ -148,13 +149,15 @@ TEST_CASE("DQ305: missing months in a monthly series") {
                "between 2023-03-01 and 2023-06-01"));
 }
 
-TEST_CASE("calendars: weekdays sees holidays as gaps; a reference file decides within its span") {
+TEST_CASE(
+    "calendars: weekdays sees holidays as gaps, and a reference file decides within its span") {
   std::string csv = "date,open,high,low,close,volume\n";
   for (const dorq::Date d : sessions("2023-06-01", "2023-07-31")) {
     csv += d.to_string() + ",10,11,9,10.5,1000000\n";
   }
-  // XNYS knows July 4th: clean. Weekdays does not: a one-session gap.
-  CHECK(run({"--isolated"}, csv).out.empty());
+  // XNYS knows July 4th: clean. Weekdays does not: a one-session gap. (The close
+  // never moves on heavy volume: DQ501, rightly, so it is left out.)
+  CHECK(run({"--isolated", "--ignore", "DQ501"}, csv).out.empty());
   const Result weekdays = run({"--isolated", "--calendar", "weekdays"}, csv);
   CHECK(contains(weekdays.out, "2023-06-19  DQ301"));  // Juneteenth
   CHECK(contains(weekdays.out, "2023-07-04  DQ301"));
