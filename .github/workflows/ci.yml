@@ -1,0 +1,89 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Build and test on every compiler a release is built with, and one more.
+  # The `ci` preset turns warnings into errors.
+  build-test:
+    name: build-test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-gcc-13
+            os: ubuntu-24.04
+            cc: gcc-13
+            cxx: g++-13
+          - name: linux-clang-18
+            os: ubuntu-24.04
+            cc: clang-18
+            cxx: clang++-18
+          - name: macos-arm64-appleclang
+            os: macos-14
+            cc: clang
+            cxx: clang++
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ninja (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+      - name: Configure, build, test
+        run: cmake --workflow --preset ci
+      - name: CLI smoke test
+        run: |
+          build/ci/src/dorq --version
+          build/ci/src/dorq version
+          build/ci/src/dorq version --format json
+
+  # AddressSanitizer + UndefinedBehaviorSanitizer. GCC, because its sanitizer
+  # runtimes ship with the compiler; Clang's need a separate package.
+  sanitizers:
+    runs-on: ubuntu-24.04
+    env:
+      CC: gcc-13
+      CXX: g++-13
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure, build, test (ASan + UBSan)
+        run: cmake --workflow --preset asan
+
+  # Formatting and static analysis. Both tools are pinned to version 18: their
+  # output changes between releases, and a gate that moves on its own fails on
+  # code nobody touched.
+  lint:
+    runs-on: ubuntu-24.04
+    env:
+      CC: clang-18
+      CXX: clang++-18
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang-format-18 clang-tidy-18
+      - name: clang-format
+        run: scripts/format.sh --check
+      - name: Configure (compile database and generated sources)
+        run: |
+          cmake --preset ci
+          cmake --build --preset ci --target dorq_build_info
+      - name: clang-tidy
+        run: scripts/tidy.sh build/ci

@@ -67,3 +67,18 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# CMake: per-user presets, test output
+CMakeUserPresets.json
+Testing/
+
+# Tooling
+compile_commands.json
+.cache/
+.vscode/
+.idea/
+
+# Coverage
+*.gcda
+*.gcno
+*.gcov

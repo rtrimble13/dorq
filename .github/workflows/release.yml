@@ -1,0 +1,107 @@
+name: release
+
+# Pushing a tag vX.Y.Z builds, tests and publishes release binaries. Nothing else
+# publishes one. See CONTRIBUTING.md, "Releasing".
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # Built on Ubuntu 24.04: the binary needs glibc 2.39 or newer. libstdc++
+          # and libgcc are linked in (DORQ_STATIC_RUNTIME in the release preset).
+          - platform: linux-x86_64
+            os: ubuntu-24.04
+            cc: gcc-13
+            cxx: g++-13
+          - platform: macos-arm64
+            os: macos-14
+            cc: clang
+            cxx: clang++
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ninja (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Configure, build, test
+        run: cmake --workflow --preset release
+
+      # A tag is a promise that a commit is a version. `git tag` will put any name on
+      # any commit, so this is where the promise is checked: the binary built from
+      # the tagged commit must report the tag's version, from a clean tree.
+      - name: The tag must match the version the binary reports
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          reported="$(build/release/src/dorq --version)"
+          echo "tag: ${tag}  binary: ${reported}"
+          if [[ "${tag}" != "v${reported}" ]]; then
+            echo "::error::Tag ${tag} does not match the version in CMakeLists.txt" \
+                 "(${reported}). Delete the tag, fix the version, and tag again." >&2
+            exit 1
+          fi
+          if build/release/src/dorq version | grep -q '+dirty'; then
+            echo "::error::The release build recorded a dirty source tree." >&2
+            exit 1
+          fi
+          build/release/src/dorq version
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="dorq-${GITHUB_REF_NAME#v}-${{ matrix.platform }}"
+          cmake --install build/release --prefix "staging/${name}"
+          tar -C staging -czf "${name}.tar.gz" "${name}"
+          if [[ "${RUNNER_OS}" == "Linux" ]]; then
+            ldd "staging/${name}/bin/dorq"
+          else
+            otool -L "staging/${name}/bin/dorq"
+          fi
+          echo "ARCHIVE=${name}.tar.gz" >> "${GITHUB_ENV}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum *.tar.gz | tee SHA256SUMS
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/*.tar.gz dist/SHA256SUMS \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "dorq ${GITHUB_REF_NAME#v}" \
+            --verify-tag \
+            --generate-notes

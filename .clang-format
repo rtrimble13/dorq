@@ -1,0 +1,16 @@
+# Pinned to clang-format 18 in CI (scripts/format.sh checks the version). Output
+# changes between releases, so bump the version on purpose, in a commit that also
+# reformats.
+BasedOnStyle: Google
+ColumnLimit: 100
+DerivePointerAlignment: false
+PointerAlignment: Left
+IncludeBlocks: Regroup
+IncludeCategories:
+  # Project headers last, after the standard library and third-party headers.
+  - Regex: '^"(dorq|cli|core)/'
+    Priority: 3
+  - Regex: '^<[a-z_]+>$'
+    Priority: 1
+  - Regex: '.*'
+    Priority: 2
