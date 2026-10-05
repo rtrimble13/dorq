@@ -84,7 +84,7 @@ jobs:
       - name: Configure (compile database and generated sources)
         run: |
           cmake --preset ci
-          cmake --build --preset ci --target dorq_build_info
+          cmake --build --preset ci --target dorq_generated
       - name: clang-tidy
         run: scripts/tidy.sh build/ci
 

@@ -10,6 +10,11 @@ add_custom_command(
   COMMENT "Embedding check documentation"
   VERBATIM)
 
+# Every generated source, without compiling anything: what clang-tidy needs before
+# it can read the compile database (scripts/tidy.sh, the CI lint job).
+add_custom_target(dorq_generated DEPENDS "${DORQ_CHECK_DOCS_CPP}")
+add_dependencies(dorq_generated dorq_build_info)
+
 # Everything but main() lives in dorq_lib, so the tests link exactly the code the
 # binary runs.
 add_library(
