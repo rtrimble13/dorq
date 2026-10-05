@@ -27,3 +27,4 @@ add_custom_target(
   BYPRODUCTS "${DORQ_BUILD_INFO_CPP}"
   COMMENT "Recording build information"
   VERBATIM)
+

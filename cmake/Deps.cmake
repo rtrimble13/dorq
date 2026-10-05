@@ -22,6 +22,27 @@ FetchContent_Declare(
   SYSTEM)
 FetchContent_MakeAvailable(cli11)
 
+# fast_float: number parsing. std::from_chars would do on libstdc++, but libc++
+# (macOS) only gained floating-point from_chars in LLVM 20.
+FetchContent_Declare(
+  fast_float
+  GIT_REPOSITORY https://github.com/fastfloat/fast_float.git
+  GIT_TAG f3f02c8ad0afd8181166dabce6a9e69f8aec24de # v8.3.1
+  SYSTEM)
+FetchContent_MakeAvailable(fast_float)
+
+# toml++: the configuration file (dorq.toml, or [tool.dorq] in pyproject.toml).
+# Pinned past v3.4.0, to the commit that fixes undefined behaviour on non-ASCII
+# input (marzer/tomlplusplus#305: a Unicode whitespace test reached
+# TOML_UNREACHABLE). dorq's config fuzzer found it. Move to the next release tag
+# once there is one.
+FetchContent_Declare(
+  tomlplusplus
+  GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
+  GIT_TAG 1e8829b793b66ad17011732a146b8077d379b011 # master, after v3.4.0
+  SYSTEM)
+FetchContent_MakeAvailable(tomlplusplus)
+
 if(DORQ_BUILD_TESTS)
   # doctest: the unit-test framework.
   set(DOCTEST_NO_INSTALL ON)

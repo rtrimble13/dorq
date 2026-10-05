@@ -87,3 +87,40 @@ jobs:
           cmake --build --preset ci --target dorq_build_info
       - name: clang-tidy
         run: scripts/tidy.sh build/ci
+
+  # libFuzzer over the input readers (and every check behind them) and the config
+  # parser, a minute each. A crash fails the job and its input is kept as an
+  # artifact; add it to fuzz/corpus/ with the fix.
+  fuzz:
+    runs-on: ubuntu-24.04
+    env:
+      CC: clang-18
+      CXX: clang++-18
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang-18 libclang-rt-18-dev
+      - name: Build fuzz targets
+        run: |
+          cmake --preset fuzz
+          cmake --build --preset fuzz
+      - name: fuzz_reader
+        run: |
+          mkdir -p corpus/reader
+          build/fuzz/fuzz/fuzz_reader -max_total_time=60 -max_len=8192 -timeout=10 \
+            corpus/reader fuzz/corpus/reader
+      - name: fuzz_config
+        run: |
+          mkdir -p corpus/config
+          build/fuzz/fuzz/fuzz_config -max_total_time=60 -timeout=10 corpus/config fuzz/corpus/config
+      - name: Keep crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes
+          path: |
+            crash-*
+            leak-*
+            timeout-*
+            oom-*
+          if-no-files-found: ignore

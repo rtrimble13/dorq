@@ -20,30 +20,54 @@ data-quality process.
 
 ## Status
 
-**Pre-alpha: milestone M0 (foundations).** The binary builds, tests and releases,
-and reports its version. No checks exist yet. The checks and the order they arrive
-in are set out in the [development plan](doc/plans/dorq-development-plan.md).
+**Pre-alpha: milestone M1 (reading input, output formats, integrity checks).** dorq
+reads CSV, TSV, JSON Lines and JSON arrays, and reports in five formats. It runs
+the deterministic integrity checks (DQ1xx). The Bayesian checks, which are dorq's
+reason to exist, arrive from M2 onward; the
+[development plan](doc/plans/dorq-development-plan.md) sets out what comes when.
 
 ```console
-$ dorq --version
-0.0.1
-$ dorq version
-dorq 0.0.1
-commit    6dab3ed4b97f
-build     Release
-compiler  GNU 13.3.0
-system    Linux x86_64
-$ dorq version --format json
-{"version":"0.0.1","commit":"6dab3ed4b97f","dirty":false,"build_type":"Release","compiler":"GNU 13.3.0","system":"Linux x86_64"}
+$ dorq tests/data/bad_bars.csv
+AAA  2024-01-03  DQ101 error  ohlc-bounds  high 9.5 < open 10; high 9.5 < close 10  (line 3)
+AAA  2024-01-04  DQ101 error  ohlc-bounds  low 9 > close 0  (line 4)
+AAA  2024-01-04  DQ102 error  non-positive  close is 0  (line 4)
+AAA  2024-01-05  DQ104 error  missing-field  close is empty  (line 5)
+AAA  2024-01-06  DQ104 warn  missing-field  volume is empty  (line 6)
+BBB  line 7  DQ104 error  missing-field  date "2024-13-01" is not a date; the row is skipped
+$ echo $?
+1
 ```
 
-What usage will look like once the checks land (planned for M1–M3, not yet working):
+## Usage
 
-```console
-$ dorq prices.csv
-AAPL  2020-08-31  DQ203 error  unreported-split  close 499.23→129.04 (×0.2585 ≈ 1:4)  P(error)=0.97
-$ dorq --format jsonl --calendar-file sessions.csv --actions actions.csv - < bars.csv
+```bash
+dorq prices.csv                              # check a file ("check" is the default command)
+psql -c "COPY (...) TO STDOUT CSV HEADER" | dorq --format fafnir -   # or stdin
+dorq --format jsonl --select DQ1 --ignore DQ106 a.csv b.jsonl
+dorq --show-info --statistics prices.csv     # info too, then counts per check
+dorq list-checks                             # every check, its severity and what it needs
+dorq explain DQ106                           # a check's full documentation
+dorq config show                             # the effective settings and their hash
+dorq config init                             # write a starter dorq.toml
 ```
+
+Input is long format, one row per series and date. Columns are found by name,
+ignoring case and punctuation: `date`/`trade_date`, `open`, `high`, `low`,
+`close`, `volume`, `series`/`security_id`, `symbol`, `value`, and so on. Bars
+need open, high, low and close; a series with only a value column is a point
+series. When the names don't match, use `--columns date=asof,value=DGS10`.
+[doc/configuration.md](doc/configuration.md) covers columns, the config file and
+profiles. [doc/output.md](doc/output.md) covers each output format, including the
+`fafnir` format that maps onto `ops.data_quality_flag`.
+
+| Check | Name | Reports |
+|---|---|---|
+| [DQ101](doc/checks/DQ101.md) | ohlc-bounds | a high below open/low/close, or a low above open/close |
+| [DQ102](doc/checks/DQ102.md) | non-positive | a price at or below zero, or a negative volume |
+| [DQ103](doc/checks/DQ103.md) | duplicate-date | more than one row for a date |
+| [DQ104](doc/checks/DQ104.md) | missing-field | an empty or unparseable value |
+| [DQ106](doc/checks/DQ106.md) | precision-shift | computed (e.g. back-adjusted) prices among quoted ones |
+| [DQ107](doc/checks/DQ107.md) | zero-range-with-volume | a flat bar on the series' typical volume |
 
 ### Exit status
 
@@ -69,7 +93,7 @@ archives, plus a `SHA256SUMS` file:
 | `dorq-<version>-macos-arm64.tar.gz` | macOS on Apple silicon |
 
 ```bash
-version=0.0.1
+version=0.1.0
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/dorq-${version}-linux-x86_64.tar.gz"
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
@@ -90,19 +114,21 @@ Clang 18+).
 ```bash
 sudo apt-get install -y build-essential cmake ninja-build git
 git clone https://github.com/rtrimble13/dorq.git && cd dorq
-git checkout v0.0.1                        # or stay on main for the latest
+git checkout v0.1.0                        # or stay on main for the latest
 cmake --workflow --preset release          # configure, build, run the tests
 sudo cmake --install build/release --prefix /opt/dorq
 /opt/dorq/bin/dorq version                 # names the commit it was built from
 ```
 
-The configure step downloads two pinned dependencies from GitHub: CLI11 and
-doctest (see `cmake/Deps.cmake`). On a host without network access, clone each
+The configure step downloads four pinned dependencies from GitHub: CLI11,
+fast_float, toml++ and doctest (see `cmake/Deps.cmake`). On a host without network access, clone each
 dependency at the commit pinned there. Then point CMake at those checkouts:
 
 ```bash
 cmake --preset release \
   -DFETCHCONTENT_SOURCE_DIR_CLI11=/src/CLI11 \
+  -DFETCHCONTENT_SOURCE_DIR_FAST_FLOAT=/src/fast_float \
+  -DFETCHCONTENT_SOURCE_DIR_TOMLPLUSPLUS=/src/tomlplusplus \
   -DFETCHCONTENT_SOURCE_DIR_DOCTEST=/src/doctest
 ```
 
@@ -115,6 +141,7 @@ cmake --preset release \
 | `ci` | Optimised with debug info; warnings are errors |
 | `asan` | AddressSanitizer + UndefinedBehaviorSanitizer |
 | `coverage` | gcov instrumentation |
+| `fuzz` | libFuzzer targets with ASan + UBSan (Clang; see `fuzz/`) |
 
 ```bash
 cmake --workflow --preset dev        # configure + build + test
@@ -127,6 +154,9 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
 ## Documentation
 
+- [Configuration](doc/configuration.md): the config file, profiles, columns, input
+- [Output formats](doc/output.md): text, json, jsonl, csv, fafnir
+- [Checks](doc/checks/): one page per check, also printed by `dorq explain`
 - [Development plan](doc/plans/dorq-development-plan.md): goals, checks, models, milestones
 - [Architecture decisions](doc/adr/)
 - [Contributing](CONTRIBUTING.md): conventions, tests, dependencies, releasing
