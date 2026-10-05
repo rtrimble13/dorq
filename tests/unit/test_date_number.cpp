@@ -1,6 +1,7 @@
 #include <cmath>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <doctest/doctest.h>
 
@@ -97,4 +98,56 @@ TEST_CASE("format_number is the shortest round-trip text") {
   CHECK(dorq::format_number(0.1) == "0.1");
   CHECK(dorq::format_number(-2.25) == "-2.25");
   CHECK(dorq::format_number(std::nan("")) == "nan");
+}
+
+#include "dorq/frequency.hpp"
+
+namespace {
+
+std::vector<dorq::Date> every(int step_days, int count, const char* from = "2020-01-06") {
+  std::vector<dorq::Date> out;
+  out.reserve(static_cast<std::size_t>(count));
+  for (int i = 0; i < count; ++i) {
+    out.push_back(dorq::Date::from_days(parse_date(from)->days() + i * step_days));
+  }
+  return out;
+}
+
+}  // namespace
+
+TEST_CASE("frequency inference") {
+  using dorq::Frequency;
+  using dorq::infer_frequency;
+  // Weekdays: gaps of 1 and 3.
+  std::vector<dorq::Date> weekdays;
+  for (int i = 0; i < 100; ++i) {
+    const auto d = dorq::Date::from_days(parse_date("2020-01-06")->days() + i);
+    if (d.weekday() < 5) {
+      weekdays.push_back(d);
+    }
+  }
+  CHECK(infer_frequency(weekdays) == Frequency::kDaily);
+  // A thin daily name: every third weekday. Median gap 4-5 days; lower quartile
+  // still short.
+  std::vector<dorq::Date> thin;
+  for (std::size_t i = 0; i < weekdays.size(); i += (i % 2 == 0 ? 1U : 4U)) {
+    thin.push_back(weekdays[i]);
+  }
+  CHECK(infer_frequency(thin) == Frequency::kDaily);
+  CHECK(infer_frequency(every(7, 50)) == Frequency::kWeekly);
+  std::vector<dorq::Date> monthly;
+  std::vector<dorq::Date> quarterly;
+  std::vector<dorq::Date> annual;
+  for (int i = 0; i < 24; ++i) {
+    monthly.push_back(dorq::Date::from_ymd(2020 + i / 12, i % 12 + 1, 1));
+    quarterly.push_back(dorq::Date::from_ymd(2010 + i / 4, (i % 4) * 3 + 1, 15));
+    annual.push_back(dorq::Date::from_ymd(1990 + i, 12, 31));
+  }
+  CHECK(infer_frequency(monthly) == Frequency::kMonthly);
+  CHECK(infer_frequency(quarterly) == Frequency::kQuarterly);
+  CHECK(infer_frequency(annual) == Frequency::kAnnual);
+  CHECK(infer_frequency(every(50, 20)) == Frequency::kIrregular);
+  CHECK(infer_frequency(every(1, 2)) == Frequency::kIrregular);  // too few
+  CHECK(dorq::parse_frequency("Monthly") == Frequency::kMonthly);
+  CHECK_FALSE(dorq::parse_frequency("fortnightly").has_value());
 }

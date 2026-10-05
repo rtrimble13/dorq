@@ -34,6 +34,12 @@ namespace dorq {
 // Appends `text` as a JSON string literal, quotes included (RFC 8259, section 7).
 void append_json_string(std::string& out, std::string_view text);
 
+// 1234567 -> "1,234,567".
+[[nodiscard]] std::string with_commas(long long value);
+
+// 0.2618 -> "26.2%".
+[[nodiscard]] std::string percent(double share);
+
 // Shortens `text` to at most `max_chars` bytes, marking a cut with "...".
 [[nodiscard]] std::string abbreviate(std::string_view text, std::size_t max_chars);
 

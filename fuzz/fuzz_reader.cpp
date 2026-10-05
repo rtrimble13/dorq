@@ -27,6 +27,9 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   const auto grouping = (selector & 0x80U) != 0 ? dorq::Grouping::kStream : dorq::Grouping::kBuffer;
 
   const dorq::IntegritySettings settings{.precision_min_segment = 2};
+  static const dorq::Calendar kCalendar;
+  const dorq::CoverageSettings coverage;
+  const dorq::SeverityThresholds thresholds;
   std::vector<dorq::Violation> found;
   dorq::SeriesAssembler assembler(grouping, [&](dorq::Series&& series) {
     for (const dorq::Check* check : dorq::all_checks()) {
@@ -34,7 +37,16 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
           series.kind != dorq::SeriesKind::kOhlcv) {
         continue;
       }
-      check->run({series, settings}, found);
+      const dorq::Frequency frequency = dorq::infer_frequency(series.date);
+      const auto analysis = dorq::analyze_coverage(series, kCalendar, coverage, 0.95);
+      const dorq::SeriesContext context{.series = series,
+                                        .integrity = settings,
+                                        .coverage = coverage,
+                                        .calendar = kCalendar,
+                                        .thresholds = thresholds,
+                                        .frequency = frequency,
+                                        .analysis = &analysis};
+      check->run(context, found);
     }
   });
   std::istringstream in(std::string(reinterpret_cast<const char*>(data + 1), size - 1));

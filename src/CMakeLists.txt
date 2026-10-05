@@ -19,12 +19,16 @@ add_dependencies(dorq_generated dorq_build_info)
 # binary runs.
 add_library(
   dorq_lib STATIC
+  checks/coverage.cpp
+  checks/coverage_model.cpp
   checks/integrity.cpp
   checks/registry.cpp
   cli/app.cpp
   config/config.cpp
   core/build_info.cpp
+  core/calendar.cpp
   core/date.cpp
+  core/frequency.cpp
   core/number.cpp
   core/series.cpp
   core/text.cpp
@@ -33,7 +37,10 @@ add_library(
   io/csv.cpp
   io/json.cpp
   io/reader.cpp
+  engine/cross_section.cpp
   engine/engine.cpp
+  stats/hmm2.cpp
+  stats/special.cpp
   output/writer.cpp
   "${DORQ_BUILD_INFO_CPP}"
   "${DORQ_CHECK_DOCS_CPP}")

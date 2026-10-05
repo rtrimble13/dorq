@@ -1,8 +1,12 @@
 #include "core/text.hpp"
 
 #include <array>
+#include <cmath>
+#include <cstddef>
 #include <string>
 #include <string_view>
+
+#include "dorq/number.hpp"
 
 namespace dorq {
 
@@ -41,6 +45,16 @@ void append_json_string(std::string& out, std::string_view text) {
   }
   out.push_back('"');
 }
+
+std::string with_commas(long long value) {
+  std::string digits = std::to_string(value < 0 ? -value : value);
+  for (auto i = static_cast<std::ptrdiff_t>(digits.size()) - 3; i > 0; i -= 3) {
+    digits.insert(static_cast<std::size_t>(i), ",");
+  }
+  return value < 0 ? "-" + digits : digits;
+}
+
+std::string percent(double share) { return format_number(std::round(share * 1000.0) / 10.0) + "%"; }
 
 std::string abbreviate(std::string_view text, std::size_t max_chars) {
   if (text.size() <= max_chars) {

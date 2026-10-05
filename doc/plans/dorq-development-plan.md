@@ -1,7 +1,7 @@
 # Plan: dorq, a Bayesian data-quality linter for financial time series
 
 - Status: **accepted** (2026-10-05). The defaults in §10 are confirmed, and Q9 is answered. M0 is done
-  (PR #1). M1 is implemented and awaiting merge.
+  (PR #1), M1 is done (PR #2), and M2 is implemented and awaiting merge.
 - Scope: this repository (the C++ CLI), plus one milestone of integration work in `rtrimble13/fafnir` (M7).
 - Status legend: ⬜ planned · 🔄 in progress · ✅ done (PR #) · ⏭ carried over · ✖ dropped (reason)
 
@@ -286,6 +286,34 @@ Consequences:
   and how many of those were missing. A binomial test against each series' own `p` identifies failed
   load dates. The members of such a cohort are linked and downgraded, which automates what fafnir's
   sweep policy calls "the whole test", `cohort_size`.
+
+**As built in M2** (doc/checks/DQ301.md is the reference). Five things changed on contact with the
+model:
+
+- **The density is estimated around each run, leaving the run out.** The density used for a run
+  comes from its block of 60 sessions and the blocks either side. It leaves out the run itself and
+  the sessions that the other runs' posteriors already attribute to an outage. It is estimated by EM
+  over two passes, starting from the density volume alone implies; started from the data, two
+  isolated gaps each made the other look like ordinary sparsity.
+- **Volume sets a floor, not a prior.** Pooled counts can never say that a liquid name misses fewer
+  than about 1 session in *n*, and a real gap in such a name is far rarer than that. So when bars
+  carry volume, the healthy density is at least 1 − e^(−V/`trade_size`), with *V* the median volume
+  and `trade_size` 1,000. That is a round-lot Poisson model of trades. The first attempt, a
+  log-normal fitted to traded days' volume, claimed that a name trading 1–4 shares trades every day.
+- **The outage rates are α = 1e-4 and β = 0.05**, giving a mean outage of 20 sessions. With those, a
+  lone missing day on a name trading a million shares has P = 0.83 (warn). A 90-session hole in a
+  name with 30% density is > 0.99. Ordinary gaps in thin names stay below the info threshold.
+- **The window ends at the last bar; DQ304 judges what follows.** DQ304 uses an as-of date: the
+  latest session with a bar anywhere in the input, unless `--as-of` gives one. It also allows a
+  publication lag (default 1 session). A series that stops counts toward the cohort test on its
+  first missing session, so a failed latest-night load is one DQ303.
+- **Output waits for the end when a cross-sectional check runs.** DQ303 and DQ304 are on by default,
+  so results are held until the input ends and written in input order then (§5.3). Without them,
+  output streams as before.
+
+**Frequency** is inferred from the lower-quartile gap between dates, not the median. A daily name
+trading on a third of its sessions has a median gap of about five days, which read as weekly and
+flooded DQ305.
 
 ### 4.3 Price action: comparing explanations (DQ201–DQ206, DQ209)
 
@@ -600,15 +628,15 @@ publishes release archives.
 ### M1: I/O, data model, deterministic checks (v0.1.0)
 | ID | Item | Size | Status |
 |---|---|---|---|
-| DR-0101 | Series data model (structure of arrays, OHLCV and point), decimals and significant figures as written, the `Violation` type | M | 🔄 awaiting merge |
-| DR-0102 | CSV/TSV reader: an incremental RFC 4180 parser, fast_float, column aliases and `--columns`, kind detection, stdin, buffered or streamed grouping by series | L | 🔄 awaiting merge |
-| DR-0103 | JSONL and JSON-array readers (a flat-record parser of dorq's own, not simdjson; see §5.1) | M | 🔄 awaiting merge |
-| DR-0104 | Writers: text (colour when writing to a terminal), json, jsonl, csv, fafnir; `--statistics` | M | 🔄 awaiting merge |
-| DR-0105 | Config: toml++, discovery including `[tool.dorq]`, unknown keys rejected, profiles (matching on kind or series until `--meta` in M5), `config show`/`init`, `config_hash` | M | 🔄 awaiting merge |
-| DR-0106 | Check registry, flake8-style `--select`/`--ignore`, `list-checks`, `explain` (pages compiled in), exit codes | M | 🔄 awaiting merge |
-| DR-0107 | DQ101–DQ104, DQ106, DQ107 | M | 🔄 awaiting merge |
-| DR-0108 | Engine: thread pool, bounded in-flight series, results delivered in input order; determinism test (1 vs 8 threads, and buffered vs streamed) | M | 🔄 awaiting merge |
-| DR-0109 | libFuzzer targets for the readers (with every check behind them) and the config parser; run for a minute each in CI | S | 🔄 awaiting merge |
+| DR-0101 | Series data model (structure of arrays, OHLCV and point), decimals and significant figures as written, the `Violation` type | M | ✅ PR #2 |
+| DR-0102 | CSV/TSV reader: an incremental RFC 4180 parser, fast_float, column aliases and `--columns`, kind detection, stdin, buffered or streamed grouping by series | L | ✅ PR #2 |
+| DR-0103 | JSONL and JSON-array readers (a flat-record parser of dorq's own, not simdjson; see §5.1) | M | ✅ PR #2 |
+| DR-0104 | Writers: text (colour when writing to a terminal), json, jsonl, csv, fafnir; `--statistics` | M | ✅ PR #2 |
+| DR-0105 | Config: toml++, discovery including `[tool.dorq]`, unknown keys rejected, profiles (matching on kind or series until `--meta` in M5), `config show`/`init`, `config_hash` | M | ✅ PR #2 |
+| DR-0106 | Check registry, flake8-style `--select`/`--ignore`, `list-checks`, `explain` (pages compiled in), exit codes | M | ✅ PR #2 |
+| DR-0107 | DQ101–DQ104, DQ106, DQ107 | M | ✅ PR #2 |
+| DR-0108 | Engine: thread pool, bounded in-flight series, results delivered in input order; determinism test (1 vs 8 threads, and buffered vs streamed) | M | ✅ PR #2 |
+| DR-0109 | libFuzzer targets for the readers (with every check behind them) and the config parser; run for a minute each in CI | S | ✅ PR #2 |
 
 **Done when:** `dorq prices.csv` reports the integrity violations with correct exit codes in all five
 output formats, and the determinism test passes.
@@ -616,11 +644,11 @@ output formats, and the determinism test passes.
 ### M2: Calendar and coverage (v0.2.0)
 | ID | Item | Size | Status |
 |---|---|---|---|
-| DR-0201 | Built-in XNYS calendar: holiday rules 1990–2035 plus a table of ad-hoc closures; `weekdays`, `24x7`, `--calendar-file` | M | ⬜ |
-| DR-0202 | DQ105 (non-session bar), DQ206 (date shift via a multinomial likelihood on weekday counts) | M | ⬜ |
-| DR-0203 | `stats/beta_binomial`, `stats/hmm2` (forward-backward in log space) plus unit tests against reference values from Python | M | ⬜ |
-| DR-0204 | DQ301 missing-run, DQ302 sparse-series, DQ304 stale-feed (with a NAV lag profile), DQ305 frequency gap | L | ⬜ |
-| DR-0205 | Cross-sectional pass 1 accumulators, and DQ303 cohort-gap with member linking | M | ⬜ |
+| DR-0201 | Built-in calendars (`XNYS` with NYSE holiday rules, MLK Day from 1998 and the unscheduled closures; `weekdays`; `24x7`). An optional reference file (`--calendar-file`, fafnir's `ref.trading_calendar` shape) decides within its span, and the built-in calendar answers outside it. `--calendar-exchange`. Tested year by year against fafnir's calendar for 1990–2035 | M | 🔄 awaiting merge |
+| DR-0202 | DQ105 (non-session bar; one summary violation past ten), DQ206 (date shift: multinomial weekday likelihood, shift ±1 vs aligned) | M | 🔄 awaiting merge |
+| DR-0203 | `stats/special` (log-gamma, incomplete beta and gamma, Beta quantile, Poisson tail, normal CDF) and `stats/hmm2` (forward-backward in log space), tested against SciPy values and brute-force path enumeration | M | 🔄 awaiting merge |
+| DR-0204 | DQ301 missing-run, DQ302 sparse-series, DQ304 stale-feed (publication lag; NAV lag via a profile), DQ305 frequency gap; frequency inferred per series | L | 🔄 awaiting merge |
+| DR-0205 | Cross-sectional pass: results held until the input ends; per-day expected/missing/healthy-miss accumulators; DQ303 cohort-gap by Poisson tail; members' DQ301/DQ304 downgraded and linked; series that stop count on their first missing session | M | 🔄 awaiting merge |
 
 **Done when:** on a synthetic universe with thin names, liquid names, and one injected failed load
 date, DQ303 fires once, thin names produce no DQ301, and a single missing day on a liquid name does.

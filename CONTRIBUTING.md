@@ -83,8 +83,8 @@ For a given binary, input and configuration, dorq's output is fixed
 
 ## Fuzzing
 
-The readers (and every check behind them) and the config parser have libFuzzer
-targets in `fuzz/`. CI runs each one for a minute on every pull request. Locally,
+The readers (and every check behind them), the config parser and the reference
+calendar reader have libFuzzer targets in `fuzz/`. CI runs each one for a minute on every pull request. Locally,
 with Clang and its runtime (`libclang-rt-18-dev` on Ubuntu):
 
 ```bash

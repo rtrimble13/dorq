@@ -60,6 +60,31 @@ precision_high_sig_figs = 5
 precision_min_segment = 20
 precision_min_contrast = 0.8
 
+[coverage]            # DQ3xx; see doc/checks/DQ301.md for the model
+frequency = "auto"    # or daily, weekly, monthly, quarterly, annual, irregular
+block_sessions = 60
+outage_start = 0.0001
+outage_end = 0.05
+prior_density = 0.999
+prior_strength = 2
+trade_size = 1000
+sparse_density = 0.8  # DQ302
+publication_lag = 1   # DQ304
+report = "run"        # DQ301: or "session"           (global only)
+cohort_min_series = 3 # DQ303                          (global only)
+cohort_max_tail = 1e-06                              # (global only)
+confident_density = 0.95                             # (global only)
+
+[severity]            # p_error -> severity, for the probabilistic checks
+info = 0.2            # below this, nothing is reported
+warn = 0.6
+error = 0.9
+
+[calendar]            # see doc/calendar.md
+name = "XNYS"         # or weekdays, 24x7
+file = "sessions.csv" # optional reference calendar, relative to this file
+exchange = "NASDAQ"   # which exchange to take from a multi-exchange file
+
 [fafnir]
 table_name = "core.daily_price"
 ```
@@ -84,7 +109,9 @@ integrity = { positive_point_series = true }
 ```
 
 A profile's `select` and `ignore` entries are **added** to the global lists. Its
-`integrity` settings replace the global ones for the series it matches. When two
+`integrity` and `coverage` settings replace the global ones for the series it
+matches. The run-wide coverage keys (`report` and the cohort settings) can't be
+set per profile. When two
 profiles match the same series, they are applied in name order, so where they
 disagree the later name wins.
 
@@ -95,14 +122,16 @@ Matching on fields from a metadata file (`asset_type`, `nav_priced`) arrives wit
 
 The options with the same meaning as a key above are `--select`, `--extend-select`,
 `--ignore`, `--min-severity`, `--fail-on`, `--format`, `--threads`, `--kind`,
-`--input-format` and `--columns date=trade_date,series=security_id`. Each one
-overrides the file:
+`--input-format`, `--calendar`, `--calendar-file`, `--calendar-exchange` and
+`--columns date=trade_date,series=security_id`. Each one overrides the file:
 
 - `--select` replaces the list.
 - `--extend-select` and `--ignore` add to their lists.
 - A `--columns` field replaces that field's column.
 
-`--show-info` is `--min-severity info`. `--exit-zero` always exits 0.
+`--show-info` is `--min-severity info`. `--exit-zero` always exits 0. `--as-of
+DATE` sets the date DQ304 judges staleness against; by default it is the latest
+session with a bar anywhere in the input.
 
 ## Reading input
 

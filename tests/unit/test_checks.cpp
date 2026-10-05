@@ -26,8 +26,19 @@ dorq::Series one_series(const std::string& csv) {
 
 std::vector<dorq::Violation> run_check(const dorq::Check& check, const dorq::Series& series,
                                        const dorq::IntegritySettings& settings = {}) {
+  static const dorq::Calendar kCalendar;
+  static const dorq::CoverageSettings kCoverage;
+  static const dorq::SeverityThresholds kThresholds;
   std::vector<dorq::Violation> out;
-  check.run({series, settings}, out);
+  const dorq::SeriesContext context{
+      .series = series,
+      .integrity = settings,
+      .coverage = kCoverage,
+      .calendar = kCalendar,
+      .thresholds = kThresholds,
+      .frequency = dorq::infer_frequency(series.date),
+  };
+  check.run(context, out);
   return out;
 }
 

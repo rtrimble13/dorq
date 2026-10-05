@@ -139,6 +139,60 @@ IntegrityPatch read_integrity(const toml::table& table, const std::string& where
   return patch;
 }
 
+// Reads [coverage] keys. The run-report and cohort keys are global; a profile
+// passing `global` = nullptr may not set them.
+CoveragePatch read_coverage(const toml::table& table, const std::string& where,
+                            const std::string& prefix, Config* global) {
+  CoveragePatch patch;
+  for (const auto& [key_node, node] : table) {
+    const std::string_view key = key_node.str();
+    const std::string path = key_path(prefix, key);
+    if (key == "frequency") {
+      const auto frequency = parse_frequency(read_string(node, where, path));
+      if (!frequency) {
+        fail(where, node,
+             "\"" + path +
+                 "\" must be auto, daily, weekly, monthly, quarterly, annual or irregular");
+      }
+      patch.frequency = frequency;
+    } else if (key == "block_sessions") {
+      patch.block_sessions = read_int(node, where, path, 10, 10000);
+    } else if (key == "outage_start") {
+      patch.outage_start = read_double(node, where, path, 1e-12, 0.5);
+    } else if (key == "outage_end") {
+      patch.outage_end = read_double(node, where, path, 1e-6, 1.0);
+    } else if (key == "prior_density") {
+      patch.prior_density = read_double(node, where, path, 0.0, 1.0);
+    } else if (key == "prior_strength") {
+      patch.prior_strength = read_double(node, where, path, 0.0, 1e6);
+    } else if (key == "trade_size") {
+      patch.trade_size = read_double(node, where, path, 1e-9, 1e12);
+    } else if (key == "sparse_density") {
+      patch.sparse_density = read_double(node, where, path, 0.0, 1.0);
+    } else if (key == "publication_lag") {
+      patch.publication_lag = read_int(node, where, path, 0, 100);
+    } else if (global != nullptr && key == "report") {
+      const std::string report = read_string(node, where, path);
+      if (report == "run") {
+        global->gap_report = GapReport::kRun;
+      } else if (report == "session") {
+        global->gap_report = GapReport::kSession;
+      } else {
+        fail(where, node, "\"" + path + R"(" must be "run" or "session")");
+      }
+    } else if (global != nullptr && key == "cohort_min_series") {
+      global->cohort.min_series = read_int(node, where, path, 2, 1000000);
+    } else if (global != nullptr && key == "cohort_max_tail") {
+      global->cohort.max_tail = read_double(node, where, path, 0.0, 1.0);
+    } else if (global != nullptr && key == "confident_density") {
+      global->cohort.confident_density = read_double(node, where, path, 0.0, 1.0);
+    } else {
+      fail(where, node, "unknown key \"" + path + "\"");
+    }
+  }
+  return patch;
+}
+
 Profile read_profile(std::string name, const toml::table& table, const std::string& where) {
   Profile profile;
   profile.name = std::move(name);
@@ -172,11 +226,51 @@ Profile read_profile(std::string name, const toml::table& table, const std::stri
       profile.ignore = read_string_list(node, where, path);
     } else if (key == "integrity") {
       profile.integrity = read_integrity(read_table(node, where, path), where, path);
+    } else if (key == "coverage") {
+      profile.coverage = read_coverage(read_table(node, where, path), where, path, nullptr);
     } else {
       fail(where, node, "unknown key \"" + path + "\"");
     }
   }
   return profile;
+}
+
+void read_severity(const toml::table& table, const toml::node& node, const std::string& where,
+                   SeverityThresholds& severity) {
+  for (const auto& [sub_node, value] : table) {
+    const std::string path = key_path("severity", sub_node.str());
+    if (sub_node.str() == "info") {
+      severity.info = read_double(value, where, path, 0.0, 1.0);
+    } else if (sub_node.str() == "warn") {
+      severity.warn = read_double(value, where, path, 0.0, 1.0);
+    } else if (sub_node.str() == "error") {
+      severity.error = read_double(value, where, path, 0.0, 1.0);
+    } else {
+      fail(where, value, "unknown key \"" + path + "\"");
+    }
+  }
+  if (severity.info > severity.warn || severity.warn > severity.error) {
+    fail(where, node, "[severity] needs info <= warn <= error");
+  }
+}
+
+void read_calendar(const toml::table& table, const std::string& where, Config& config) {
+  for (const auto& [sub_node, value] : table) {
+    const std::string path = key_path("calendar", sub_node.str());
+    if (sub_node.str() == "name") {
+      const auto kind = parse_calendar_name(read_string(value, where, path));
+      if (!kind) {
+        fail(where, value, "\"" + path + R"(" must be "XNYS", "weekdays" or "24x7")");
+      }
+      config.calendar = *kind;
+    } else if (sub_node.str() == "file") {
+      config.calendar_file = read_string(value, where, path);
+    } else if (sub_node.str() == "exchange") {
+      config.calendar_exchange = read_string(value, where, path);
+    } else {
+      fail(where, value, "unknown key \"" + path + "\"");
+    }
+  }
 }
 
 void read_root(const toml::table& root, const std::string& where, Config& config) {
@@ -236,6 +330,12 @@ void read_root(const toml::table& root, const std::string& where, Config& config
       }
     } else if (key == "integrity") {
       read_integrity(read_table(node, where, key), where, key).apply_to(config.integrity);
+    } else if (key == "coverage") {
+      read_coverage(read_table(node, where, key), where, key, &config).apply_to(config.coverage);
+    } else if (key == "severity") {
+      read_severity(read_table(node, where, key), node, where, config.severity);
+    } else if (key == "calendar") {
+      read_calendar(read_table(node, where, key), where, config);
     } else if (key == "fafnir") {
       for (const auto& [sub_node, value] : read_table(node, where, key)) {
         const std::string path = key_path(key, sub_node.str());
@@ -341,46 +441,69 @@ void append_integrity_patch(std::string& out, const IntegrityPatch& patch) {
   }
 }
 
-// The settings that decide what is reported, in a fixed order (config_hash).
-std::string canonical(const Config& config) {
-  std::string out;
-  out += "select=";
-  append_toml_list(out, config.select);
-  out += "\nextend_select=";
-  append_toml_list(out, config.extend_select);
-  out += "\nignore=";
-  append_toml_list(out, config.ignore);
-  out += "\nmin_severity=" + std::string{to_string(config.min_severity)};
-  out += "\nkind=" + std::string{kind_name(config.kind)};
-  for (const auto& [field, column] : config.columns) {
-    out += "\ncolumns." + std::string{field_name(field, SeriesKind::kOhlcv)} + "=" + column;
-  }
+IntegrityPatch full_patch(const IntegritySettings& settings) {
   IntegrityPatch full;
-  full.positive_point_series = config.integrity.positive_point_series;
-  full.precision_high_decimals = config.integrity.precision_high_decimals;
-  full.precision_high_sig_figs = config.integrity.precision_high_sig_figs;
-  full.precision_min_segment = config.integrity.precision_min_segment;
-  full.precision_min_contrast = config.integrity.precision_min_contrast;
-  out += "\n[integrity]\n";
-  append_integrity_patch(out, full);
-  out += "fafnir.table_name=" + config.fafnir_table + "\n";
-  for (const Profile& profile : config.profiles) {
-    out += "[profile ";
-    out += profile.name;
-    out += "]\n";
-    if (profile.match_kind) {
-      out += "kind=" + std::string{to_string(*profile.match_kind)} + "\n";
+  full.positive_point_series = settings.positive_point_series;
+  full.precision_high_decimals = settings.precision_high_decimals;
+  full.precision_high_sig_figs = settings.precision_high_sig_figs;
+  full.precision_min_segment = settings.precision_min_segment;
+  full.precision_min_contrast = settings.precision_min_contrast;
+  return full;
+}
+
+CoveragePatch full_patch(const CoverageSettings& settings) {
+  CoveragePatch full;
+  full.frequency = settings.frequency;
+  full.block_sessions = settings.block_sessions;
+  full.outage_start = settings.outage_start;
+  full.outage_end = settings.outage_end;
+  full.prior_density = settings.prior_density;
+  full.prior_strength = settings.prior_strength;
+  full.trade_size = settings.trade_size;
+  full.sparse_density = settings.sparse_density;
+  full.publication_lag = settings.publication_lag;
+  return full;
+}
+
+void append_coverage_patch(std::string& out, const CoveragePatch& patch) {
+  const auto number = [&out](const char* key, const std::optional<double>& value) {
+    if (value) {
+      out += key;
+      out += " = ";
+      out += format_number(*value);
+      out += '\n';
     }
-    out += "series=";
-    append_toml_list(out, profile.match_series);
-    out += "\nselect=";
-    append_toml_list(out, profile.select);
-    out += "\nignore=";
-    append_toml_list(out, profile.ignore);
-    out += "\n";
-    append_integrity_patch(out, profile.integrity);
+  };
+  if (patch.frequency) {
+    out += "frequency = \"";
+    out += to_string(*patch.frequency);
+    out += "\"\n";
   }
-  return out;
+  if (patch.block_sessions) {
+    out += "block_sessions = " + std::to_string(*patch.block_sessions) + "\n";
+  }
+  number("outage_start", patch.outage_start);
+  number("outage_end", patch.outage_end);
+  number("prior_density", patch.prior_density);
+  number("prior_strength", patch.prior_strength);
+  number("trade_size", patch.trade_size);
+  number("sparse_density", patch.sparse_density);
+  if (patch.publication_lag) {
+    out += "publication_lag = " + std::to_string(*patch.publication_lag) + "\n";
+  }
+}
+
+// The settings that decide what is reported (config_hash): the effective
+// configuration as TOML, with the keys that only change presentation, speed or
+// the exit status held at their defaults.
+std::string canonical(const Config& config) {
+  Config copy = config;
+  copy.format = OutputFormat::kText;
+  copy.threads = 0;
+  copy.fail_on = Severity::kWarn;
+  copy.input_format = InputFormat::kAuto;
+  copy.source.clear();
+  return to_toml(copy);
 }
 
 }  // namespace
@@ -436,6 +559,49 @@ void IntegrityPatch::apply_to(IntegritySettings& settings) const {
   if (precision_min_contrast) {
     settings.precision_min_contrast = *precision_min_contrast;
   }
+}
+
+void CoveragePatch::apply_to(CoverageSettings& settings) const {
+  if (frequency) {
+    settings.frequency = *frequency;
+  }
+  if (block_sessions) {
+    settings.block_sessions = *block_sessions;
+  }
+  if (outage_start) {
+    settings.outage_start = *outage_start;
+  }
+  if (outage_end) {
+    settings.outage_end = *outage_end;
+  }
+  if (prior_density) {
+    settings.prior_density = *prior_density;
+  }
+  if (prior_strength) {
+    settings.prior_strength = *prior_strength;
+  }
+  if (trade_size) {
+    settings.trade_size = *trade_size;
+  }
+  if (sparse_density) {
+    settings.sparse_density = *sparse_density;
+  }
+  if (publication_lag) {
+    settings.publication_lag = *publication_lag;
+  }
+}
+
+std::optional<Severity> SeverityThresholds::for_probability(double p) const noexcept {
+  if (p >= error) {
+    return Severity::kError;
+  }
+  if (p >= warn) {
+    return Severity::kWarn;
+  }
+  if (p >= info) {
+    return Severity::kInfo;
+  }
+  return std::nullopt;
 }
 
 bool Profile::matches(const Series& series) const {
@@ -505,6 +671,10 @@ Config parse_config(std::string_view text, const std::string& name, bool is_pypr
 Config load_config(const fs::path& path) {
   Config config = parse_config(read_file(path), path.string(), path.filename() == "pyproject.toml");
   config.source = path;
+  // A calendar file named in a config file is relative to that file.
+  if (!config.calendar_file.empty() && config.calendar_file.is_relative()) {
+    config.calendar_file = path.parent_path() / config.calendar_file;
+  }
   return config;
 }
 
@@ -533,13 +703,33 @@ std::string to_toml(const Config& config) {
   }
 
   out += "\n[integrity]\n";
-  IntegrityPatch full;
-  full.positive_point_series = config.integrity.positive_point_series;
-  full.precision_high_decimals = config.integrity.precision_high_decimals;
-  full.precision_high_sig_figs = config.integrity.precision_high_sig_figs;
-  full.precision_min_segment = config.integrity.precision_min_segment;
-  full.precision_min_contrast = config.integrity.precision_min_contrast;
-  append_integrity_patch(out, full);
+  append_integrity_patch(out, full_patch(config.integrity));
+
+  out += "\n[coverage]\n";
+  append_coverage_patch(out, full_patch(config.coverage));
+  out += "report = \"";
+  out += config.gap_report == GapReport::kRun ? "run" : "session";
+  out += "\"\ncohort_min_series = " + std::to_string(config.cohort.min_series);
+  out += "\ncohort_max_tail = " + format_number(config.cohort.max_tail);
+  out += "\nconfident_density = " + format_number(config.cohort.confident_density) + "\n";
+
+  out += "\n[severity]\ninfo = " + format_number(config.severity.info);
+  out += "\nwarn = " + format_number(config.severity.warn);
+  out += "\nerror = " + format_number(config.severity.error) + "\n";
+
+  out += "\n[calendar]\nname = \"";
+  out += to_string(config.calendar);
+  out += "\"\n";
+  if (!config.calendar_file.empty()) {
+    out += "file = ";
+    append_toml_string(out, config.calendar_file.string());
+    out += "\n";
+  }
+  if (!config.calendar_exchange.empty()) {
+    out += "exchange = ";
+    append_toml_string(out, config.calendar_exchange);
+    out += "\n";
+  }
 
   out += "\n[fafnir]\ntable_name = ";
   append_toml_string(out, config.fafnir_table);
@@ -569,6 +759,14 @@ std::string to_toml(const Config& config) {
       out += section;
       out += ".integrity]\n";
       out += integrity;
+    }
+    std::string coverage;
+    append_coverage_patch(coverage, profile.coverage);
+    if (!coverage.empty()) {
+      out += "\n[";
+      out += section;
+      out += ".coverage]\n";
+      out += coverage;
     }
   }
   return out;
@@ -630,6 +828,36 @@ precision_high_decimals = 5
 precision_high_sig_figs = 5
 precision_min_segment = 20
 precision_min_contrast = 0.8
+
+[coverage]
+# DQ3xx: how missing sessions are judged (doc/checks/DQ301.md).
+frequency = "auto"            # or daily, weekly, monthly, quarterly, annual, irregular
+block_sessions = 60           # sessions per block of the local density estimate
+outage_start = 0.0001         # P(a feed outage starts on a given session)
+outage_end = 0.05             # P(an outage ends on a given session)
+prior_density = 0.999         # prior on the density estimated from the counts
+prior_strength = 2            # its weight, in sessions
+trade_size = 1000             # volume per trade: median volume / trade_size is trades a day
+sparse_density = 0.8          # DQ302 below this
+publication_lag = 1           # DQ304: the latest sessions not yet expected
+report = "run"                # DQ301: one violation per run, or per "session"
+cohort_min_series = 3         # DQ303: fewest missing series that make a cohort
+cohort_max_tail = 1e-06       # DQ303: Poisson tail probability at or below which
+confident_density = 0.95      # DQ303: a series counts as expected above this density
+
+[severity]
+# p_error at or above which a probabilistic check reports info, warn or error.
+info = 0.2
+warn = 0.6
+error = 0.9
+
+[calendar]
+# Built in: "XNYS" (NYSE holidays and closures), "weekdays" or "24x7". A reference
+# file (date column, optional is_open and exchange columns) overrides it within the
+# file's span; a relative path is relative to this file.
+name = "XNYS"
+# file = "trading_calendar.csv"
+# exchange = "NASDAQ"
 
 [fafnir]
 # The table_name written into --format fafnir records.
