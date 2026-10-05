@@ -20,7 +20,7 @@ data-quality process.
 
 ## Status
 
-**Pre-alpha: milestone M3 (the price action model).** dorq reads CSV, TSV, JSON
+**Pre-alpha: milestone M4 (volume, stale values, point series).** dorq reads CSV, TSV, JSON
 Lines and JSON arrays, and reports in five formats. It runs:
 
 - the deterministic integrity checks (DQ1xx);
@@ -29,10 +29,15 @@ Lines and JSON arrays, and reports in five formats. It runs:
   gap, or a real move;
 - the date-shift check (DQ206);
 - the Bayesian coverage checks (DQ3xx), which judge a missing session by how often
-  *this* series trades and report a failed load once rather than once per series.
+  *this* series trades and report a failed load once rather than once per series;
+- the volume checks (DQ4xx): volume in other units, spikes with no move, moves on
+  no volume;
+- the stale-value checks (DQ5xx): a close repeated on traded bars more often than
+  the series' moves allow;
+- point series (rates, spreads, index levels) on the log or the difference scale,
+  with configurable bounds (DQ108).
 
-The volume, stale-value and point-series checks arrive in M4, and corporate
-actions, metadata and a market reference in M5. The
+Corporate actions, metadata and a market reference arrive in M5. The
 [development plan](doc/plans/dorq-development-plan.md) sets out what comes when.
 
 ```console
@@ -113,6 +118,7 @@ including the `fafnir` format that maps onto `ops.data_quality_flag`.
 | [DQ105](doc/checks/DQ105.md) | non-session-bar | a bar on a day the calendar has no session |
 | [DQ106](doc/checks/DQ106.md) | precision-shift | computed (e.g. back-adjusted) prices among quoted ones |
 | [DQ107](doc/checks/DQ107.md) | zero-range-with-volume | a flat bar on the series' typical volume |
+| [DQ108](doc/checks/DQ108.md) | out-of-bounds | a value outside the configured bounds |
 | [DQ201](doc/checks/DQ201.md) | bad-print | a wrong bar, or block of up to five, that the series reverts from |
 | [DQ202](doc/checks/DQ202.md) | scale-shift | a level change by a power of ten (an era at the wrong scale) |
 | [DQ203](doc/checks/DQ203.md) | unreported-split | a level change by a split ratio, with volume moving inversely |
@@ -125,6 +131,11 @@ including the `fafnir` format that maps onto `ops.data_quality_flag`.
 | [DQ303](doc/checks/DQ303.md) | cohort-gap | many series missing the same session: a failed load |
 | [DQ304](doc/checks/DQ304.md) | stale-feed | a series that stops before the as-of date |
 | [DQ305](doc/checks/DQ305.md) | frequency-gap | missing periods in a weekly, monthly, quarterly or annual series |
+| [DQ401](doc/checks/DQ401.md) | volume-scale-shift | volume stepping by a clean ratio (×100, ×1000) with no price change |
+| [DQ402](doc/checks/DQ402.md) | volume-spike-no-move | info: volume ten times its usual level on a day the price did not move |
+| [DQ403](doc/checks/DQ403.md) | move-on-zero-volume | a price change on a bar with no volume, where the series rarely has one |
+| [DQ501](doc/checks/DQ501.md) | repeated-price | the same close on traded bars running: a stale feed |
+| [DQ502](doc/checks/DQ502.md) | carry-bar | info: untraded bars that carry the last close |
 
 ### Exit status
 
@@ -150,7 +161,7 @@ archives, plus a `SHA256SUMS` file:
 | `dorq-<version>-macos-arm64.tar.gz` | macOS on Apple silicon |
 
 ```bash
-version=0.3.0
+version=0.4.0
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/dorq-${version}-linux-x86_64.tar.gz"
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
@@ -171,7 +182,7 @@ Clang 18+).
 ```bash
 sudo apt-get install -y build-essential cmake ninja-build git
 git clone https://github.com/rtrimble13/dorq.git && cd dorq
-git checkout v0.3.0                        # or stay on main for the latest
+git checkout v0.4.0                        # or stay on main for the latest
 cmake --workflow --preset release          # configure, build, run the tests
 sudo cmake --install build/release --prefix /opt/dorq
 /opt/dorq/bin/dorq version                 # names the commit it was built from

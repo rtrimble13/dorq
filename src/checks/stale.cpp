@@ -21,7 +21,7 @@ std::string one_in(double log_p) {
   if (!std::isfinite(odds) || odds > 1e12) {
     return "less than 1 in a trillion";
   }
-  return "1 in " + with_commas(static_cast<long long>(std::llround(odds)));
+  return "1 in " + with_commas(std::llround(odds));
 }
 
 }  // namespace
@@ -140,8 +140,8 @@ void CarryBar::run(const SeriesContext& context, std::vector<Violation>& out) co
     }
     v.line = s.line[i];
     const std::size_t count = last - i + 1;
-    v.message = std::to_string(count) + " bar" + (count == 1 ? "" : "s") +
-                " with no trade carry the close " + significant(s.close[i], 6) + " of " +
+    v.message = std::to_string(count) + (count == 1 ? " bar with no trade carries" : " bars with no trade carry") +
+                " the close " + significant(s.close[i], 6) + " of " +
                 s.date[previous].to_string();
     v.detail = {{"close", s.close[i]},
                 {"bars", static_cast<std::int64_t>(count)},

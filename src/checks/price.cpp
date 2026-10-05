@@ -296,7 +296,10 @@ Violation make_violation(const SeriesContext& context, const PriceAnalysis& anal
 }  // namespace
 
 std::string significant(double value, int digits) {
-  if (value == 0.0 || !std::isfinite(value)) {
+  if (value == 0.0) {
+    return format_number(0.0);  // not "-0"
+  }
+  if (!std::isfinite(value)) {
     return format_number(value);
   }
   const double magnitude = std::floor(std::log10(std::fabs(value)));

@@ -272,11 +272,9 @@ void VolumeScaleShift::run(const SeriesContext& context, std::vector<Violation>&
     if (shift.era) {
       v.end_date = s.date[end_row];
     }
-    v.message = std::string{shift.era ? "volume " + s.date[row].to_string() + ".." +
-                                            s.date[end_row].to_string() + " is "
-                                      : "volume level steps to "} +
-                "×" + significant(factor, 4) + " (≈ " + nearest_ratio(shift.log_ratio) + ")" +
-                (shift.era ? " the level either side" : std::string{}) +
+    v.message = std::string{shift.era ? "volume is " : "volume level steps to "} + "×" +
+                significant(factor, 4) + " (≈ " + nearest_ratio(shift.log_ratio) + ")" +
+                (shift.era ? " the level either side," : std::string{}) +
                 " with no price change to explain it: a change of units, or volume adjusted "
                 "for a split; P(error) = " +
                 format_probability(shift.p_error);
@@ -411,7 +409,9 @@ void MoveOnZeroVolume::run(const SeriesContext& context, std::vector<Violation>&
     if (!std::isfinite(c)) {
       continue;
     }
-    with_volume += std::isfinite(s.volume[i]) ? 1 : 0;
+    if (std::isfinite(s.volume[i])) {
+      ++with_volume;
+    }
     if (previous < s.size() && s.volume[i] == 0.0 && s.date[i] != s.date[previous]) {
       const double grid = std::max(tick_size(s.date[i], std::fabs(c)), written);
       if (std::fabs(c - s.close[previous]) >= 0.5 * grid) {

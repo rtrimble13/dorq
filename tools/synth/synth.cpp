@@ -116,7 +116,9 @@ struct SeriesPlan {
   std::vector<Bar> bars;
 };
 
-double round_to(double value, double grid) { return std::round(value / grid) * grid; }
+double round_to(double value, double grid) {
+  return std::round(value / grid) * grid + 0.0;  // + 0.0: no "-0"
+}
 
 // A price as an exporter writes it: fixed decimals for its grid.
 std::string price_text(double price, Class cls) {
