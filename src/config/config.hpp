@@ -122,7 +122,7 @@ struct PricePriors {
   double history_segment = 0.05;  // only after a gap of segment_gap sessions
   // DQ501: the prior chance that a run of repeated closes starting at a bar is a
   // stale feed rather than an unchanged price (per bar, not normalized with the rest).
-  double stale_run = 1e-4;
+  double stale_run = 3e-5;
 };
 
 // Settings for the price action checks (DQ2xx); doc/checks/DQ201.md explains the

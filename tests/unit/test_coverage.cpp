@@ -78,7 +78,8 @@ std::string universe() {
 }  // namespace
 
 TEST_CASE("M2 acceptance: one cohort, the lone liquid gap, no thin-name noise") {
-  const Result result = run({"--isolated", "--format", "jsonl"}, universe());
+  // Every bar closes at 10.5 on heavy volume: DQ501's repeated price, rightly.
+  const Result result = run({"--isolated", "--format", "jsonl", "--ignore", "DQ501"}, universe());
   CAPTURE(result.err);
   // DQ303 fires once, for the failed load.
   CHECK(count_matching(result.out, R"("code":"DQ303")") == 1);

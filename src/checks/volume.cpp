@@ -8,6 +8,7 @@
 #include <numbers>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "checks/coverage.hpp"
@@ -100,6 +101,27 @@ double mad_of(const std::vector<double>& values, std::size_t from, std::size_t t
   return stats::mad(std::span<const double>(values).subspan(from, to - from));
 }
 
+// The share of a window's values that count as independent: (1 - rho) / (1 + rho)
+// with rho the lag-1 autocorrelation of [from, mid) and [mid, to), each about its
+// own median.
+double effective_share(const std::vector<double>& values, std::size_t from, std::size_t mid,
+                       std::size_t to) {
+  double cross = 0.0;
+  double square = 0.0;
+  for (const auto& [a, b] : {std::pair{from, mid}, std::pair{mid, to}}) {
+    const double centre = median_of(values, a, b);
+    for (std::size_t i = a; i < b; ++i) {
+      const double x = values[i] - centre;
+      square += x * x;
+      if (i > a) {
+        cross += x * (values[i - 1] - centre);
+      }
+    }
+  }
+  const double rho = square > 0.0 ? std::clamp(cross / square, 0.0, 0.9) : 0.0;
+  return (1.0 - rho) / (1.0 + rho);
+}
+
 // A step in the volume level, at traded bar k.
 struct Shift {
   std::size_t k = 0;      // the first traded bar after the step
@@ -152,9 +174,12 @@ std::vector<Shift> find_shifts(const Series& s, const PriceAnalysis& analysis, s
     const double after = median_of(t.log_volume, best, best + window);
     const double before = median_of(t.log_volume, best - window, best);
     const double dv = after - before;
-    // A median of n values is off by about 1.25 sd / sqrt(n).
-    const double noise = std::hypot(1.25 * mad_of(t.log_volume, best - window, best) / std::sqrt(w),
-                                    1.25 * mad_of(t.log_volume, best, best + window) / std::sqrt(w));
+    // A median of n values is off by about 1.25 sd / sqrt(n), with n the effective
+    // count: volume runs in spells, so neighbouring days tell less than two.
+    const double n_eff = w * effective_share(t.log_volume, best - window, best, best + window);
+    const double noise =
+        std::hypot(1.25 * mad_of(t.log_volume, best - window, best) / std::sqrt(n_eff),
+                   1.25 * mad_of(t.log_volume, best, best + window) / std::sqrt(n_eff));
     // A step the price explains is a split's (DQ203), not volume's.
     std::vector<double> price_before;
     std::vector<double> price_after;
@@ -187,8 +212,10 @@ std::vector<Shift> find_shifts(const Series& s, const PriceAnalysis& analysis, s
   std::vector<Shift> out;
   for (std::size_t i = 0; i < shifts.size(); ++i) {
     Shift a = shifts[i];
-    if (i + 1 < shifts.size() && a.p_error >= 0.5 && shifts[i + 1].p_error >= 0.5 &&
-        std::fabs(a.log_ratio + shifts[i + 1].log_ratio) < 0.3) {
+    const Shift& b = i + 1 < shifts.size() ? shifts[i + 1] : a;
+    if (i + 1 < shifts.size() && a.p_error >= 0.5 && b.p_error >= 0.5 &&
+        (a.log_ratio > 0.0) != (b.log_ratio > 0.0) &&
+        nearest_ratio(a.log_ratio) == nearest_ratio(-b.log_ratio)) {
       a.end = shifts[i + 1].k - 1;
       a.era = true;
       a.p_error = std::max(a.p_error, shifts[i + 1].p_error);
@@ -293,6 +320,14 @@ void VolumeSpikeNoMove::run(const SeriesContext& context, std::vector<Violation>
   if (m <= window) {
     return;
   }
+  // Bars a volume step (DQ401) explains: its era, and the window after it, while
+  // the trailing median still holds the other level.
+  std::vector<std::pair<std::size_t, std::size_t>> explained;
+  for (const Shift& shift : find_shifts(s, analysis, window)) {
+    if (shift.p_error >= 0.5) {
+      explained.emplace_back(shift.k, shift.end + window);
+    }
+  }
   constexpr double kSpike = 2.302585;    // log 10
   constexpr double kQuiet = 1.5;         // |move| below this many sd is no move
   constexpr double kSpikePrior = 0.1;    // a volume spike without a move being an error
@@ -310,7 +345,9 @@ void VolumeSpikeNoMove::run(const SeriesContext& context, std::vector<Violation>
     const double spread = std::max(0.3, mad_of(t.log_volume, k - window, k));
     const double lr = t.log_volume[k] - usual;
     const std::size_t bar = t.bar[k];
-    if (lr < kSpike || lr / spread < 4.0 || std::fabs(analysis.move_z[bar]) >= kQuiet) {
+    if (lr < kSpike || lr / spread < 4.0 || std::fabs(analysis.move_z[bar]) >= kQuiet ||
+        std::any_of(explained.begin(), explained.end(),
+                    [bar](const auto& range) { return bar >= range.first && bar <= range.second; })) {
       continue;
     }
     // A recording error lands on a clean ratio; a real spike anywhere above 10x.

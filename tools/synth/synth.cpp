@@ -619,10 +619,13 @@ void Generator::rates(const std::vector<Date>& dates, std::ostream& points) {
     const double mean = r % 3 == 0 ? 0.2 : rng_.uniform(1.0, 6.0);
     double x = mean + rng_.normal() * 0.2;
     std::vector<double> values(n);
+    std::size_t last_policy = 0;
     for (std::size_t t = 0; t < n; ++t) {
       x += 0.003 * (mean - x) + 0.03 * rng_.t4();
-      if (rng_.chance(0.004)) {
+      // Policy moves come at meetings, weeks apart, not days.
+      if (t >= last_policy + 30 && rng_.chance(0.004)) {
         x += rng_.chance(0.5) ? 0.25 : -0.25;
+        last_policy = t;
       }
       values[t] = round_to(x, 0.01);
     }

@@ -1218,7 +1218,7 @@ unreported_split = 0.02
 scale_error = 0.02
 tick_move = 0.01
 history_segment = 0.05
-stale_run = 0.0001            # DQ501: a run of repeated closes being a stale feed, per bar
+stale_run = 0.00003           # DQ501: a run of repeated closes being a stale feed, per bar
 
 [severity]
 # p_error at or above which a probabilistic check reports info, warn or error.
