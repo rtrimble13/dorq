@@ -22,6 +22,7 @@ add_library(
   checks/actions.cpp
   checks/coverage.cpp
   checks/coverage_model.cpp
+  checks/cross.cpp
   checks/integrity.cpp
   checks/price.cpp
   checks/registry.cpp

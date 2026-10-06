@@ -223,7 +223,8 @@ class Builder {
 };
 
 Violation make_violation(const SeriesContext& context, const PriceAnalysis& analysis,
-                         const PriceFinding& finding, const CheckInfo& info) {
+                         const PriceFinding& finding, const CheckInfo& info,
+                         bool with_probability = true) {
   const Builder b(context, analysis, finding);
   const std::size_t t = finding.bar;
   Violation v;
@@ -266,9 +267,11 @@ Violation make_violation(const SeriesContext& context, const PriceAnalysis& anal
         break;
     }
   }
-  v.message += "; P(error) = " + format_probability(finding.p_error);
-  if (finding.provisional) {
-    v.message += ", provisional";
+  if (with_probability) {
+    v.message += "; P(error) = " + format_probability(finding.p_error);
+    if (finding.provisional) {
+      v.message += ", provisional";
+    }
   }
   for (std::size_t h = 0; h < kPriceHypotheses; ++h) {
     if (finding.considered.at(h)) {
@@ -301,6 +304,14 @@ Violation make_violation(const SeriesContext& context, const PriceAnalysis& anal
 }
 
 }  // namespace
+
+Violation unreported_split_base(const SeriesContext& context, const PriceAnalysis& analysis,
+                                const PriceFinding& finding) {
+  PriceFinding as_split = finding;
+  as_split.hypothesis = H::kUnreportedSplit;
+  as_split.p_error = std::max(as_split.p_error, context.thresholds.info);
+  return make_violation(context, analysis, as_split, unreported_split_info(), false);
+}
 
 std::string significant(double value, int digits) {
   if (value == 0.0) {

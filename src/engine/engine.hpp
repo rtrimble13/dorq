@@ -94,6 +94,7 @@ class Engine {
     bool price_model = false;          // a DQ2xx price check needs the price analysis
     bool cohort = false;               // DQ303 enabled
     bool stale = false;                // DQ304 enabled
+    bool cohort_move = false;          // DQ601 enabled
   };
   struct Work {
     std::size_t sequence = 0;
@@ -122,6 +123,7 @@ class Engine {
 
   // Cross-sectional checks.
   bool holding_ = false;
+  bool market_days_ = false;  // DQ602 enabled, and a market given
   std::unique_ptr<CrossSection> cross_;
   std::vector<SeriesResult> held_;
 

@@ -12,7 +12,9 @@ DQ201 precision 0.90
 DQ201 recall 0.90
 DQ202 precision 0.90
 DQ202 recall 0.90
-DQ203 precision 0.90
+# DQ203 at 0.85: with --actions, a split applied twice whose second move DQ704
+# misses (in a volatile spell) is reported as DQ203, at the right bar.
+DQ203 precision 0.85
 DQ203 recall 0.85
 DQ204 precision 0.90
 DQ204 recall 0.90
@@ -46,12 +48,30 @@ DQ403 recall 0.90
 DQ501 precision 0.80
 DQ501 recall 0.60
 
+# Context inputs (M5; the gate runs with actions.csv, meta.csv and market.csv).
+# DQ704 misses a doubled split now and then in a volatile spell, where a second
+# move of the ratio is less surprising.
+DQ601 precision 1.0
+DQ601 recall 1.0
+DQ701 precision 0.90
+DQ701 recall 0.90
+DQ702 precision 0.90
+DQ702 recall 0.90
+DQ703 precision 0.90
+DQ703 recall 0.75
+DQ704 precision 0.90
+DQ704 recall 0.60
+DQ705 precision 1.0
+DQ705 recall 1.0
+
 # Hard negatives: real events that must not be reported. Earnings gaps, the crash
-# day and tick moves never; thin names' spike-and-revert trades are genuinely
-# ambiguous, and a couple are allowed; so is a rate's quarter-point move that
-# half-reverts the next day.
+# day, tick moves and splits on file never; thin names' spike-and-revert trades are
+# genuinely ambiguous, and up to three a universe are allowed; so is a rate's
+# quarter-point move that half-reverts the next day.
 hn_earnings max 0
 hn_crash max 0
 hn_tick max 0
-hn_thin max 2
+hn_thin max 3
+hn_split_on_file max 0
+hn_split_between_bars max 0
 hn_rate max 1

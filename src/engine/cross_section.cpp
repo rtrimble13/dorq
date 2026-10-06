@@ -4,8 +4,10 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "checks/check.hpp"
@@ -14,6 +16,7 @@
 #include "core/text.hpp"
 #include "dorq/number.hpp"
 #include "engine/engine.hpp"
+#include "stats/robust.hpp"
 #include "stats/special.hpp"
 
 namespace dorq {
@@ -55,7 +58,11 @@ std::size_t CrossSection::slot(Date date) noexcept {
   return static_cast<std::size_t>(std::clamp(date, kFirstDay, kLastDay).days() - kFirstDay.days());
 }
 
-void CrossSection::add(const CrossSummary& summary) {
+void CrossSection::add(CrossSummary summary) {
+  for (PeerMove& move : summary.moves) {
+    moves_.emplace_back(tails_.size(), std::move(move));
+  }
+  summary.moves.clear();
   CrossSummary tail = summary;
   tail.confident_ranges.clear();
   tail.confident_missing.clear();
@@ -80,8 +87,116 @@ void CrossSection::add(const CrossSummary& summary) {
   }
 }
 
+// DQ601: moves by the same clean ratio on the same date. Within a peer group a
+// sibling moving with a series is strong evidence that both split: families of
+// funds split together, and an unrelated move matching a sibling's ratio to the
+// day is rare. kSiblingBf is that evidence, as a Bayes factor for
+// unreported_split; it can turn a DQ209 into a DQ203.
+std::vector<Violation> CrossSection::cohort_moves(std::vector<SeriesResult>& results) {
+  constexpr double kSiblingBf = 100.0;
+  constexpr std::size_t kNamesShown = 6;
+  std::vector<Violation> out;
+  std::map<std::pair<Date, std::string>, std::vector<std::size_t>> groups;
+  for (std::size_t i = 0; i < moves_.size(); ++i) {
+    groups[{moves_[i].second.date, moves_[i].second.ratio}].push_back(i);
+  }
+  const auto split = static_cast<std::size_t>(PriceHypothesis::kUnreportedSplit);
+  for (const auto& [key, members] : groups) {
+    for (const std::size_t i : members) {
+      auto& [index, move] = moves_[i];
+      const auto siblings = std::count_if(members.begin(), members.end(), [&](std::size_t j) {
+        return j != i && !move.peer_group.empty() && moves_[j].second.peer_group == move.peer_group &&
+               moves_[j].first != index;
+      });
+      if (siblings == 0 || !move.considered.at(split) || index >= results.size()) {
+        continue;
+      }
+      std::array<double, kPriceHypotheses> posterior{};
+      double total = 0.0;
+      for (std::size_t h = 0; h < kPriceHypotheses; ++h) {
+        posterior.at(h) = move.posterior.at(h) * (h == split ? kSiblingBf : 1.0);
+        total += posterior.at(h);
+      }
+      double p_error = 0.0;
+      std::size_t best = split;
+      for (std::size_t h = 0; h < kPriceHypotheses; ++h) {
+        posterior.at(h) /= total;
+        if (is_error(static_cast<PriceHypothesis>(h))) {
+          p_error += posterior.at(h);
+          best = posterior.at(h) > posterior.at(best) ? h : best;
+        }
+      }
+      const auto severity = thresholds_.for_probability(p_error);
+      if (best != split || !severity) {
+        continue;
+      }
+      // The series' own report of this bar gives way to the DQ203.
+      std::erase_if(results[index].violations, [&move](const Violation& v) {
+        return v.date == move.date && v.check->code.starts_with("DQ20") && v.check->code != "DQ206";
+      });
+      Violation v = move.split;
+      v.p_error = std::min(p_error, 1.0);
+      v.severity = move.provisional ? std::min(*severity, Severity::kWarn) : *severity;
+      v.message += "; P(error) = " + format_probability(v.p_error);
+      if (move.provisional) {
+        v.message += ", provisional";
+      }
+      v.hypotheses.clear();
+      for (std::size_t h = 0; h < kPriceHypotheses; ++h) {
+        if (move.considered.at(h)) {
+          v.hypotheses.push_back({to_string(static_cast<PriceHypothesis>(h)), posterior.at(h)});
+        }
+      }
+      v.evidence.push_back({"peer_group", std::int64_t{siblings}, std::log(kSiblingBf),
+                            std::to_string(siblings) + " in " + move.peer_group +
+                                " move by the same ratio that day"});
+      results[index].violations.push_back(std::move(v));
+    }
+    if (members.size() < static_cast<std::size_t>(cohort_.min_series)) {
+      continue;
+    }
+    const PeerMove& first = moves_[members.front()].second;
+    const bool family =
+        !first.peer_group.empty() &&
+        std::all_of(members.begin(), members.end(),
+                    [&](std::size_t j) { return moves_[j].second.peer_group == first.peer_group; });
+    std::string names;
+    for (std::size_t m = 0; m < members.size() && m < kNamesShown; ++m) {
+      names += (m == 0 ? "" : ", ") + moves_[members[m]].second.series;
+    }
+    if (members.size() > kNamesShown) {
+      names += " and " + std::to_string(members.size() - kNamesShown) + " more";
+    }
+    std::vector<double> factors;
+    for (const std::size_t j : members) {
+      factors.push_back(moves_[j].second.factor);
+    }
+    const double factor = stats::median(std::move(factors));
+    const CheckInfo& info = find_check("DQ601")->info();
+    Violation v;
+    v.check = &info;
+    v.severity = Severity::kWarn;
+    v.classification = family ? Classification::kContextGap : Classification::kDataError;
+    v.date = key.first;
+    v.message = std::to_string(members.size()) + " series move ×" +
+                format_number(std::round(factor * 1e4) / 1e4) + " (≈ a " + key.second +
+                " split) on " + key.first.to_string() + ": " + names +
+                (family ? "; all of peer group " + first.peer_group +
+                              ": a family splitting together, with no split on file"
+                        : ": a vendor's mass adjustment, or splits the actions file is missing");
+    v.detail = {{"series_moving", static_cast<std::int64_t>(members.size())},
+                {"ratio", key.second},
+                {"factor", factor}};
+    if (family) {
+      v.detail.push_back({"peer_group", first.peer_group});
+    }
+    out.push_back(std::move(v));
+  }
+  return out;
+}
+
 std::vector<Violation> CrossSection::finalize(std::vector<SeriesResult>& results) {
-  std::vector<Violation> cohort_violations;
+  std::vector<Violation> cohort_violations = cohort_moves(results);
   // A series that stops before the as-of date was expected on the session after
   // its last bar. Counting that session lets a load that failed for many series on
   // the latest night show up as a cohort, like any other.

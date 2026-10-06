@@ -9,6 +9,7 @@
 #include "checks/actions.hpp"
 #include "checks/check.hpp"
 #include "checks/coverage.hpp"
+#include "checks/cross.hpp"
 #include "checks/integrity.hpp"
 #include "checks/price.hpp"
 #include "checks/stale.hpp"
@@ -83,13 +84,16 @@ std::span<const Check* const> all_checks() {
   static const SplitOnFileCheck kSplitDouble(split_double_applied_info(),
                                              SplitVerdict::kDoubleApplied);
   static const DividendImplausible kDividend;
-  static const std::array<const Check*, 30> kChecks = {
+  static const CohortMove kCohortMove;
+  static const MarketDay kMarketDay;
+  static const std::array<const Check*, 32> kChecks = {
       &kOhlcBounds,      &kNonPositive,   &kDuplicateDate,  &kMissingField,  &kNonSession,
       &kPrecisionShift,  &kZeroRange,     &kOutOfBounds,    &kBadPrint,      &kScaleShift,
       &kUnreportedSplit, &kCloseMismatch, &kHistorySegment, &kDateShift,     &kLargeMove,
       &kMissingRun,      &kSparse,        &kCohort,         &kStale,         &kFrequencyGap,
       &kVolumeShift,     &kVolumeSpike,   &kZeroVolumeMove, &kRepeatedPrice, &kCarryBar,
-      &kSplitMisdated,   &kSplitNoJump,   &kSplitRatio,     &kSplitDouble,   &kDividend};
+      &kCohortMove,      &kMarketDay,     &kSplitMisdated,  &kSplitNoJump,   &kSplitRatio,
+      &kSplitDouble,     &kDividend};
   return kChecks;
 }
 
