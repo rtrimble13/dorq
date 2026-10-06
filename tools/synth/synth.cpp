@@ -24,7 +24,6 @@
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <tuple>
 #include <vector>
 
 #include "dorq/calendar.hpp"
@@ -172,6 +171,21 @@ double round_price(double price, Class cls) {
 
 using Pool = std::vector<SeriesPlan*>;
 
+// A split: `after` new shares for `before` old ones.
+struct SplitShares {
+  double after = 1.0;
+  double before = 1.0;
+};
+
+// A bar picked for a split, and the split.
+struct SplitPick {
+  SeriesPlan* plan = nullptr;
+  std::size_t t = 0;
+  SplitShares ratio;
+};
+
+void apply_split(SeriesPlan& plan, std::size_t from, double price_factor);
+
 class Generator {
  public:
   explicit Generator(std::uint64_t seed) : rng_(seed), calendar_(dorq::CalendarKind::kXnys) {}
@@ -215,7 +229,12 @@ class Generator {
   void inject_failed_load(Pool& liquid);
   void inject_actions(std::vector<SeriesPlan>& universe);
   void inject_family_split(Pool& liquid);
-  void apply_split(SeriesPlan& plan, std::size_t from, double price_factor);
+  void splits_on_file(Pool& tradable, Pool& thin);
+  void wrong_splits(Pool& tradable);
+  void dividends(Pool& liquid);
+  std::optional<SplitPick> pick_split(Pool& tradable, std::size_t extra);
+  void file_split(const SeriesPlan& plan, Date ex, SplitShares ratio);
+  void split_hard_negative(const SeriesPlan& plan, std::size_t t, const char* kind);
   SeriesPlan& any(Pool& from);
   void label(const SeriesPlan& plan, std::size_t first, std::size_t last, const char* kind,
              const char* expect);
@@ -722,19 +741,154 @@ void Generator::inject(std::vector<SeriesPlan>& universe) {
 
 // Every price from bar `from` on multiplied by `price_factor`, and volume divided
 // by it: a split as raw bars show it.
-void Generator::apply_split(SeriesPlan& plan, std::size_t from, double price_factor) {
+void apply_split(SeriesPlan& plan, std::size_t from, double price_factor) {
   for (std::size_t i = from; i < plan.bars.size(); ++i) {
     scale_bar(plan.bars[i], price_factor, plan.cls);
     plan.bars[i].volume = std::round(plan.bars[i].volume / price_factor);
   }
 }
 
-// Corporate actions (actions.csv, read with --actions). Splits on file that the
-// bars show at their ex-date (hard negatives), some between two stored bars on
-// thin names; and splits on file that are wrong: misdated by a few sessions, not
-// in the bars, at the wrong ratio (half of them inverted), or applied twice in
-// the bars. Quarterly dividends on the liquid names, a few of them off by a
-// hundred or above the price.
+constexpr std::array<SplitShares, 4> kForwardSplits = {{{2, 1}, {2, 1}, {3, 1}, {3, 2}}};
+constexpr std::array<SplitShares, 3> kReverseSplits = {{{1, 10}, {1, 5}, {1, 20}}};
+
+void Generator::file_split(const SeriesPlan& plan, Date ex, SplitShares ratio) {
+  actions_.push_back({plan.id, ex, true, ratio.after, ratio.before, 0.0});
+}
+
+void Generator::split_hard_negative(const SeriesPlan& plan, std::size_t t, const char* kind) {
+  labels_.push_back({plan.id, plan.bars[t].date, plan.bars[t].date, kind, "", "DQ2"});
+  labels_.push_back({plan.id, plan.bars[t].date, plan.bars[t].date, kind, "", "DQ70"});
+}
+
+// A bar of a tradable series with a split ratio for its price (forward above $25,
+// reverse below $8), and the rest of the series, from `extra` bars before it, free
+// of other faults.
+std::optional<SplitPick> Generator::pick_split(Pool& tradable, std::size_t extra) {
+  SeriesPlan& plan = any(tradable);
+  const std::size_t t = pick_bar(plan, 60);
+  if (!plan.bars[t - 1].present || !plan.bars[t].present) {
+    return std::nullopt;
+  }
+  const double price = plan.bars[t - 1].close;
+  std::optional<SplitShares> ratio;
+  if (price >= 25.0) {
+    ratio = kForwardSplits.at(static_cast<std::size_t>(rng_.integer(0, 3)));
+  } else if (price < 8.0) {
+    ratio = kReverseSplits.at(static_cast<std::size_t>(rng_.integer(0, 2)));
+  }
+  if (!ratio || !reserve(plan.id, t - extra, plan.bars.size())) {
+    return std::nullopt;
+  }
+  return SplitPick{&plan, t, *ratio};
+}
+
+// Splits on file that the bars show at their ex-date (hard negatives), some of
+// them between two stored bars of a thin name.
+void Generator::splits_on_file(Pool& tradable, Pool& thin) {
+  for (int done = 0; done < 8;) {
+    if (const auto p = pick_split(tradable, 0)) {
+      apply_split(*p->plan, p->t, p->ratio.before / p->ratio.after);
+      file_split(*p->plan, p->plan->bars[p->t].date, p->ratio);
+      split_hard_negative(*p->plan, p->t, "hn_split_on_file");
+      ++done;
+    }
+  }
+  // The ex-date a session the thin name has no bar on.
+  for (int done = 0; done < 3;) {
+    SeriesPlan& plan = any(thin);
+    const std::size_t t = pick_bar(plan, 60);
+    std::size_t next = t + 1;
+    while (next < plan.bars.size() && !plan.bars[next].present) {
+      ++next;
+    }
+    if (plan.bars[t].present || !plan.bars[t - 1].present || next + 30 >= plan.bars.size() ||
+        !reserve(plan.id, t, plan.bars.size())) {
+      continue;
+    }
+    const SplitShares ratio = kReverseSplits.at(static_cast<std::size_t>(rng_.integer(0, 1)));
+    apply_split(plan, next, ratio.before / ratio.after);
+    file_split(plan, plan.bars[t].date, ratio);
+    split_hard_negative(plan, next, "hn_split_between_bars");
+    ++done;
+  }
+}
+
+// Splits on file that are wrong: misdated by a few sessions, not in the bars, at
+// the wrong ratio (half of them inverted), or applied twice in the bars.
+void Generator::wrong_splits(Pool& tradable) {
+  for (int done = 0; done < 4;) {
+    if (const auto p = pick_split(tradable, 5)) {
+      const int k = (rng_.chance(0.5) ? 1 : -1) * rng_.integer(1, 3);
+      const std::size_t on_file =
+          k > 0 ? p->t + static_cast<std::size_t>(k) : p->t - static_cast<std::size_t>(-k);
+      apply_split(*p->plan, p->t, p->ratio.before / p->ratio.after);
+      file_split(*p->plan, p->plan->bars[on_file].date, p->ratio);
+      label(*p->plan, std::min(p->t, on_file), std::max(p->t, on_file), "split_misdated", "DQ701");
+      ++done;
+    }
+  }
+  for (int done = 0; done < 4;) {
+    if (const auto p = pick_split(tradable, 0)) {
+      file_split(*p->plan, p->plan->bars[p->t].date, p->ratio);
+      label(*p->plan, p->t, p->t, "split_without_jump", "DQ702");
+      ++done;
+    }
+  }
+  for (int done = 0; done < 4;) {
+    if (const auto p = pick_split(tradable, 0)) {
+      apply_split(*p->plan, p->t, p->ratio.before / p->ratio.after);
+      SplitShares wrong{p->ratio.before, p->ratio.after};  // inverted
+      if (done % 2 == 1) {
+        wrong = p->ratio.after > p->ratio.before ? SplitShares{4, 1} : SplitShares{1, 50};
+      }
+      file_split(*p->plan, p->plan->bars[p->t].date, wrong);
+      label(*p->plan, p->t, p->t, "split_ratio_mismatch", "DQ703");
+      ++done;
+    }
+  }
+  for (int done = 0; done < 3;) {
+    if (const auto p = pick_split(tradable, 0)) {
+      const auto second = p->t + static_cast<std::size_t>(rng_.integer(2, 12));
+      apply_split(*p->plan, p->t, p->ratio.before / p->ratio.after);
+      apply_split(*p->plan, second, p->ratio.before / p->ratio.after);
+      file_split(*p->plan, p->plan->bars[p->t].date, p->ratio);
+      label(*p->plan, p->t, second, "split_double_applied", "DQ704");
+      ++done;
+    }
+  }
+}
+
+// Quarterly dividends on the liquid names, a yield of 1-4% a year; five wrong:
+// three ×100, two at four times the price.
+void Generator::dividends(Pool& liquid) {
+  std::vector<std::size_t> rows;
+  for (SeriesPlan* plan : liquid) {
+    const double yield = rng_.uniform(0.01, 0.04);
+    for (auto t = static_cast<std::size_t>(rng_.integer(20, 80)); t < plan->bars.size(); t += 63) {
+      if (!plan->bars[t - 1].present) {
+        continue;
+      }
+      const double amount = std::max(0.01, round_to(plan->bars[t - 1].close * yield / 4.0, 0.01));
+      rows.push_back(actions_.size());
+      actions_.push_back({plan->id, plan->bars[t].date, false, 1.0, 1.0, amount});
+    }
+  }
+  std::set<std::size_t> faulted;
+  for (int done = 0; done < 5; ++done) {
+    const std::size_t row =
+        rows.at(static_cast<std::size_t>(rng_.integer(0, static_cast<int>(rows.size()) - 1)));
+    if (!faulted.insert(row).second) {
+      --done;
+      continue;
+    }
+    Action& dividend = actions_.at(row);
+    dividend.amount = done < 3 ? dividend.amount * 100.0 : round_to(dividend.amount * 400.0, 0.01);
+    labels_.push_back({dividend.series, dividend.ex_date, dividend.ex_date,
+                       done < 3 ? "dividend_slip" : "dividend_above_price", "DQ705", ""});
+  }
+}
+
+// Corporate actions (actions.csv, read with --actions).
 void Generator::inject_actions(std::vector<SeriesPlan>& universe) {
   Pool liquid;
   Pool tradable;
@@ -750,146 +904,9 @@ void Generator::inject_actions(std::vector<SeriesPlan>& universe) {
       thin.push_back(&plan);
     }
   }
-  struct Ratio {
-    double after = 1.0;
-    double before = 1.0;
-  };
-  static constexpr std::array<Ratio, 4> kForward = {{{2, 1}, {2, 1}, {3, 1}, {3, 2}}};
-  static constexpr std::array<Ratio, 3> kReverse = {{{1, 10}, {1, 5}, {1, 20}}};
-  // A split for a price: forward above $25, reverse below $8, none between.
-  const auto ratio_for = [&](double price) -> std::optional<Ratio> {
-    if (price >= 25.0) {
-      return kForward.at(static_cast<std::size_t>(rng_.integer(0, 3)));
-    }
-    if (price < 8.0) {
-      return kReverse.at(static_cast<std::size_t>(rng_.integer(0, 2)));
-    }
-    return std::nullopt;
-  };
-  const auto file = [&](const SeriesPlan& plan, Date ex, Ratio ratio) {
-    actions_.push_back({plan.id, ex, true, ratio.after, ratio.before, 0.0});
-  };
-  const auto hard_negative = [&](const SeriesPlan& plan, std::size_t t, const char* kind) {
-    labels_.push_back({plan.id, plan.bars[t].date, plan.bars[t].date, kind, "", "DQ2"});
-    labels_.push_back({plan.id, plan.bars[t].date, plan.bars[t].date, kind, "", "DQ70"});
-  };
-  // Picks a bar of a tradable series with a split ratio for its price and the rest
-  // of the series free of other faults.
-  const auto pick = [&](std::size_t extra) -> std::optional<std::tuple<SeriesPlan*, std::size_t, Ratio>> {
-    SeriesPlan& plan = any(tradable);
-    const std::size_t t = pick_bar(plan, 60);
-    if (!plan.bars[t - 1].present || !plan.bars[t].present) {
-      return std::nullopt;
-    }
-    const auto ratio = ratio_for(plan.bars[t - 1].close);
-    if (!ratio || !reserve(plan.id, t - extra, plan.bars.size())) {
-      return std::nullopt;
-    }
-    return std::make_tuple(&plan, t, *ratio);
-  };
-
-  // Splits on file, in the bars at their ex-date.
-  for (int done = 0; done < 8;) {
-    if (const auto p = pick(0)) {
-      auto [plan, t, ratio] = *p;
-      apply_split(*plan, t, ratio.before / ratio.after);
-      file(*plan, plan->bars[t].date, ratio);
-      hard_negative(*plan, t, "hn_split_on_file");
-      ++done;
-    }
-  }
-  // On a thin name, with the ex-date a session the series has no bar on: the
-  // split is between two stored bars.
-  for (int done = 0; done < 3;) {
-    SeriesPlan& plan = any(thin);
-    const std::size_t t = pick_bar(plan, 60);
-    std::size_t next = t + 1;
-    while (next < plan.bars.size() && !plan.bars[next].present) {
-      ++next;
-    }
-    if (plan.bars[t].present || !plan.bars[t - 1].present || next + 30 >= plan.bars.size() ||
-        !reserve(plan.id, t, plan.bars.size())) {
-      continue;
-    }
-    const Ratio ratio = kReverse.at(static_cast<std::size_t>(rng_.integer(0, 1)));
-    apply_split(plan, next, ratio.before / ratio.after);
-    file(plan, plan.bars[t].date, ratio);
-    hard_negative(plan, next, "hn_split_between_bars");
-    ++done;
-  }
-  // Misdated: the bars split a few sessions from the ex-date on file.
-  for (int done = 0; done < 4;) {
-    if (const auto p = pick(5)) {
-      auto [plan, t, ratio] = *p;
-      const int k = (rng_.chance(0.5) ? 1 : -1) * rng_.integer(1, 3);
-      const auto on_file = static_cast<std::size_t>(static_cast<int>(t) + k);
-      apply_split(*plan, t, ratio.before / ratio.after);
-      file(*plan, plan->bars[on_file].date, ratio);
-      label(*plan, std::min(t, on_file), std::max(t, on_file), "split_misdated", "DQ701");
-      ++done;
-    }
-  }
-  // Not in the bars: a split on file the prices never show.
-  for (int done = 0; done < 4;) {
-    if (const auto p = pick(0)) {
-      auto [plan, t, ratio] = *p;
-      file(*plan, plan->bars[t].date, ratio);
-      label(*plan, t, t, "split_without_jump", "DQ702");
-      ++done;
-    }
-  }
-  // The wrong ratio on file: inverted, or another split's.
-  for (int done = 0; done < 4;) {
-    if (const auto p = pick(0)) {
-      auto [plan, t, ratio] = *p;
-      apply_split(*plan, t, ratio.before / ratio.after);
-      Ratio wrong{ratio.before, ratio.after};  // inverted
-      if (done % 2 == 1) {
-        wrong = ratio.after > ratio.before ? Ratio{4, 1} : Ratio{1, 50};
-      }
-      file(*plan, plan->bars[t].date, wrong);
-      label(*plan, t, t, "split_ratio_mismatch", "DQ703");
-      ++done;
-    }
-  }
-  // Applied twice: the bars move by the ratio at the ex-date and again soon after.
-  for (int done = 0; done < 3;) {
-    if (const auto p = pick(0)) {
-      auto [plan, t, ratio] = *p;
-      const auto second = t + static_cast<std::size_t>(rng_.integer(2, 12));
-      apply_split(*plan, t, ratio.before / ratio.after);
-      apply_split(*plan, second, ratio.before / ratio.after);
-      file(*plan, plan->bars[t].date, ratio);
-      label(*plan, t, second, "split_double_applied", "DQ704");
-      ++done;
-    }
-  }
-  // Dividends: quarterly on the liquid names, a yield of 1-4% a year.
-  std::vector<std::size_t> dividend_rows;
-  for (SeriesPlan* plan : liquid) {
-    const double yield = rng_.uniform(0.01, 0.04);
-    for (auto t = static_cast<std::size_t>(rng_.integer(20, 80)); t < plan->bars.size(); t += 63) {
-      if (!plan->bars[t - 1].present) {
-        continue;
-      }
-      const double amount = std::max(0.01, round_to(plan->bars[t - 1].close * yield / 4.0, 0.01));
-      dividend_rows.push_back(actions_.size());
-      actions_.push_back({plan->id, plan->bars[t].date, false, 1.0, 1.0, amount});
-    }
-  }
-  std::set<std::size_t> faulted;
-  for (int done = 0; done < 5; ++done) {
-    const std::size_t row = dividend_rows.at(
-        static_cast<std::size_t>(rng_.integer(0, static_cast<int>(dividend_rows.size()) - 1)));
-    if (!faulted.insert(row).second) {
-      --done;
-      continue;
-    }
-    Action& dividend = actions_.at(row);
-    dividend.amount = done < 3 ? dividend.amount * 100.0 : round_to(dividend.amount * 400.0, 0.01);
-    labels_.push_back({dividend.series, dividend.ex_date, dividend.ex_date,
-                       done < 3 ? "dividend_slip" : "dividend_above_price", "DQ705", ""});
-  }
+  splits_on_file(tradable, thin);
+  wrong_splits(tradable);
+  dividends(liquid);
 }
 
 // A fund family that splits together (DQ601): four liquid names, one peer group,

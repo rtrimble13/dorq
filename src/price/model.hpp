@@ -55,11 +55,11 @@ struct PriceFinding {
   double p_error = 0.0;
   double tail = 1.0;  // the return's two-sided tail probability, as ordinary
   bool provisional = false;
-  int block = 1;                       // bars in a bad print
-  double factor = 1.0;                 // close / previous close
-  std::optional<SplitRatio> split;     // the split ratio nearest the move
-  int power_of_ten = 0;                // for a scale error: the nearest power of ten
-  std::optional<double> volume_ratio;  // median volume after / before
+  int block = 1;                             // bars in a bad print
+  double factor = 1.0;                       // close / previous close
+  std::optional<SplitRatio> split;           // the split ratio nearest the move
+  int power_of_ten = 0;                      // for a scale error: the nearest power of ten
+  std::optional<double> volume_ratio;        // median volume after / before
   std::optional<SplitAction> split_on_file;  // a split on file between this bar and the last
   // A DQ7xx finding about a split on file accounts for this move (a misdated or
   // doubled split, the wrong ratio): the DQ2xx checks leave it to that one.
@@ -83,7 +83,7 @@ struct SplitFinding {
   SplitAction split;
   SplitVerdict verdict = SplitVerdict::kConfirmed;  // the most probable error
   std::array<double, kSplitVerdicts> posterior{};
-  double p_error = 0.0;   // P(any verdict but kConfirmed)
+  double p_error = 0.0;    // P(any verdict but kConfirmed)
   std::size_t ex_bar = 0;  // feature index of the first bar on or after the ex-date
   // kMisdated: the bar the bars move at; kDoubleApplied: the second move.
   std::optional<std::size_t> other_bar;
@@ -106,8 +106,8 @@ struct StaleRun {
 struct PriceAnalysis {
   bool applicable = false;
   PriceFeatures features;
-  std::vector<PriceFinding> findings;  // in bar order
-  std::vector<StaleRun> stale_runs;    // in bar order; OHLCV with volume only
+  std::vector<PriceFinding> findings;        // in bar order
+  std::vector<StaleRun> stale_runs;          // in bar order; OHLCV with volume only
   std::vector<SplitFinding> split_findings;  // with --actions: each split on file judged
   // Each bar's return in standard deviations of an ordinary move (0 for the
   // first): what the volume checks call a move.
@@ -116,11 +116,11 @@ struct PriceAnalysis {
 
 // What the model knows about a series besides its bars (plan section 2.2).
 struct PriceContext {
-  std::optional<Bounds> bounds = std::nullopt;  // a point series' range ([integrity] bounds)
-  bool have_actions = false;                     // --actions was given
-  const SeriesActions* actions = nullptr;        // this series' actions on file, if any
+  std::optional<Bounds> bounds = std::nullopt;     // a point series' range ([integrity] bounds)
+  bool have_actions = false;                       // --actions was given
+  const SeriesActions* actions = nullptr;          // this series' actions on file, if any
   std::optional<double> tick_size = std::nullopt;  // --meta: the tick, instead of inferring it
-  const MarketSeries* market = nullptr;          // --market
+  const MarketSeries* market = nullptr;            // --market
 };
 
 [[nodiscard]] PriceAnalysis analyze_prices(const Series& series, const Calendar& calendar,

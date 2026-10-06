@@ -12,7 +12,8 @@ add_executable(
   unit/test_config.cpp
   unit/test_coverage.cpp
   unit/test_price.cpp
-  unit/test_volume_stale.cpp)
+  unit/test_volume_stale.cpp
+  unit/test_context.cpp)
 target_include_directories(dorq_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(dorq_tests PRIVATE dorq_lib doctest::doctest_with_main)
 dorq_configure_target(dorq_tests)

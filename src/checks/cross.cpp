@@ -47,8 +47,8 @@ std::vector<Violation> market_days(const MarketSeries& market, const Calendar& c
   std::vector<double> scaled;
   std::vector<int> sessions(n, 1);
   for (std::size_t i = 1; i < n; ++i) {
-    sessions[i] = std::max(
-        1, calendar.sessions_between(Date::from_days(market.date[i - 1].days() + 1), market.date[i]));
+    sessions[i] = std::max(1, calendar.sessions_between(
+                                  Date::from_days(market.date[i - 1].days() + 1), market.date[i]));
     scaled.push_back((market.log_level[i] - market.log_level[i - 1]) /
                      std::sqrt(static_cast<double>(sessions[i])));
   }
@@ -73,9 +73,8 @@ std::vector<Violation> market_days(const MarketSeries& market, const Calendar& c
     v.classification = Classification::kMarketFact;
     v.p_error = 0.0;
     v.date = market.date[i];
-    v.message = "the market (" + market.name + ") moved " +
-                (change >= 0.0 ? "+" : "−") + significant(std::fabs(change) * 100.0, 3) + "% (" +
-                significant(std::fabs(z), 2) +
+    v.message = "the market (" + market.name + ") moved " + (change >= 0.0 ? "+" : "−") +
+                significant(std::fabs(change) * 100.0, 3) + "% (" + significant(std::fabs(z), 2) +
                 " standard deviations of its recent moves): every series' ordinary move is "
                 "wider today";
     v.detail = {{"market", market.name}, {"change", change}, {"z", z}};

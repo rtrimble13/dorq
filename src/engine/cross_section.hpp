@@ -5,8 +5,8 @@
 #include <cstdint>
 #include <optional>
 #include <string>
-#include <utility>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "config/config.hpp"
@@ -78,7 +78,12 @@ class CrossSection {
   std::optional<Date> as_of_;
   bool as_of_given_ = false;
 
+  // DQ601 (doc/checks/DQ601.md).
   [[nodiscard]] std::vector<Violation> cohort_moves(std::vector<SeriesResult>& results);
+  void sibling_evidence(std::size_t i, const std::vector<std::size_t>& members,
+                        std::vector<SeriesResult>& results) const;
+  [[nodiscard]] Violation cohort_violation(Date date, const std::string& ratio,
+                                           const std::vector<std::size_t>& members) const;
 
   std::vector<CrossSummary> tails_;  // per series, in order (ranges dropped)
   // DQ601: every series' moves, with the series' index.

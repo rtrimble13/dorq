@@ -2,8 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
-#include <iterator>
 #include <cstddef>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -358,8 +358,8 @@ void Engine::finish() {
     }
     held_.clear();
   }
-  if (market_days_) {
-    std::vector<Violation> days = market_days(*context_.market, calendar_);
+  if (market_days_ && context_.market) {
+    std::vector<Violation> days = market_days(context_.market.value(), calendar_);
     cohort.insert(cohort.end(), std::make_move_iterator(days.begin()),
                   std::make_move_iterator(days.end()));
   }

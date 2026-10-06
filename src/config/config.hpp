@@ -222,8 +222,8 @@ struct Profile {
   std::optional<bool> match_nav_priced;
   std::vector<std::string> match_exchange;
   std::vector<std::string> match_peer_group;
-  std::vector<std::string> select;        // added to the selection
-  std::vector<std::string> ignore;        // added to the ignores
+  std::vector<std::string> select;  // added to the selection
+  std::vector<std::string> ignore;  // added to the ignores
   IntegrityPatch integrity;
   CoveragePatch coverage;
   PricePatch price;

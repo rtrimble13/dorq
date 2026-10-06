@@ -31,9 +31,9 @@ class DividendImplausible final : public Check {
   void run(const SeriesContext& context, std::vector<Violation>& out) const override;
 };
 
-[[nodiscard]] const CheckInfo& split_misdated_info() noexcept;          // DQ701
-[[nodiscard]] const CheckInfo& split_without_jump_info() noexcept;      // DQ702
-[[nodiscard]] const CheckInfo& split_ratio_mismatch_info() noexcept;    // DQ703
-[[nodiscard]] const CheckInfo& split_double_applied_info() noexcept;    // DQ704
+[[nodiscard]] const CheckInfo& split_misdated_info() noexcept;        // DQ701
+[[nodiscard]] const CheckInfo& split_without_jump_info() noexcept;    // DQ702
+[[nodiscard]] const CheckInfo& split_ratio_mismatch_info() noexcept;  // DQ703
+[[nodiscard]] const CheckInfo& split_double_applied_info() noexcept;  // DQ704
 
 }  // namespace dorq

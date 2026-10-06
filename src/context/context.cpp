@@ -79,15 +79,16 @@ constexpr std::array<std::string_view, 5> kSeries = {"series", "securityid", "id
                                                      "ticker"};
 
 // A positive number, or nullopt for an empty cell; anything else fails.
-std::optional<double> positive(Row fields, int col, const std::string& source,
-                               std::uint32_t line, std::string_view what) {
+std::optional<double> positive(Row fields, int col, const std::string& source, std::uint32_t line,
+                               std::string_view what) {
   const std::string_view text = cell(fields, col);
   const ParsedNumber number = parse_number(text);
   if (number.status == ParsedNumber::Status::kMissing) {
     return std::nullopt;
   }
   if (number.status != ParsedNumber::Status::kOk || !(number.value > 0.0)) {
-    fail(source, line, std::string{what} + " \"" + std::string{text} + "\" is not a positive number");
+    fail(source, line,
+         std::string{what} + " \"" + std::string{text} + "\" is not a positive number");
   }
   return number.value;
 }
@@ -98,8 +99,8 @@ std::string SplitAction::ratio_text() const {
   return format_number(numerator) + ":" + format_number(denominator);
 }
 
-std::optional<double> MarketSeries::log_level_on(Date day) const {
-  const auto it = std::upper_bound(date.begin(), date.end(), day);
+std::optional<double> MarketSeries::log_level_on(Date when) const {
+  const auto it = std::upper_bound(date.begin(), date.end(), when);
   if (it == date.begin()) {
     return std::nullopt;
   }
@@ -189,8 +190,9 @@ void read_actions(std::istream& in, const std::string& source, Context& context)
         }
       });
   for (auto& [id, actions] : context.actions) {
-    std::stable_sort(actions.splits.begin(), actions.splits.end(),
-                     [](const SplitAction& a, const SplitAction& b) { return a.ex_date < b.ex_date; });
+    std::stable_sort(
+        actions.splits.begin(), actions.splits.end(),
+        [](const SplitAction& a, const SplitAction& b) { return a.ex_date < b.ex_date; });
     std::stable_sort(
         actions.dividends.begin(), actions.dividends.end(),
         [](const DividendAction& a, const DividendAction& b) { return a.ex_date < b.ex_date; });

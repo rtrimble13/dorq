@@ -59,9 +59,9 @@ struct MarketSeries {
   std::vector<Date> date;  // sorted, unique
   std::vector<double> log_level;
 
-  // The log level on the latest date on or before `date`, or nullopt before the
+  // The log level on the latest date on or before `when`, or nullopt before the
   // first.
-  [[nodiscard]] std::optional<double> log_level_on(Date date) const;
+  [[nodiscard]] std::optional<double> log_level_on(Date when) const;
 };
 
 struct Context {
