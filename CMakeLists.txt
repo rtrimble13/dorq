@@ -53,6 +53,7 @@ add_subdirectory(src)
 if(DORQ_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tools/synth)
+  add_subdirectory(tools/eval)
   add_subdirectory(tests)
 endif()
 

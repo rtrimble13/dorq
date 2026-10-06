@@ -57,6 +57,7 @@ foreach(seed 1 2)
     NAME synth.gate-seed-${seed}
     COMMAND
       "${CMAKE_COMMAND}" "-DSYNTH=$<TARGET_FILE:dorq-synth>" "-DDORQ=$<TARGET_FILE:dorq>"
+      "-DEVAL=$<TARGET_FILE:dorq-eval>"
       "-DGATES=${PROJECT_SOURCE_DIR}/tools/synth/gates.txt"
       "-DCONFIG=${PROJECT_SOURCE_DIR}/tools/synth/dorq.toml"
       "-DOUT=${CMAKE_CURRENT_BINARY_DIR}/synth-${seed}" "-DSEED=${seed}" -P
