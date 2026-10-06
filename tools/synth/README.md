@@ -5,9 +5,10 @@ precision and recall against the labels (plan item DR-0308). It is built with th
 tests, and `ctest -R synth` runs the gate in [gates.txt](gates.txt) on two seeds.
 
 ```bash
-dorq-synth generate --seed 1 --out /tmp/synth   # bars.csv, points.csv and labels.csv
+dorq-synth generate --seed 1 --out /tmp/synth   # bars, points, labels, actions, meta, market
 dorq /tmp/synth/bars.csv /tmp/synth/points.csv --config tools/synth/dorq.toml \
-     --exit-zero --format csv > /tmp/synth/results.csv
+     --actions /tmp/synth/actions.csv --meta /tmp/synth/meta.csv \
+     --market /tmp/synth/market.csv --exit-zero --format csv > /tmp/synth/results.csv
 dorq-synth score --labels /tmp/synth/labels.csv --results /tmp/synth/results.csv \
                  --gates tools/synth/gates.txt --verbose
 ```
@@ -43,6 +44,13 @@ quarter-point policy moves, at most one every 30 sessions, and the three near
 defaults, plus a `rates` profile that puts point series on the difference scale
 (`transform = "diff"`) with bounds of [−5, 25].
 
+The context files (doc/context.md):
+
+- `actions.csv` holds splits and dividends, under fafnir's column names
+  (`core.corporate_action`);
+- `meta.csv` holds every series' `asset_type`, `peer_group` and `exchange`;
+- `market.csv` holds the market factor as an index level (series `market`).
+
 ## Labels
 
 `labels.csv` has a row per injected fault (`expect` is the code dorq should
@@ -68,6 +76,14 @@ would be wrong under).
 | `rate_bad_print` | DQ201 | a rate value ×100 (two series), and a value of 999 (one) |
 | `rate_out_of_bounds` | DQ108 | those values, where they fall outside [−5, 25] |
 | `rate_decimal_era` | DQ202 | 30-150 values stored ×0.01 (two series) |
+| `family_split` | DQ203, and DQ601 (`*`) | four liquid names in peer group `FAM1` split 2:1 on the same day, none of it on file |
+| `split_misdated` | DQ701 | 4 splits in the bars, on file 1-3 sessions away |
+| `split_without_jump` | DQ702 | 4 splits on file that the bars never show |
+| `split_ratio_mismatch` | DQ703 | 4 splits on file at the wrong ratio: inverted, or another split's |
+| `split_double_applied` | DQ704 | 3 splits the bars apply at the ex-date and again 2-12 sessions later |
+| `dividend_slip`, `dividend_above_price` | DQ705 | 3 dividends ×100, and 2 at four times the price (quarterly dividends on every liquid name) |
+| `hn_split_on_file` | - | 8 splits on file, in the bars at their ex-date (DQ2 and DQ70) |
+| `hn_split_between_bars` | - | 3 reverse splits on thin names whose ex-date is a session with no bar (DQ2 and DQ70) |
 | `hn_earnings` | - | each earnings reaction |
 | `hn_crash` | - | the crash day, every series |
 | `hn_tick` | - | every penny and 1/16 series, all its bars |
@@ -100,6 +116,14 @@ precision 0.9 or better, and no earnings gap, crash day or tick move reported at
 warn. Across seeds 1-14 the gates hold on 12. Seeds 8 and 9 report three thin
 names' spike-and-revert trades (two are allowed), and seed 9 brings DQ201's
 precision to 0.88. Thin names' spike-and-revert trades are genuinely ambiguous.
+
+At M5 the gate runs dorq with all three context files, and adds DQ601 and
+DQ701–DQ705. No split on file is reported, at its ex-date or between two bars.
+DQ703 and DQ704 miss one fault now and then: a wrong ratio a few percent from
+the one on file, or a doubled split in a volatile spell. DQ203's precision gate
+is 0.85: when DQ704 misses a doubled split, the second move is reported as DQ203,
+at the right bar. With the market taken out, a thin name's ambiguous move
+sometimes crosses the warn line, and the gate allows three such moves.
 
 At M4 the gate adds DQ108 and DQ403 at 1.0 and 0.9, DQ401 at precision 0.9 and
 recall 0.8, and DQ501 at 0.8 and 0.6. On seeds 1-6, DQ501 misses one to three
