@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "config/config.hpp"
@@ -52,7 +53,11 @@ struct PriceFinding {
   PriceHypothesis hypothesis = PriceHypothesis::kMarketMove;  // most probable error
   std::array<double, kPriceHypotheses> posterior{};
   std::array<bool, kPriceHypotheses> considered{};
-  double p_error = 0.0;
+  // Each hypothesis's log-likelihood of the evidence, every term but the prior:
+  // what `dorq calibrate` fits the priors to.
+  std::array<double, kPriceHypotheses> log_likelihood{};
+  double p_error = 0.0;      // calibrated by [calibration] p_error_map, when given
+  double raw_p_error = 0.0;  // as the model computes it
   double tail = 1.0;  // the return's two-sided tail probability, as ordinary
   bool provisional = false;
   int block = 1;                             // bars in a bad print
@@ -122,6 +127,11 @@ struct PriceContext {
   std::optional<double> tick_size = std::nullopt;  // --meta: the tick, instead of inferring it
   const MarketSeries* market = nullptr;            // --market
 };
+
+// p mapped through a calibration map (PriceSettings::p_error_map): linear between
+// knots, the end knots' values beyond them; p itself when the map is empty.
+[[nodiscard]] double calibrated(const std::vector<std::pair<double, double>>& map,
+                                double p) noexcept;
 
 [[nodiscard]] PriceAnalysis analyze_prices(const Series& series, const Calendar& calendar,
                                            const PriceSettings& settings,

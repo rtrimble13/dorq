@@ -831,6 +831,15 @@ PriceFinding Scorer::score(std::size_t t) const {
   }
 
   const std::size_t best = conclude(terms, out);
+  for (std::size_t h = 0; h < kCount; ++h) {
+    double ll = 0.0;
+    for (std::size_t i = 1; i < terms.size(); ++i) {
+      ll += terms[i].ll.at(h);
+    }
+    out.log_likelihood.at(h) = ll;
+  }
+  out.raw_p_error = out.p_error;
+  out.p_error = calibrated(settings_.p_error_map, out.p_error);
   if (out.hypothesis == H::kBadPrint) {
     out.block = static_cast<int>(next.best_block);
     out.end_bar = std::min(t + next.best_block, n_) - 1;
@@ -881,6 +890,23 @@ void pair_scale_eras(std::vector<PriceFinding>& findings, const PriceSettings& s
 }
 
 }  // namespace
+
+double calibrated(const std::vector<std::pair<double, double>>& map, double p) noexcept {
+  if (map.empty()) {
+    return p;
+  }
+  if (p <= map.front().first) {
+    return map.front().second;
+  }
+  for (std::size_t i = 1; i < map.size(); ++i) {
+    const auto& [x0, y0] = map[i - 1];
+    const auto& [x1, y1] = map[i];
+    if (p <= x1) {
+      return y0 + (y1 - y0) * (p - x0) / (x1 - x0);
+    }
+  }
+  return map.back().second;
+}
 
 std::string_view to_string(PriceHypothesis hypothesis) noexcept {
   switch (hypothesis) {

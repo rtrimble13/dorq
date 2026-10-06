@@ -15,6 +15,8 @@
 
 #include <CLI/CLI.hpp>
 
+#include "calibrate/calibrate.hpp"
+#include "calibrate/labels.hpp"
 #include "checks/check.hpp"
 #include "config/config.hpp"
 #include "context/context.hpp"
@@ -48,7 +50,7 @@ constexpr const char* kFooter =
 // may come in any order. Larger inputs, and stdin, are checked as they are read.
 constexpr std::uintmax_t kBufferLimitBytes = std::uintmax_t{256} << 20U;
 
-constexpr std::array<std::string_view, 5> kCommands = {"check", "list-checks", "explain", "config",
+constexpr std::array<std::string_view, 6> kCommands = {"check", "calibrate", "list-checks", "explain", "config",
                                                        "version"};
 
 // `dorq FILE` means `dorq check FILE`: put the command in when it is left out.
@@ -96,6 +98,18 @@ struct CheckOptions {
   std::string actions;
   std::string meta;
   std::string market;
+  std::string labels;   // --labels: their `remove` dates, with --restore
+  std::string restore;  // --restore: bars as they stood before repairs
+};
+
+struct CalibrateCommand {
+  CheckOptions check;  // the input, config and context options check takes
+  bool clean_unlabelled = false;
+  bool no_grid = false;
+  bool no_isotonic = false;
+  double holdout = 0.0;
+  std::string name;
+  std::string out;
 };
 
 class UsageError : public std::runtime_error {
@@ -133,15 +147,20 @@ void validate_selection(const Config& config) {
 
 // Command-line options override the config file.
 void apply_overrides(const CheckOptions& o, CLI::App& cmd, Config& config) {
+  // Whether an option was given; false for one this command does not take.
+  const auto given = [&cmd](const char* name) {
+    const CLI::Option* option = cmd.get_option_no_throw(name);
+    return option != nullptr && option->count() > 0;
+  };
   // CLI11 has already checked each value against its list; the ifs only unwrap.
-  if (const auto kind = parse_kind_option(o.kind); cmd.count("--kind") > 0 && kind) {
+  if (const auto kind = parse_kind_option(o.kind); given("--kind") && kind) {
     config.kind = *kind;
   }
   if (const auto format = parse_input_format(o.input_format);
-      cmd.count("--input-format") > 0 && format) {
+      given("--input-format") && format) {
     config.input_format = *format;
   }
-  if (cmd.count("--columns") > 0) {
+  if (given("--columns")) {
     ColumnOverrides overrides;
     if (const auto error = parse_column_overrides(o.columns, overrides)) {
       throw UsageError("--columns: " + *error);
@@ -152,39 +171,39 @@ void apply_overrides(const CheckOptions& o, CLI::App& cmd, Config& config) {
     }
     config.columns.insert(config.columns.end(), overrides.begin(), overrides.end());
   }
-  if (const auto format = parse_output_format(o.format); cmd.count("--format") > 0 && format) {
+  if (const auto format = parse_output_format(o.format); given("--format") && format) {
     config.format = *format;
   }
-  if (cmd.count("--select") > 0) {
+  if (given("--select")) {
     config.select = o.select;
   }
-  if (cmd.count("--extend-select") > 0) {
+  if (given("--extend-select")) {
     config.extend_select.insert(config.extend_select.end(), o.extend_select.begin(),
                                 o.extend_select.end());
   }
-  if (cmd.count("--ignore") > 0) {
+  if (given("--ignore")) {
     config.ignore.insert(config.ignore.end(), o.ignore.begin(), o.ignore.end());
   }
   if (const auto severity = parse_severity(o.min_severity);
-      cmd.count("--min-severity") > 0 && severity) {
+      given("--min-severity") && severity) {
     config.min_severity = *severity;
   }
   if (o.show_info) {
     config.min_severity = Severity::kInfo;
   }
-  if (cmd.count("--fail-on") > 0) {
+  if (given("--fail-on")) {
     config.fail_on = o.fail_on == "never" ? std::nullopt : parse_severity(o.fail_on);
   }
   if (o.threads >= 0) {
     config.threads = o.threads;
   }
-  if (const auto kind = parse_calendar_name(o.calendar); cmd.count("--calendar") > 0 && kind) {
+  if (const auto kind = parse_calendar_name(o.calendar); given("--calendar") && kind) {
     config.calendar = *kind;
   }
-  if (cmd.count("--calendar-file") > 0) {
+  if (given("--calendar-file")) {
     config.calendar_file = o.calendar_file;
   }
-  if (cmd.count("--calendar-exchange") > 0) {
+  if (given("--calendar-exchange")) {
     config.calendar_exchange = o.calendar_exchange;
   }
 }
@@ -251,6 +270,30 @@ struct InputFile {
   std::string extension;
 };
 
+std::vector<Label> load_labels(const std::string& path, const fs::path& cwd) {
+  if (path.empty()) {
+    return {};
+  }
+  std::ifstream file = open_context(path, cwd, "labels");
+  return read_labels(file, path);
+}
+
+// --restore (and the labels' `remove` dates): the series as they stood.
+Restorer load_restorer(const CheckOptions& o, const std::vector<Label>& labels,
+                       const fs::path& cwd) {
+  std::vector<Series> restored;
+  if (!o.restore.empty()) {
+    std::ifstream file = open_context(o.restore, cwd, "restore");
+    SeriesAssembler assembler(Grouping::kBuffer,
+                              [&restored](Series&& s) { restored.push_back(std::move(s)); });
+    const fs::path path(o.restore);
+    read_input(file, o.restore, path.stem().string(), path.extension().string(), ReadOptions{},
+               assembler);
+    assembler.finish();
+  }
+  return {labels, std::move(restored)};
+}
+
 int run_check(const CheckOptions& options, CLI::App& cmd, Io& io) {
   Config config = load_effective_config(options.config, options.isolated, io.cwd);
   apply_overrides(options, cmd, config);
@@ -272,6 +315,7 @@ int run_check(const CheckOptions& options, CLI::App& cmd, Io& io) {
   }
   const Calendar calendar = load_calendar(config, io.cwd);
   const Context context = load_context(options, io.cwd);
+  const Restorer restorer = load_restorer(options, load_labels(options.labels, io.cwd), io.cwd);
 
   std::vector<InputFile> inputs;
   for (const std::string& file : options.files) {
@@ -322,7 +366,10 @@ int run_check(const CheckOptions& options, CLI::App& cmd, Io& io) {
                    .calendar = &calendar,
                    .context = &context},
                   report);
-    SeriesAssembler assembler(grouping, [&engine](Series&& s) { engine.submit(std::move(s)); });
+    SeriesAssembler assembler(grouping, [&engine, &restorer](Series&& s) {
+      restorer.apply(s);
+      engine.submit(std::move(s));
+    });
     const ReadOptions read_options{config.input_format, config.kind, config.columns};
     writer->begin();
     for (const InputFile& input : inputs) {
@@ -353,6 +400,68 @@ int run_check(const CheckOptions& options, CLI::App& cmd, Io& io) {
     if (summary.by_severity.at(s) > 0) {
       return to_int(ExitCode::kViolations);
     }
+  }
+  return to_int(ExitCode::kOk);
+}
+
+int run_calibrate(const CalibrateCommand& command, CLI::App& cmd, Io& io) {
+  const CheckOptions& options = command.check;
+  Config config = load_effective_config(options.config, options.isolated, io.cwd);
+  apply_overrides(options, cmd, config);
+  validate_selection(config);
+  const Calendar calendar = load_calendar(config, io.cwd);
+  const Context context = load_context(options, io.cwd);
+  const std::vector<Label> labels = load_labels(options.labels, io.cwd);
+  const Restorer restorer = load_restorer(options, labels, io.cwd);
+
+  std::vector<Series> series;
+  SeriesAssembler assembler(Grouping::kBuffer, [&](Series&& s) {
+    restorer.apply(s);
+    series.push_back(std::move(s));
+  });
+  const ReadOptions read_options{config.input_format, config.kind, config.columns};
+  if (options.files.empty()) {
+    if (io.stdin_is_tty) {
+      throw UsageError("no input: name the data files, or pipe them to stdin");
+    }
+    read_input(io.in, "<stdin>", "stdin", "", read_options, assembler);
+  }
+  for (const std::string& file : options.files) {
+    std::ifstream in(file, std::ios::binary);
+    if (!in) {
+      throw InputError(file + ": cannot open the file");
+    }
+    const fs::path path(file);
+    read_input(in, file, path.stem().string(), path.extension().string(), read_options, assembler);
+  }
+  assembler.finish();
+
+  CalibrateOptions calibrate_options;
+  calibrate_options.clean_unlabelled = command.clean_unlabelled;
+  calibrate_options.grid = !command.no_grid;
+  calibrate_options.isotonic = !command.no_isotonic;
+  calibrate_options.holdout = command.holdout;
+  const unsigned hardware = std::max(1U, std::thread::hardware_concurrency());
+  calibrate_options.threads = config.threads > 0 ? static_cast<unsigned>(config.threads) : hardware;
+  calibrate_options.version = command.name.empty() ? fs::path(options.labels).stem().string()
+                                                   : command.name;
+  const CalibrationReport report =
+      calibrate(series, labels, config, calendar, context, calibrate_options);
+  const std::string toml = priors_toml(report);
+  if (command.out.empty()) {
+    io.out << toml;
+    io.err << calibration_summary(report);
+  } else {
+    fs::path path(command.out);
+    if (path.is_relative()) {
+      path = io.cwd / path;
+    }
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (!file) {
+      throw UsageError(command.out + ": cannot write the file");
+    }
+    file << toml;
+    io.out << calibration_summary(report) << "wrote " << command.out << "\n";
   }
   return to_int(ExitCode::kOk);
 }
@@ -494,9 +603,54 @@ int run(std::span<const char* const> args, Io& io) {
                     "peer_group, exchange); profiles match on it");
   check->add_option("--market", check_options.market,
                     "A market reference series (e.g. SPY); moves are judged net of it");
+  check->add_option("--restore", check_options.restore,
+                    "Bars as they stood before repairs, over the input (doc/labels.md)");
+  check->add_option("--labels", check_options.labels,
+                    "Labels (JSON Lines) whose `remove` dates are dropped, with --restore");
   check->add_option("--color", check_options.color, "Colour text output")
       ->check(CLI::IsMember({"auto", "always", "never"}))
       ->capture_default_str();
+
+  // calibrate
+  CalibrateCommand calibrate_command;
+  CheckOptions& co = calibrate_command.check;
+  CLI::App* calibrate_cmd = app.add_subcommand(
+      "calibrate", "Fit the price model's priors to labelled history (doc/calibration.md)");
+  calibrate_cmd->add_option("files", co.files, "Data files; '-' or none reads stdin");
+  calibrate_cmd->add_option("--labels", co.labels, "Labels (JSON Lines; doc/labels.md)")
+      ->required();
+  calibrate_cmd->add_option("--restore", co.restore, "Bars as they stood before repairs");
+  calibrate_cmd->add_option("--out", calibrate_command.out,
+                            "Write the fitted settings here (default: standard output)");
+  calibrate_cmd->add_option("--name", calibrate_command.name,
+                            "[calibration] version (default: the labels file's stem)");
+  calibrate_cmd->add_option("--holdout", calibrate_command.holdout,
+                            "Share of series held out to report on (by id)")
+      ->check(CLI::Range(0.0, 0.9));
+  calibrate_cmd->add_flag("--clean-unlabelled", calibrate_command.clean_unlabelled,
+                          "Count scored moves that match no label as market facts");
+  calibrate_cmd->add_flag("--no-grid", calibrate_command.no_grid,
+                          "Keep jump_prob, jump_scale and ratio_tolerance as configured");
+  calibrate_cmd->add_flag("--no-isotonic", calibrate_command.no_isotonic,
+                          "Write no p_error map");
+  calibrate_cmd->add_option("--config", co.config, "Config file to use");
+  calibrate_cmd->add_flag("--isolated", co.isolated, "Ignore all config files");
+  calibrate_cmd->add_option("--kind", co.kind, "Series kind")
+      ->check(CLI::IsMember({"auto", "ohlcv", "point"}));
+  calibrate_cmd->add_option("--input-format", co.input_format, "Input format")
+      ->check(CLI::IsMember({"auto", "csv", "tsv", "jsonl", "json"}));
+  calibrate_cmd->add_option("--columns", co.columns, "Column names, e.g. date=trade_date");
+  calibrate_cmd->add_option("--threads", co.threads, "Worker threads (0: one per core)")
+      ->check(CLI::Range(0, 1024));
+  calibrate_cmd->add_option("--calendar", co.calendar, "Built-in calendar")
+      ->check(
+          CLI::IsMember({"XNYS", "NYSE", "XNAS", "NASDAQ", "weekdays", "24x7"}, CLI::ignore_case));
+  calibrate_cmd->add_option("--calendar-file", co.calendar_file, "Reference calendar");
+  calibrate_cmd->add_option("--calendar-exchange", co.calendar_exchange,
+                            "The exchange to take from a multi-exchange calendar file");
+  calibrate_cmd->add_option("--actions", co.actions, "Corporate actions (as for check)");
+  calibrate_cmd->add_option("--meta", co.meta, "Series metadata (as for check)");
+  calibrate_cmd->add_option("--market", co.market, "A market reference series (as for check)");
 
   // list-checks
   CLI::App* list = app.add_subcommand("list-checks", "List the checks");
@@ -542,6 +696,9 @@ int run(std::span<const char* const> args, Io& io) {
   try {
     if (check->parsed()) {
       return run_check(check_options, *check, io);
+    }
+    if (calibrate_cmd->parsed()) {
+      return run_calibrate(calibrate_command, *calibrate_cmd, io);
     }
     if (list->parsed()) {
       return run_list_checks(list_format, io);

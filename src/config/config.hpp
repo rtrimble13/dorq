@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "dorq/calendar.hpp"
@@ -153,6 +154,10 @@ struct PriceSettings {
   double max_price = 1e6;
   Transform transform = Transform::kAuto;  // point series only
   PricePriors priors;
+  // [calibration] p_error_map (from `dorq calibrate`): a monotone map from the
+  // model's p_error to a calibrated one, as (raw, calibrated) knots in rising
+  // order, interpolated linearly. Empty: p_error as the model computes it.
+  std::vector<std::pair<double, double>> p_error_map;
 };
 
 // A partial PriceSettings: what one [price] or [priors] table sets.
@@ -257,6 +262,8 @@ struct Config {
   std::string calendar_exchange;
   std::vector<Profile> profiles;  // sorted by name
   std::string fafnir_table = "core.daily_price";
+  // [calibration] version: names the calibration in use (`dorq calibrate`).
+  std::string calibration_version;
 
   // Where the settings came from; empty when nothing was read.
   std::filesystem::path source;
@@ -275,7 +282,9 @@ class ConfigError : public std::runtime_error {
 [[nodiscard]] std::optional<std::filesystem::path> discover_config(
     const std::filesystem::path& start);
 
-// Reads a config file over the defaults. Throws ConfigError.
+// Reads a config file over the defaults. A top-level `include` (a path, or a list
+// of them, relative to the file) is read first, so the file's own keys override
+// what it includes. Throws ConfigError.
 [[nodiscard]] Config load_config(const std::filesystem::path& path);
 
 // Parses config text (TOML) over the defaults; `name` is used in errors.

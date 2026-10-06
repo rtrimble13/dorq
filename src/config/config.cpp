@@ -143,6 +143,43 @@ Bounds read_bounds(const toml::node& node, const std::string& where, const std::
   return {*low, *high};
 }
 
+// [calibration] p_error_map: [[raw, calibrated], ...], each in [0, 1], both
+// non-decreasing.
+std::vector<std::pair<double, double>> read_p_error_map(const toml::node& node,
+                                                        const std::string& where,
+                                                        const std::string& key) {
+  const auto* array = node.as_array();
+  const auto number = [](const toml::node* item) -> std::optional<double> {
+    if (item == nullptr) {
+      return std::nullopt;
+    }
+    if (const auto* f = item->as_floating_point()) {
+      return f->get();
+    }
+    if (const auto* i = item->as_integer()) {
+      return static_cast<double>(i->get());
+    }
+    return std::nullopt;
+  };
+  if (array == nullptr) {
+    fail(where, node, "\"" + key + "\" must be a list of [raw, calibrated] pairs");
+  }
+  std::vector<std::pair<double, double>> knots;
+  for (const toml::node& item : *array) {
+    const auto* pair = item.as_array();
+    const auto x = pair != nullptr && pair->size() == 2 ? number(pair->get(0)) : std::nullopt;
+    const auto y = pair != nullptr && pair->size() == 2 ? number(pair->get(1)) : std::nullopt;
+    if (!x || !y || *x < 0.0 || *x > 1.0 || *y < 0.0 || *y > 1.0) {
+      fail(where, item, "\"" + key + "\" must be a list of [raw, calibrated] pairs in [0, 1]");
+    }
+    if (!knots.empty() && (*x <= knots.back().first || *y < knots.back().second)) {
+      fail(where, item, "\"" + key + "\" must rise: raw strictly, calibrated never falling");
+    }
+    knots.emplace_back(*x, *y);
+  }
+  return knots;
+}
+
 IntegrityPatch read_integrity(const toml::table& table, const std::string& where,
                               const std::string& prefix) {
   IntegrityPatch patch;
@@ -497,6 +534,19 @@ void read_root(const toml::table& root, const std::string& where, Config& config
           fail(where, value, "unknown key \"" + path + "\"");
         }
       }
+    } else if (key == "calibration") {
+      for (const auto& [sub_node, value] : read_table(node, where, key)) {
+        const std::string path = key_path(key, sub_node.str());
+        if (sub_node.str() == "version") {
+          config.calibration_version = read_string(value, where, path);
+        } else if (sub_node.str() == "p_error_map") {
+          config.price.p_error_map = read_p_error_map(value, where, path);
+        } else {
+          fail(where, value, "unknown key \"" + path + "\"");
+        }
+      }
+    } else if (key == "include") {
+      // Read by load_config before the rest of the file.
     } else if (key == "profiles") {
       for (const auto& [name_node, profile_node] : read_table(node, where, key)) {
         const std::string name{name_node.str()};
@@ -1007,6 +1057,61 @@ std::optional<fs::path> discover_config(const fs::path& start) {
   return std::nullopt;
 }
 
+namespace {
+
+// The table that holds the settings: the document, or its [tool.dorq] table.
+const toml::table* settings_table(const toml::table& doc, const std::string& name,
+                                  bool is_pyproject) {
+  if (const auto* tool = doc["tool"]["dorq"].as_table()) {
+    if (!is_pyproject) {
+      for (const auto& [key, node] : doc) {
+        if (key.str() != "tool") {
+          fail(name, node,
+               "\"" + std::string{key.str()} + "\" is outside [tool.dorq]; write [tool.dorq." +
+                   std::string{key.str()} + "], or drop the [tool.dorq] header");
+        }
+      }
+    }
+    return tool;
+  }
+  return is_pyproject ? nullptr : &doc;
+}
+
+// Reads `path` over `config`: its includes first, then its own keys. `depth`
+// stops an include cycle.
+void read_config_file(const fs::path& path, Config& config, int depth) {
+  constexpr int kMaxDepth = 8;
+  if (depth > kMaxDepth) {
+    throw ConfigError(path.string() + ": includes nest more than 8 deep (a cycle?)");
+  }
+  const std::string name = path.string();
+  const bool is_pyproject = path.filename() == "pyproject.toml";
+  const toml::table doc = parse_toml(read_file(path), name);
+  const toml::table* table = settings_table(doc, name, is_pyproject);
+  if (table == nullptr) {
+    return;
+  }
+  if (const toml::node* include = table->get("include")) {
+    for (const std::string& file : read_string_list(*include, name, "include")) {
+      const fs::path included =
+          fs::path(file).is_relative() ? path.parent_path() / file : fs::path(file);
+      read_config_file(included, config, depth + 1);
+      // A calendar file named in an included file is relative to that file.
+      if (!config.calendar_file.empty() && config.calendar_file.is_relative()) {
+        config.calendar_file = included.parent_path() / config.calendar_file;
+      }
+    }
+  }
+  const fs::path calendar_before = config.calendar_file;
+  read_root(*table, name, config);
+  if (config.calendar_file != calendar_before && !config.calendar_file.empty() &&
+      config.calendar_file.is_relative()) {
+    config.calendar_file = path.parent_path() / config.calendar_file;
+  }
+}
+
+}  // namespace
+
 Config parse_config(std::string_view text, const std::string& name, bool is_pyproject) {
   const toml::table doc = parse_toml(text, name);
   Config config;
@@ -1030,12 +1135,9 @@ Config parse_config(std::string_view text, const std::string& name, bool is_pypr
 }
 
 Config load_config(const fs::path& path) {
-  Config config = parse_config(read_file(path), path.string(), path.filename() == "pyproject.toml");
+  Config config;
+  read_config_file(path, config, 0);
   config.source = path;
-  // A calendar file named in a config file is relative to that file.
-  if (!config.calendar_file.empty() && config.calendar_file.is_relative()) {
-    config.calendar_file = path.parent_path() / config.calendar_file;
-  }
   return config;
 }
 
@@ -1101,6 +1203,17 @@ std::string to_toml(const Config& config) {
   out += "\n[fafnir]\ntable_name = ";
   append_toml_string(out, config.fafnir_table);
   out += "\n";
+
+  if (!config.calibration_version.empty() || !config.price.p_error_map.empty()) {
+    out += "\n[calibration]\nversion = ";
+    append_toml_string(out, config.calibration_version);
+    out += "\np_error_map = [";
+    for (std::size_t i = 0; i < config.price.p_error_map.size(); ++i) {
+      const auto& [x, y] = config.price.p_error_map[i];
+      out += (i == 0 ? "[" : ", [") + format_number(x) + ", " + format_number(y) + "]";
+    }
+    out += "]\n";
+  }
 
   for (const Profile& profile : config.profiles) {
     const std::string section = "profiles." + toml_key(profile.name);

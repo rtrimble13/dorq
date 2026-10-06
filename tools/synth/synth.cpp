@@ -2,7 +2,7 @@
 // output against the labels. See tools/synth/README.md.
 //
 //   dorq-synth generate [--seed N] --out DIR     writes DIR/bars.csv, points.csv, labels.csv,
-//                                                actions.csv, meta.csv, market.csv
+//                                                labels.jsonl, actions.csv, meta.csv, market.csv
 //   dorq-synth score --labels F --results F [--gates F] [--verbose]
 //
 // The generator draws from its own PRNG (xoshiro256**) and its own normal and t
@@ -194,6 +194,7 @@ class Generator {
     std::ostream& bars;
     std::ostream& points;
     std::ostream& labels;
+    std::ostream& labels_jsonl;
     std::ostream& actions;
     std::ostream& meta;
     std::ostream& market;
@@ -1051,6 +1052,23 @@ void Generator::run(const Outputs& out) {
     labels << l.series << ',' << l.first.to_string() << ',' << l.last.to_string() << ',' << l.kind
            << ',' << l.expect << ',' << l.codes << '\n';
   }
+  // The same labels in dorq's label schema (doc/labels.md), for dorq calibrate and
+  // dorq-eval: an expected code is a data error, or a context gap for a split the
+  // data does not record; a hard negative is a market fact.
+  for (const Label& l : labels_) {
+    const bool context = l.expect == "DQ203" || l.expect == "DQ601";
+    const char* cls = l.expect.empty() ? "market_fact" : (context ? "context_gap" : "data_error");
+    out.labels_jsonl << R"({"series":")" << l.series << R"(","first":")" << l.first.to_string()
+                     << R"(","last":")" << l.last.to_string() << R"(","class":")" << cls
+                     << R"(","kind":")" << l.kind << '"';
+    if (!l.expect.empty()) {
+      out.labels_jsonl << R"(,"expect":")" << l.expect << '"';
+    }
+    if (!l.codes.empty()) {
+      out.labels_jsonl << R"(,"codes":")" << l.codes << '"';
+    }
+    out.labels_jsonl << R"(,"source":"dorq-synth"})" << '\n';
+  }
   // fafnir's column names (core.corporate_action), as its export would write them.
   out.actions << "security_id,ex_date,action_type,split_numerator,split_denominator,"
                  "dividend_amount\n";
@@ -1438,10 +1456,11 @@ int main(int argc, char** argv) {
       std::ofstream bars(std::filesystem::path(*out) / "bars.csv", std::ios::binary);
       std::ofstream points(std::filesystem::path(*out) / "points.csv", std::ios::binary);
       std::ofstream labels(std::filesystem::path(*out) / "labels.csv", std::ios::binary);
+      std::ofstream labels_jsonl(std::filesystem::path(*out) / "labels.jsonl", std::ios::binary);
       std::ofstream actions(std::filesystem::path(*out) / "actions.csv", std::ios::binary);
       std::ofstream meta(std::filesystem::path(*out) / "meta.csv", std::ios::binary);
       std::ofstream market(std::filesystem::path(*out) / "market.csv", std::ios::binary);
-      Generator(seed).run({bars, points, labels, actions, meta, market});
+      Generator(seed).run({bars, points, labels, labels_jsonl, actions, meta, market});
       return 0;
     }
     if (args[1] == "score") {
