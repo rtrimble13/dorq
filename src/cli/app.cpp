@@ -17,6 +17,7 @@
 
 #include "checks/check.hpp"
 #include "config/config.hpp"
+#include "context/context.hpp"
 #include "core/text.hpp"
 #include "dorq/build_info.hpp"
 #include "dorq/calendar.hpp"
@@ -92,6 +93,9 @@ struct CheckOptions {
   std::string calendar_file;
   std::string calendar_exchange;
   std::string as_of;
+  std::string actions;
+  std::string meta;
+  std::string market;
 };
 
 class UsageError : public std::runtime_error {
@@ -202,6 +206,44 @@ Calendar load_calendar(const Config& config, const fs::path& cwd) {
   return calendar;
 }
 
+std::ifstream open_context(const std::string& path, const fs::path& cwd, std::string_view what) {
+  const fs::path full = fs::path(path).is_relative() ? cwd / path : fs::path(path);
+  std::ifstream file(full, std::ios::binary);
+  if (!file) {
+    throw InputError(path + ": cannot open the " + std::string{what} + " file");
+  }
+  return file;
+}
+
+// The context inputs: --actions, --meta and --market (doc/context.md).
+Context load_context(const CheckOptions& o, const fs::path& cwd) {
+  Context context;
+  if (!o.actions.empty()) {
+    std::ifstream file = open_context(o.actions, cwd, "actions");
+    read_actions(file, o.actions, context);
+  }
+  if (!o.meta.empty()) {
+    std::ifstream file = open_context(o.meta, cwd, "metadata");
+    read_meta(file, o.meta, context);
+  }
+  if (!o.market.empty()) {
+    std::ifstream file = open_context(o.market, cwd, "market");
+    std::vector<Series> found;
+    SeriesAssembler assembler(Grouping::kBuffer,
+                              [&found](Series&& series) { found.push_back(std::move(series)); });
+    const fs::path path(o.market);
+    read_input(file, o.market, path.stem().string(), path.extension().string(), ReadOptions{},
+               assembler);
+    assembler.finish();
+    if (found.size() != 1) {
+      throw InputError(o.market + ": the market file must hold one series (it holds " +
+                       std::to_string(found.size()) + ")");
+    }
+    context.market = make_market(found.front());
+  }
+  return context;
+}
+
 struct InputFile {
   std::string path;  // "-" for stdin
   std::string name;  // shown in messages
@@ -229,6 +271,7 @@ int run_check(const CheckOptions& options, CLI::App& cmd, Io& io) {
     }
   }
   const Calendar calendar = load_calendar(config, io.cwd);
+  const Context context = load_context(options, io.cwd);
 
   std::vector<InputFile> inputs;
   for (const std::string& file : options.files) {
@@ -276,7 +319,8 @@ int run_check(const CheckOptions& options, CLI::App& cmd, Io& io) {
                    .min_severity = config.min_severity,
                    .since = since,
                    .as_of = as_of,
-                   .calendar = &calendar},
+                   .calendar = &calendar,
+                   .context = &context},
                   report);
     SeriesAssembler assembler(grouping, [&engine](Series&& s) { engine.submit(std::move(s)); });
     const ReadOptions read_options{config.input_format, config.kind, config.columns};
@@ -442,6 +486,14 @@ int run(std::span<const char* const> args, Io& io) {
                     "The exchange to take from a multi-exchange calendar file");
   check->add_option("--as-of", check_options.as_of,
                     "Date DQ304 judges staleness against (default: the latest bar)");
+  check->add_option("--actions", check_options.actions,
+                    "Corporate actions (CSV: series, ex_date, type, numerator, denominator, "
+                    "amount); enables DQ7xx and explains splits on file");
+  check->add_option("--meta", check_options.meta,
+                    "Series metadata (CSV: series, asset_type, nav_priced, tick_size, "
+                    "peer_group, exchange); profiles match on it");
+  check->add_option("--market", check_options.market,
+                    "A market reference series (e.g. SPY); moves are judged net of it");
   check->add_option("--color", check_options.color, "Colour text output")
       ->check(CLI::IsMember({"auto", "always", "never"}))
       ->capture_default_str();

@@ -21,6 +21,11 @@ const Calendar& default_calendar() {
   return kXnys;
 }
 
+const Context& no_context() {
+  static const Context kNone;
+  return kNone;
+}
+
 bool enables(const Selection& selection, std::string_view code) {
   const Check* check = find_check(code);
   return check != nullptr && selection.enabled(check->info());
@@ -39,7 +44,8 @@ Engine::Engine(const Config& config, EngineOptions options, ResultSink& sink)
     : config_(config),
       options_(options),
       sink_(sink),
-      calendar_(options.calendar != nullptr ? *options.calendar : default_calendar()) {
+      calendar_(options.calendar != nullptr ? *options.calendar : default_calendar()),
+      context_(options.context != nullptr ? *options.context : no_context()) {
   // Hold results when a cross-sectional check can run for any series: under the
   // global selection, or under any profile's.
   const std::vector<std::string> select = concat(config.select, config.extend_select);
@@ -76,9 +82,10 @@ Engine::~Engine() {
 }
 
 const Engine::Settings& Engine::settings_for(const Series& series) {
+  const SeriesMeta* meta = context_.meta_for(series);
   std::string key = std::string{to_string(series.kind)};
   for (const Profile& profile : config_.profiles) {
-    if (profile.matches(series)) {
+    if (profile.matches(series, meta)) {
       key += "|" + profile.name;
     }
   }
@@ -91,7 +98,7 @@ const Engine::Settings& Engine::settings_for(const Series& series) {
     std::vector<std::string> select = concat(config_.select, config_.extend_select);
     std::vector<std::string> ignore = config_.ignore;
     for (const Profile& profile : config_.profiles) {
-      if (profile.matches(series)) {
+      if (profile.matches(series, meta)) {
         select.insert(select.end(), profile.select.begin(), profile.select.end());
         ignore.insert(ignore.end(), profile.ignore.begin(), profile.ignore.end());
         profile.integrity.apply_to(slot->integrity);
@@ -150,9 +157,16 @@ Engine::Processed Engine::process(Work& work) const {
     analysis =
         analyze_coverage(series, calendar_, settings.coverage, config_.cohort.confident_density);
   }
+  const SeriesActions* actions = context_.actions_for(series);
+  const SeriesMeta* meta = context_.meta_for(series);
   std::optional<PriceAnalysis> price;
   if (settings.price_model) {
-    price = analyze_prices(series, calendar_, settings.price, settings.integrity.bounds);
+    price = analyze_prices(series, calendar_, settings.price,
+                           {.bounds = settings.integrity.bounds,
+                            .have_actions = context_.have_actions,
+                            .actions = actions,
+                            .tick_size = meta != nullptr ? meta->tick_size : std::nullopt,
+                            .market = context_.market ? &*context_.market : nullptr});
   }
   const SeriesContext context{
       .series = series,
@@ -165,6 +179,9 @@ Engine::Processed Engine::process(Work& work) const {
       .analysis = analysis ? &*analysis : nullptr,
       .gap_report = config_.gap_report,
       .price_analysis = price ? &*price : nullptr,
+      .have_actions = context_.have_actions,
+      .actions = actions,
+      .meta = meta,
   };
   for (const Check* check : settings.checks) {
     check->run(context, result.violations);

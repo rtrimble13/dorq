@@ -43,7 +43,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   dorq::SeriesAssembler assembler(grouping, [&](dorq::Series&& series) {
     const dorq::Frequency frequency = dorq::infer_frequency(series.date);
     const auto analysis = dorq::analyze_coverage(series, kCalendar, coverage, 0.95);
-    const auto price_analysis = dorq::analyze_prices(series, kCalendar, price, settings.bounds);
+    const auto price_analysis = dorq::analyze_prices(series, kCalendar, price, {.bounds = settings.bounds});
     const dorq::SeriesContext context{.series = series,
                                       .integrity = settings,
                                       .coverage = coverage,

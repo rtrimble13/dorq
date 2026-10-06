@@ -200,19 +200,31 @@ struct SeverityThresholds {
   [[nodiscard]] std::optional<Severity> for_probability(double p) const noexcept;
 };
 
+struct SeriesMeta;
+
 // Settings that apply to the series a profile matches. Profiles are applied in
-// name order, so where two match and disagree the later name wins.
+// name order, so where two match and disagree the later name wins. Every match
+// key given must hold; one on a --meta field never holds for a series the
+// metadata file does not list.
 struct Profile {
   std::string name;
   std::optional<SeriesKind> match_kind;
-  std::vector<std::string> match_series;  // series ids; empty matches any
+  std::vector<std::string> match_series;      // series ids; empty matches any
+  std::vector<std::string> match_asset_type;  // --meta fields; empty matches any
+  std::optional<bool> match_nav_priced;
+  std::vector<std::string> match_exchange;
+  std::vector<std::string> match_peer_group;
   std::vector<std::string> select;        // added to the selection
   std::vector<std::string> ignore;        // added to the ignores
   IntegrityPatch integrity;
   CoveragePatch coverage;
   PricePatch price;
 
-  [[nodiscard]] bool matches(const Series& series) const;
+  [[nodiscard]] bool matches(const Series& series, const SeriesMeta* meta = nullptr) const;
+  [[nodiscard]] bool matches_on_meta() const noexcept {
+    return !match_asset_type.empty() || match_nav_priced.has_value() || !match_exchange.empty() ||
+           !match_peer_group.empty();
+  }
 };
 
 struct Config {

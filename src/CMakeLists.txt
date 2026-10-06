@@ -28,6 +28,7 @@ add_library(
   checks/volume.cpp
   cli/app.cpp
   config/config.cpp
+  context/context.cpp
   core/build_info.cpp
   core/calendar.cpp
   core/date.cpp

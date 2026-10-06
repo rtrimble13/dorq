@@ -412,7 +412,8 @@ void MoveOnZeroVolume::run(const SeriesContext& context, std::vector<Violation>&
       ++with_volume;
     }
     if (previous < s.size() && s.volume[i] == 0.0 && s.date[i] != s.date[previous]) {
-      const double grid = std::max(tick_size(s.date[i], std::fabs(c)), written);
+      const double tick = context.meta_tick().value_or(tick_size(s.date[i], std::fabs(c)));
+      const double grid = std::max(tick, written);
       if (std::fabs(c - s.close[previous]) >= 0.5 * grid) {
         moves.emplace_back(i, previous);
       }

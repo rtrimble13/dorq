@@ -15,6 +15,7 @@
 
 #include <toml++/toml.hpp>
 
+#include "context/context.hpp"
 #include "core/text.hpp"
 #include "dorq/number.hpp"
 
@@ -334,9 +335,22 @@ Profile read_profile(std::string name, const toml::table& table, const std::stri
           }
         } else if (match_key == "series") {
           profile.match_series = read_string_list(match_node, where, match_path);
+        } else if (match_key == "asset_type") {
+          profile.match_asset_type = read_string_list(match_node, where, match_path);
+          for (std::string& type : profile.match_asset_type) {
+            type = normalize_name(type);
+          }
+        } else if (match_key == "nav_priced") {
+          profile.match_nav_priced = read_bool(match_node, where, match_path);
+        } else if (match_key == "exchange") {
+          profile.match_exchange = read_string_list(match_node, where, match_path);
+        } else if (match_key == "peer_group") {
+          profile.match_peer_group = read_string_list(match_node, where, match_path);
         } else {
           fail(where, match_node,
-               "unknown key \"" + match_path + "\" (a profile matches on kind or series)");
+               "unknown key \"" + match_path +
+                   "\" (a profile matches on kind, series, asset_type, nav_priced, exchange or "
+                   "peer_group)");
         }
       }
     } else if (key == "select") {
@@ -925,12 +939,25 @@ std::optional<Severity> SeverityThresholds::for_probability(double p) const noex
   return std::nullopt;
 }
 
-bool Profile::matches(const Series& series) const {
+bool Profile::matches(const Series& series, const SeriesMeta* meta) const {
   if (match_kind && *match_kind != series.kind) {
     return false;
   }
-  return match_series.empty() ||
-         std::find(match_series.begin(), match_series.end(), series.id) != match_series.end();
+  const auto listed = [](const std::vector<std::string>& list, const std::string& value) {
+    return list.empty() || std::find(list.begin(), list.end(), value) != list.end();
+  };
+  if (!listed(match_series, series.id)) {
+    return false;
+  }
+  if (!matches_on_meta()) {
+    return true;
+  }
+  if (meta == nullptr) {
+    return false;
+  }
+  return listed(match_asset_type, meta->asset_type) &&
+         (!match_nav_priced || meta->nav_priced == match_nav_priced) &&
+         listed(match_exchange, meta->exchange) && listed(match_peer_group, meta->peer_group);
 }
 
 std::optional<fs::path> discover_config(const fs::path& start) {
@@ -1074,11 +1101,21 @@ std::string to_toml(const Config& config) {
     if (profile.match_kind) {
       out += "kind = \"" + std::string{to_string(*profile.match_kind)} + "\"\n";
     }
-    if (!profile.match_series.empty()) {
-      out += "series = ";
-      append_toml_list(out, profile.match_series);
-      out += "\n";
+    const auto match_list = [&out](std::string_view key, const std::vector<std::string>& list) {
+      if (!list.empty()) {
+        out += key;
+        out += " = ";
+        append_toml_list(out, list);
+        out += "\n";
+      }
+    };
+    match_list("series", profile.match_series);
+    match_list("asset_type", profile.match_asset_type);
+    if (profile.match_nav_priced) {
+      out += std::string{"nav_priced = "} + (*profile.match_nav_priced ? "true" : "false") + "\n";
     }
+    match_list("exchange", profile.match_exchange);
+    match_list("peer_group", profile.match_peer_group);
     std::string integrity;
     append_integrity_patch(integrity, profile.integrity);
     if (!integrity.empty()) {

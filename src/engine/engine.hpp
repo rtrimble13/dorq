@@ -14,6 +14,7 @@
 
 #include "checks/check.hpp"
 #include "config/config.hpp"
+#include "context/context.hpp"
 #include "dorq/calendar.hpp"
 #include "dorq/date.hpp"
 #include "dorq/series.hpp"
@@ -55,6 +56,7 @@ struct EngineOptions {
   std::optional<Date> since;           // drop violations dated before this
   std::optional<Date> as_of;           // DQ304's reference date; default: the latest bar
   const Calendar* calendar = nullptr;  // default: built-in XNYS
+  const Context* context = nullptr;    // --actions, --meta, --market; none by default
 };
 
 // Runs the enabled checks over each series, on a pool of worker threads, and hands
@@ -114,6 +116,7 @@ class Engine {
   EngineOptions options_;
   ResultSink& sink_;
   const Calendar& calendar_;
+  const Context& context_;
   std::unordered_map<std::string, std::unique_ptr<Settings>> settings_;
   std::size_t next_sequence_ = 0;
 

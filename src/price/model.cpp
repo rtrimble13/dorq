@@ -61,6 +61,10 @@ constexpr double kVolumeDrift = 0.5;
 constexpr double kSplitVolumeDrift = 0.3;
 // A print at the bid or the ask: about 0.7 of the grid step, on the price scale.
 constexpr double kBounce = 0.7;
+// With --market, how far a series' beta on the day may be from the estimate: the
+// residual of a market move m carries an error of about this times m. On a crash
+// day that widens every series' ordinary move (DQ602).
+constexpr double kBetaError = 0.5;
 
 double log_normal_pdf(double x, double mean, double sd) noexcept {
   const double z = (x - mean) / sd;
@@ -156,13 +160,14 @@ struct VolumeWindow {
 class Scorer {
  public:
   Scorer(const Series& series, const PriceFeatures& f, const PriceSettings& settings,
-         std::optional<Bounds> bounds)
+         const PriceContext& context)
       : series_(series),
         f_(f),
         settings_(settings),
         n_(f.size()),
         has_ohlc_(series.kind == SeriesKind::kOhlcv),
-        bounds_(bounds) {
+        bounds_(context.bounds),
+        tick_(context.tick_size) {
     const double nu = settings.tail_dof;
     t_scale_ = nu > 2.0 ? std::sqrt((nu - 2.0) / nu) : 1.0;
     double total = 0.0;
@@ -197,6 +202,9 @@ class Scorer {
   // coarser grid the prices are written on (a sub-dime stock quoted in cents
   // moves a cent at a time).
   [[nodiscard]] double price_grid(std::size_t a, std::size_t b) const {
+    if (tick_) {
+      return std::max(*tick_, written_grid_);
+    }
     if (!has_ohlc_) {  // the exchange's tick is a fact about equities
       return written_grid_;
     }
@@ -208,14 +216,18 @@ class Scorer {
   // on either side of the spread, which dominates on a coarse grid.
   [[nodiscard]] double move_sd(double sig, std::size_t a, std::size_t b) const {
     int sessions = 0;
+    double market = 0.0;  // the variance of the market term a beta error leaves
     for (std::size_t i = a + 1; i <= b; ++i) {
       sessions += f_.elapsed[i];
+      if (!f_.market.empty()) {
+        market += std::pow(kBetaError * f_.market[i], 2.0);
+      }
     }
     // On the log scale a grid step is a share of the price; on the value scale it
     // is the step itself.
     const double bounce = f_.log_scale ? kBounce * price_grid(a, b) / std::min(close(a), close(b))
                                        : kBounce * price_grid(a, b);
-    return std::hypot(sig * std::sqrt(static_cast<double>(sessions)), bounce);
+    return std::sqrt(sig * sig * static_cast<double>(sessions) + bounce * bounce + market);
   }
 
   // log density of an ordinary move with standard deviation `sd`: Student t, with
@@ -356,6 +368,7 @@ class Scorer {
   std::size_t n_;
   bool has_ohlc_ = false;
   std::optional<Bounds> bounds_;  // a point series' plausible range
+  std::optional<double> tick_;    // the exchange tick from --meta
   double t_scale_ = 1.0;
   double written_grid_ = 0.0;  // 10^-d for the decimals most prices are written with
   std::vector<std::pair<SplitRatio, double>> splits_;
@@ -574,7 +587,9 @@ void Scorer::ohlc_terms(const Candidate& c, std::vector<Term>& terms) const {
   terms.push_back(std::move(range));
 
   const double mid = std::max(std::min(o, hi), std::min(std::max(o, hi), lo));
-  const double r_ohl = std::log(mid) - f_.y[c.t - 1];
+  // The open, high and low against the close before, net of the market's move.
+  const double market_part = f_.market.empty() ? 0.0 : f_.beta[c.t] * f_.market[c.t];
+  const double r_ohl = std::log(mid) - std::log(c.prev_close) - market_part;
   const double sd = 1.5 * c.base_sd;
   Term level = uniform_term("open_high_low", std::exp(r_ohl), log_normal_pdf(r_ohl, c.r, sd));
   // A real move's bar opens at the old level and trades to the new, or gaps.
@@ -940,15 +955,15 @@ std::vector<StaleRun> Scorer::stale_runs() const {
 }
 
 PriceAnalysis analyze_prices(const Series& series, const Calendar& calendar,
-                             const PriceSettings& settings, std::optional<Bounds> bounds) {
+                             const PriceSettings& settings, const PriceContext& context) {
   PriceAnalysis out;
-  out.features = compute_price_features(series, calendar, settings);
+  out.features = compute_price_features(series, calendar, settings, context.market);
   const std::size_t n = out.features.size();
   if (n < 2) {
     return out;
   }
   out.applicable = true;
-  const Scorer scorer(series, out.features, settings, bounds);
+  const Scorer scorer(series, out.features, settings, context);
   std::size_t skip_through = 0;  // returns explained by an earlier bad print
   for (std::size_t t = 1; t < n; ++t) {
     if (t <= skip_through || !scorer.screened(t)) {

@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "config/config.hpp"
+#include "context/context.hpp"
 #include "dorq/calendar.hpp"
 #include "dorq/series.hpp"
 #include "stats/nig.hpp"
@@ -38,6 +39,11 @@ struct PriceFeatures {
   // in proportion to the series' typical magnitude on the value scale.
   double error_scale = 0.3;
   double level = 1.0;  // the median magnitude of the values (value scale)
+  // With --market (log scale only): the market's log return over each bar's span,
+  // and the series' beta to it there. `ret` and `y` are then the residual: the
+  // move the market does not explain. Empty without a market.
+  std::vector<double> market;
+  std::vector<double> beta;
 
   [[nodiscard]] std::size_t size() const noexcept { return y.size(); }
 };
@@ -53,7 +59,9 @@ struct PriceFeatures {
 
 // Applicable to every series with at least two usable values: on the log scale a
 // finite value above zero, on the value scale any finite value.
+// With `market`, returns are taken net of the market's move (see beta above).
 [[nodiscard]] PriceFeatures compute_price_features(const Series& series, const Calendar& calendar,
-                                                   const PriceSettings& settings);
+                                                   const PriceSettings& settings,
+                                                   const MarketSeries* market = nullptr);
 
 }  // namespace dorq

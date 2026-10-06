@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "config/config.hpp"
+#include "context/context.hpp"
 #include "dorq/calendar.hpp"
 #include "dorq/series.hpp"
 #include "dorq/violation.hpp"
@@ -80,9 +81,17 @@ struct PriceAnalysis {
   std::vector<double> move_z;
 };
 
-// `bounds` is a point series' plausible range ([integrity] bounds), if any.
+// What the model knows about a series besides its bars (plan section 2.2).
+struct PriceContext {
+  std::optional<Bounds> bounds = std::nullopt;  // a point series' range ([integrity] bounds)
+  bool have_actions = false;                     // --actions was given
+  const SeriesActions* actions = nullptr;        // this series' actions on file, if any
+  std::optional<double> tick_size = std::nullopt;  // --meta: the tick, instead of inferring it
+  const MarketSeries* market = nullptr;          // --market
+};
+
 [[nodiscard]] PriceAnalysis analyze_prices(const Series& series, const Calendar& calendar,
                                            const PriceSettings& settings,
-                                           std::optional<Bounds> bounds = std::nullopt);
+                                           const PriceContext& context = {});
 
 }  // namespace dorq
