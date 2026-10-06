@@ -58,7 +58,7 @@ struct PriceFinding {
   std::array<double, kPriceHypotheses> log_likelihood{};
   double p_error = 0.0;      // calibrated by [calibration] p_error_map, when given
   double raw_p_error = 0.0;  // as the model computes it
-  double tail = 1.0;  // the return's two-sided tail probability, as ordinary
+  double tail = 1.0;         // the return's two-sided tail probability, as ordinary
   bool provisional = false;
   int block = 1;                             // bars in a bad print
   double factor = 1.0;                       // close / previous close

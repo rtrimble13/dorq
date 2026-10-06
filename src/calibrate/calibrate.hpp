@@ -24,11 +24,11 @@ struct CalibrateOptions {
   // Scored moves that match no label count as market facts (a synthetic universe
   // whose every fault is labelled). Off: they are left out, as unknown.
   bool clean_unlabelled = false;
-  bool grid = true;       // search jump_prob, jump_scale and ratio_tolerance
-  bool isotonic = true;   // fit the p_error map
-  double holdout = 0.0;   // the share of series held out for the report, by id hash
+  bool grid = true;      // search jump_prob, jump_scale and ratio_tolerance
+  bool isotonic = true;  // fit the p_error map
+  double holdout = 0.0;  // the share of series held out for the report, by id hash
   unsigned threads = 1;
-  std::string version;    // names the calibration ([calibration] version)
+  std::string version;  // names the calibration ([calibration] version)
 };
 
 // One scored move with a label: the evidence under each hypothesis, and which
@@ -47,7 +47,7 @@ struct Fit {
   double jump_prob = 0.0;
   double jump_scale = 0.0;
   double ratio_tolerance = 0.0;
-  double objective = 0.0;   // penalized log-likelihood, training observations
+  double objective = 0.0;     // penalized log-likelihood, training observations
   double mean_log_lik = 0.0;  // per training observation
   double test_mean_log_lik = 0.0;
 };
@@ -57,7 +57,7 @@ struct CalibrationReport {
   std::size_t price_labels = 0;    // about price moves (DQ2xx, DQ601), or market facts
   std::size_t matched_labels = 0;  // with at least one scored move
   std::size_t observations = 0;
-  std::size_t errors = 0;          // observations labelled an error or a context gap
+  std::size_t errors = 0;  // observations labelled an error or a context gap
   std::size_t test_observations = 0;
   std::size_t settings_tried = 0;
   Fit before;  // the configuration as given
@@ -87,7 +87,7 @@ struct CalibrationReport {
 
 // Expected calibration error over `bins` equal-width bins of p: the mean
 // |p - observed rate|, weighted by each bin's share of the points.
-[[nodiscard]] double expected_calibration_error(const std::vector<std::pair<double, double>>& points,
-                                                std::size_t bins = 10);
+[[nodiscard]] double expected_calibration_error(
+    const std::vector<std::pair<double, double>>& points, std::size_t bins = 10);
 
 }  // namespace dorq

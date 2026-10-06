@@ -50,8 +50,8 @@ constexpr const char* kFooter =
 // may come in any order. Larger inputs, and stdin, are checked as they are read.
 constexpr std::uintmax_t kBufferLimitBytes = std::uintmax_t{256} << 20U;
 
-constexpr std::array<std::string_view, 6> kCommands = {"check", "calibrate", "list-checks", "explain", "config",
-                                                       "version"};
+constexpr std::array<std::string_view, 6> kCommands = {"check",   "calibrate", "list-checks",
+                                                       "explain", "config",    "version"};
 
 // `dorq FILE` means `dorq check FILE`: put the command in when it is left out.
 std::vector<const char*> with_default_command(std::span<const char* const> args) {
@@ -156,8 +156,7 @@ void apply_overrides(const CheckOptions& o, CLI::App& cmd, Config& config) {
   if (const auto kind = parse_kind_option(o.kind); given("--kind") && kind) {
     config.kind = *kind;
   }
-  if (const auto format = parse_input_format(o.input_format);
-      given("--input-format") && format) {
+  if (const auto format = parse_input_format(o.input_format); given("--input-format") && format) {
     config.input_format = *format;
   }
   if (given("--columns")) {
@@ -184,8 +183,7 @@ void apply_overrides(const CheckOptions& o, CLI::App& cmd, Config& config) {
   if (given("--ignore")) {
     config.ignore.insert(config.ignore.end(), o.ignore.begin(), o.ignore.end());
   }
-  if (const auto severity = parse_severity(o.min_severity);
-      given("--min-severity") && severity) {
+  if (const auto severity = parse_severity(o.min_severity); given("--min-severity") && severity) {
     config.min_severity = *severity;
   }
   if (o.show_info) {
@@ -443,8 +441,8 @@ int run_calibrate(const CalibrateCommand& command, CLI::App& cmd, Io& io) {
   calibrate_options.holdout = command.holdout;
   const unsigned hardware = std::max(1U, std::thread::hardware_concurrency());
   calibrate_options.threads = config.threads > 0 ? static_cast<unsigned>(config.threads) : hardware;
-  calibrate_options.version = command.name.empty() ? fs::path(options.labels).stem().string()
-                                                   : command.name;
+  calibrate_options.version =
+      command.name.empty() ? fs::path(options.labels).stem().string() : command.name;
   const CalibrationReport report =
       calibrate(series, labels, config, calendar, context, calibrate_options);
   const std::string toml = priors_toml(report);
@@ -624,15 +622,15 @@ int run(std::span<const char* const> args, Io& io) {
                             "Write the fitted settings here (default: standard output)");
   calibrate_cmd->add_option("--name", calibrate_command.name,
                             "[calibration] version (default: the labels file's stem)");
-  calibrate_cmd->add_option("--holdout", calibrate_command.holdout,
-                            "Share of series held out to report on (by id)")
+  calibrate_cmd
+      ->add_option("--holdout", calibrate_command.holdout,
+                   "Share of series held out to report on (by id)")
       ->check(CLI::Range(0.0, 0.9));
   calibrate_cmd->add_flag("--clean-unlabelled", calibrate_command.clean_unlabelled,
                           "Count scored moves that match no label as market facts");
   calibrate_cmd->add_flag("--no-grid", calibrate_command.no_grid,
                           "Keep jump_prob, jump_scale and ratio_tolerance as configured");
-  calibrate_cmd->add_flag("--no-isotonic", calibrate_command.no_isotonic,
-                          "Write no p_error map");
+  calibrate_cmd->add_flag("--no-isotonic", calibrate_command.no_isotonic, "Write no p_error map");
   calibrate_cmd->add_option("--config", co.config, "Config file to use");
   calibrate_cmd->add_flag("--isolated", co.isolated, "Ignore all config files");
   calibrate_cmd->add_option("--kind", co.kind, "Series kind")

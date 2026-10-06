@@ -202,19 +202,18 @@ class Collector {
     settings.price.ratio_tolerance = hyper.ratio_tolerance;
     settings.price.priors = priors;
     settings.price.p_error_map.clear();
-    const PriceAnalysis analysis = analyze_prices(
-        s, calendar_, settings.price,
-        {.bounds = settings.bounds,
-         .have_actions = context_.have_actions,
-         .actions = context_.actions_for(s),
-         .tick_size = meta != nullptr ? meta->tick_size : std::nullopt,
-         .market = context_.market ? &context_.market.value() : nullptr});
-    const bool test = options_.holdout > 0.0 &&
-                      static_cast<double>(fnv(s.id) % 1000) < options_.holdout * 1000.0;
+    const PriceAnalysis analysis =
+        analyze_prices(s, calendar_, settings.price,
+                       {.bounds = settings.bounds,
+                        .have_actions = context_.have_actions,
+                        .actions = context_.actions_for(s),
+                        .tick_size = meta != nullptr ? meta->tick_size : std::nullopt,
+                        .market = context_.market ? &context_.market.value() : nullptr});
+    const bool test =
+        options_.holdout > 0.0 && static_cast<double>(fnv(s.id) % 1000) < options_.holdout * 1000.0;
     for (const PriceFinding& finding : analysis.findings) {
-      if (finding.claimed ||
-          std::none_of(finding.considered.begin(), finding.considered.end(),
-                       [](bool on) { return on; })) {
+      if (finding.claimed || std::none_of(finding.considered.begin(), finding.considered.end(),
+                                          [](bool on) { return on; })) {
         continue;
       }
       const Date day = s.date[analysis.features.row[finding.bar]];
@@ -295,7 +294,8 @@ double label_log_lik(const Observation& o, const Weights& w, Weights* gradient) 
         continue;
       }
       const double share = std::exp(w.at(h) + o.log_likelihood.at(h) - all);
-      const double in = o.allowed.at(h) ? std::exp(w.at(h) + o.log_likelihood.at(h) - allowed) : 0.0;
+      const double in =
+          o.allowed.at(h) ? std::exp(w.at(h) + o.log_likelihood.at(h) - allowed) : 0.0;
       gradient->at(h) += in - share;
     }
   }
@@ -561,8 +561,8 @@ CalibrationReport calibrate(const std::vector<Series>& series, const std::vector
     }
   }
   report.observations = best_obs.size();
-  report.errors = static_cast<std::size_t>(
-      std::count_if(best_obs.begin(), best_obs.end(), [](const Observation& o) { return o.error; }));
+  report.errors = static_cast<std::size_t>(std::count_if(
+      best_obs.begin(), best_obs.end(), [](const Observation& o) { return o.error; }));
   report.test_observations = static_cast<std::size_t>(
       std::count_if(best_obs.begin(), best_obs.end(), [](const Observation& o) { return o.test; }));
 
@@ -603,8 +603,7 @@ std::string priors_toml(const CalibrationReport& r) {
   out += "# Written by `dorq calibrate` (dorq " + std::string{kVersion} + "). Include it from a\n";
   out += "# config file: include = \"priors.toml\". See doc/calibration.md.\n#\n";
   out += "# labels: " + std::to_string(r.labels) + ", of which " + std::to_string(r.price_labels) +
-         " about price moves and " + std::to_string(r.matched_labels) +
-         " matching a scored move\n";
+         " about price moves and " + std::to_string(r.matched_labels) + " matching a scored move\n";
   out += "# observations: " + std::to_string(r.observations) + " (" + std::to_string(r.errors) +
          " errors), " + std::to_string(r.test_observations) + " held out\n";
   out += "# settings tried: " + std::to_string(r.settings_tried) + "\n";

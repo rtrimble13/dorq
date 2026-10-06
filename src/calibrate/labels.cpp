@@ -56,7 +56,8 @@ std::vector<Label> read_labels(std::istream& in, const std::string& source) {
     if (pos == text.size()) {
       continue;
     }
-    const JsonRecord record = parse_json_record(text, pos, source + " line " + std::to_string(line));
+    const JsonRecord record =
+        parse_json_record(text, pos, source + " line " + std::to_string(line));
     Label label;
     label.line = line;
     bool have_first = false;
@@ -158,7 +159,8 @@ void Restorer::apply(Series& series) const {
   const auto replaced = [&](Date day) {
     return (restore != nullptr &&
             std::find(restore->date.begin(), restore->date.end(), day) != restore->date.end()) ||
-           (removed != nullptr && std::find(removed->begin(), removed->end(), day) != removed->end());
+           (removed != nullptr &&
+            std::find(removed->begin(), removed->end(), day) != removed->end());
   };
   // The rows that stay, then the restored ones, in date order.
   struct Source {
