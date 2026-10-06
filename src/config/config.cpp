@@ -454,6 +454,30 @@ void read_calendar(const toml::table& table, const std::string& where, Config& c
   }
 }
 
+void read_fafnir(const toml::table& table, const std::string& where, Config& config) {
+  for (const auto& [sub_node, value] : table) {
+    const std::string path = key_path("fafnir", sub_node.str());
+    if (sub_node.str() == "table_name") {
+      config.fafnir_table = read_string(value, where, path);
+    } else {
+      fail(where, value, "unknown key \"" + path + "\"");
+    }
+  }
+}
+
+void read_calibration(const toml::table& table, const std::string& where, Config& config) {
+  for (const auto& [sub_node, value] : table) {
+    const std::string path = key_path("calibration", sub_node.str());
+    if (sub_node.str() == "version") {
+      config.calibration_version = read_string(value, where, path);
+    } else if (sub_node.str() == "p_error_map") {
+      config.price.p_error_map = read_p_error_map(value, where, path);
+    } else {
+      fail(where, value, "unknown key \"" + path + "\"");
+    }
+  }
+}
+
 void read_root(const toml::table& root, const std::string& where, Config& config) {
   for (const auto& [key_node, node] : root) {
     const std::string key{key_node.str()};
@@ -526,25 +550,9 @@ void read_root(const toml::table& root, const std::string& where, Config& config
     } else if (key == "calendar") {
       read_calendar(read_table(node, where, key), where, config);
     } else if (key == "fafnir") {
-      for (const auto& [sub_node, value] : read_table(node, where, key)) {
-        const std::string path = key_path(key, sub_node.str());
-        if (sub_node.str() == "table_name") {
-          config.fafnir_table = read_string(value, where, path);
-        } else {
-          fail(where, value, "unknown key \"" + path + "\"");
-        }
-      }
+      read_fafnir(read_table(node, where, key), where, config);
     } else if (key == "calibration") {
-      for (const auto& [sub_node, value] : read_table(node, where, key)) {
-        const std::string path = key_path(key, sub_node.str());
-        if (sub_node.str() == "version") {
-          config.calibration_version = read_string(value, where, path);
-        } else if (sub_node.str() == "p_error_map") {
-          config.price.p_error_map = read_p_error_map(value, where, path);
-        } else {
-          fail(where, value, "unknown key \"" + path + "\"");
-        }
-      }
+      read_calibration(read_table(node, where, key), where, config);
     } else if (key == "include") {
       // Read by load_config before the rest of the file.
     } else if (key == "profiles") {
@@ -1079,6 +1087,7 @@ const toml::table* settings_table(const toml::table& doc, const std::string& nam
 
 // Reads `path` over `config`: its includes first, then its own keys. `depth`
 // stops an include cycle.
+// NOLINTNEXTLINE(misc-no-recursion): an include nests at most kMaxDepth deep
 void read_config_file(const fs::path& path, Config& config, int depth) {
   constexpr int kMaxDepth = 8;
   if (depth > kMaxDepth) {

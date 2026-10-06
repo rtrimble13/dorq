@@ -120,9 +120,32 @@ exchange = "NASDAQ"   # which exchange to take from a multi-exchange file
 
 [fafnir]
 table_name = "core.daily_price"
+
+[calibration]         # written by `dorq calibrate` (doc/calibration.md)
+version = "2026-10"   # names the fit; shown by `dorq config show`
+p_error_map = [[0.02, 0.01], [0.5, 0.3], [0.97, 0.99]]  # raw -> calibrated p_error
 ```
 
 Lists can also be written as one comma-separated string (`ignore = "DQ106, DQ107"`).
+
+`p_error_map` is a list of `[raw, calibrated]` knots, with raw values strictly
+rising and calibrated ones never falling, all in [0, 1]. A Bayesian check's
+`p_error` is interpolated linearly between the knots, held at the end values
+beyond them, and then mapped to a severity. An empty map, the default, leaves
+`p_error` as the model computes it.
+
+## Include
+
+```toml
+include = "priors.toml"                       # or a list, read in order
+include = ["team.toml", "fits/2026-10.toml"]
+```
+
+The included files are read first, and the including file's own keys are
+applied over them. Paths are relative to the including file, and an included
+file may itself include others, up to eight levels deep. A missing file, or a
+file that includes itself, is an error. This is how a calibration from
+`dorq calibrate` is used, and how a team shares a base configuration.
 
 ## Profiles
 
@@ -170,7 +193,9 @@ The options with the same meaning as a key above are `--select`, `--extend-selec
 - A `--columns` field replaces that field's column.
 
 `--actions F`, `--meta F` and `--market F` name the context inputs, which have no
-config keys; doc/context.md describes them. `--show-info` is `--min-severity info`. `--show-evidence` adds each violation's
+config keys; doc/context.md describes them. `--restore F` checks the series as
+they stood before repairs, and `--labels F` supplies the labels whose `remove`
+dates go with it (doc/labels.md). `--show-info` is `--min-severity info`. `--show-evidence` adds each violation's
 suggested action, hypotheses and evidence to text output (doc/output.md). `--exit-zero` always exits 0. `--as-of
 DATE` sets the date DQ304 judges staleness against; by default it is the latest
 session with a bar anywhere in the input.

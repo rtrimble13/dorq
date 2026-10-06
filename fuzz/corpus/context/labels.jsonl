@@ -1,0 +1,2 @@
+{"series":"A","first":"2020-03-02","last":"2020-03-04","class":"data_error","expect":"DQ201","remove":"2020-03-03, 2020-03-05"}
+{"series":"A","date":"2020-05-01","class":"market_fact","kind":"news"}

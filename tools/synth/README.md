@@ -8,9 +8,11 @@ tests, and `ctest -R synth` runs the gate in [gates.txt](gates.txt) on two seeds
 dorq-synth generate --seed 1 --out /tmp/synth   # bars, points, labels, actions, meta, market
 dorq /tmp/synth/bars.csv /tmp/synth/points.csv --config tools/synth/dorq.toml \
      --actions /tmp/synth/actions.csv --meta /tmp/synth/meta.csv \
-     --market /tmp/synth/market.csv --exit-zero --format csv > /tmp/synth/results.csv
+     --market /tmp/synth/market.csv --exit-zero --format csv --show-info > /tmp/synth/results.csv
 dorq-synth score --labels /tmp/synth/labels.csv --results /tmp/synth/results.csv \
                  --gates tools/synth/gates.txt --verbose
+dorq-eval --labels /tmp/synth/labels.jsonl --results /tmp/synth/results.csv --complete \
+          --html /tmp/synth/report.html     # the same, plus calibration (tools/eval)
 ```
 
 The generator draws from its own PRNG (xoshiro256**) and its own normal and t
@@ -53,9 +55,13 @@ The context files (doc/context.md):
 
 ## Labels
 
-`labels.csv` has a row per injected fault (`expect` is the code dorq should
-report) and per hard negative (`expect` empty; `codes` is the code prefix a report
-would be wrong under).
+`labels.csv` has a row per injected fault and a row per hard negative. For a
+fault, `expect` is the code dorq should report. For a hard negative, `expect` is
+empty and `codes` is the code prefix a report would be wrong under.
+`labels.jsonl` holds the same labels in the schema of
+[doc/labels.md](../../doc/labels.md), for `dorq calibrate` and dorq-eval. A fault
+becomes a `data_error`, except a split missing from the data (DQ203, DQ601),
+which becomes a `context_gap`. A hard negative becomes a `market_fact`.
 
 | Kind | Expect | What was done |
 |---|---|---|
@@ -136,3 +142,11 @@ DQ107 is held to fault precision 0.5 and recall 0.9. It reports 10-20 bars a
 universe: every injected flat bar, other faults that leave a bar flat, and a few
 rare flat days on low-priced names. On the penny and 1/16 series it reports 0-4
 bars, where it reported over a thousand before it learned the price grid.
+
+## A large input: `bench`
+
+`dorq-synth bench --copies K [--seed N] --out FILE` writes K universes' bars to
+one file. Copy *i* uses seed N + i, and its series are named `<i>_<id>`. It
+writes no labels or context files. At 650 copies the file holds 150M bars
+(7.7 GB), the size of the runtime target in
+[doc/performance.md](../../doc/performance.md).

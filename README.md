@@ -20,7 +20,7 @@ data-quality process.
 
 ## Status
 
-**Pre-alpha: milestone M5 (context inputs).** dorq reads CSV, TSV, JSON
+**Pre-alpha: milestone M6 (calibration and evaluation).** dorq reads CSV, TSV, JSON
 Lines and JSON arrays, and reports in five formats. It runs:
 
 - the deterministic integrity checks (DQ1xx);
@@ -42,8 +42,12 @@ Lines and JSON arrays, and reports in five formats. It runs:
   fund family's shared split count as evidence (DQ601); and a market reference
   (`--market`), net of which every move is judged (DQ602).
 
-Calibration from fafnir's own decisions comes in M6. The
-[development plan](doc/plans/dorq-development-plan.md) sets out what comes when.
+`dorq calibrate` fits the price model's priors and its `p_error` map to labelled
+history: fafnir's own repair decisions ([doc/calibration.md](doc/calibration.md),
+[doc/labels.md](doc/labels.md)). [dorq-eval](tools/eval/README.md) reports
+precision, recall, calibration and precision@k against labels. Integration into
+fafnir comes in M7. The [development plan](doc/plans/dorq-development-plan.md)
+sets out what comes when.
 
 ```console
 $ dorq tests/data/bad_bars.csv
@@ -102,6 +106,7 @@ dorq list-checks                             # every check, its severity and wha
 dorq explain DQ106                           # a check's full documentation
 dorq config show                             # the effective settings and their hash
 dorq config init                             # write a starter dorq.toml
+dorq calibrate prices.csv --labels labels.jsonl --out priors.toml   # fit priors to labels
 ```
 
 Input is long format, one row per series and date. Columns are found by name,
@@ -173,7 +178,7 @@ archives, plus a `SHA256SUMS` file:
 | `dorq-<version>-macos-arm64.tar.gz` | macOS on Apple silicon |
 
 ```bash
-version=0.5.0
+version=0.6.0
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/dorq-${version}-linux-x86_64.tar.gz"
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
@@ -194,7 +199,7 @@ Clang 18+).
 ```bash
 sudo apt-get install -y build-essential cmake ninja-build git
 git clone https://github.com/rtrimble13/dorq.git && cd dorq
-git checkout v0.5.0                        # or stay on main for the latest
+git checkout v0.6.0                        # or stay on main for the latest
 cmake --workflow --preset release          # configure, build, run the tests
 sudo cmake --install build/release --prefix /opt/dorq
 /opt/dorq/bin/dorq version                 # names the commit it was built from
@@ -238,10 +243,16 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 - [Configuration](doc/configuration.md): the config file, profiles, columns, input
 - [Calendars](doc/calendar.md): built-in calendars and reference calendar files
 - [Output formats](doc/output.md): text, json, jsonl, csv, fafnir
+- [Context inputs](doc/context.md): corporate actions, series metadata, a market reference
+- [Labels](doc/labels.md) and [calibration](doc/calibration.md): fitting the
+  price model to labelled history, and `--restore`
+- [Performance](doc/performance.md): throughput, memory, threads and the runtime targets
 - [Checks](doc/checks/): one page per check, also printed by `dorq explain`;
   [DQ201](doc/checks/DQ201.md) describes the price model
 - [dorq-synth](tools/synth/README.md): synthetic data with labelled faults, and the
   precision and recall gate
+- [dorq-eval](tools/eval/README.md): precision, recall, reliability diagrams and
+  precision@k against labels, as markdown and HTML
 - [Development plan](doc/plans/dorq-development-plan.md): goals, checks, models, milestones
 - [Architecture decisions](doc/adr/)
 - [Contributing](CONTRIBUTING.md): conventions, tests, dependencies, releasing

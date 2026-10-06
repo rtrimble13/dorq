@@ -239,10 +239,7 @@ Engine::Processed Engine::process(Work& work) const {
 }
 
 void Engine::filter_and_send(SeriesResult&& result) {
-  std::erase_if(result.violations, [this](const Violation& v) {
-    return v.severity < options_.min_severity ||
-           (options_.since && v.date && *v.date < *options_.since);
-  });
+  drop_unreported(result);
   // By date (rows without one first, by line), then code. Stable, so a check's
   // own order breaks any remaining tie.
   std::stable_sort(result.violations.begin(), result.violations.end(),
@@ -261,8 +258,20 @@ void Engine::filter_and_send(SeriesResult&& result) {
   sink_.series_done(std::move(result));
 }
 
+void Engine::drop_unreported(SeriesResult& result) const {
+  std::erase_if(result.violations, [this](const Violation& v) {
+    return v.severity < options_.min_severity ||
+           (options_.since && v.date && *v.date < *options_.since);
+  });
+}
+
 void Engine::deliver(Processed processed) {
   if (holding_) {
+    // The cross-section only removes, downgrades or adds violations, so what
+    // would not be reported can go now: on a large input, most of what is held
+    // is info (DQ502 carry bars) below --min-severity.
+    drop_unreported(processed.result);
+    processed.result.violations.shrink_to_fit();
     cross_->add(std::move(processed.summary));
     held_.push_back(std::move(processed.result));
     return;

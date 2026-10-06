@@ -137,12 +137,12 @@ class Collector {
         config_(config),
         calendar_(calendar),
         context_(context),
-        options_(options) {
-    for (std::size_t i = 0; i < labels.size(); ++i) {
-      by_series_[labels[i].series].push_back(&labels[i]);
+        options_(options),
+        labels_(&labels),
+        matched_(labels.size(), 0) {
+    for (const Label& label : labels) {
+      by_series_[label.series].push_back(&label);
     }
-    matched_.assign(labels.size(), 0);
-    labels_ = &labels;
   }
 
   // Every labelled scored move under one setting.

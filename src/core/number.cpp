@@ -4,6 +4,7 @@
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -17,6 +18,10 @@ namespace dorq {
 namespace {
 
 bool is_missing_marker(std::string_view text) noexcept {
+  // Every marker starts with a letter, '.' or '#', or is empty: a number seldom does.
+  if (!text.empty() && ((text.front() >= '0' && text.front() <= '9') || text.front() == '-')) {
+    return false;
+  }
   constexpr std::array<std::string_view, 8> kMarkers = {"",     "na",   "n/a", "nan",
                                                         "null", "none", ".",   "#n/a"};
   return std::any_of(kMarkers.begin(), kMarkers.end(),
@@ -32,8 +37,19 @@ void measure_precision(std::string_view text, ParsedNumber& out) noexcept {
   if (!text.empty() && (text.front() == '-' || text.front() == '+')) {
     text.remove_prefix(1);
   }
+  // One pass for the decimal point and the exponent.
+  std::size_t dot = std::string_view::npos;
+  std::size_t e = std::string_view::npos;
+  for (std::size_t i = 0; i < text.size(); ++i) {
+    if (text[i] == '.') {
+      dot = i;
+    } else if (text[i] == 'e' || text[i] == 'E') {
+      e = i;
+      break;
+    }
+  }
   long exponent = 0;
-  if (const auto e = text.find_first_of("eE"); e != std::string_view::npos) {
+  if (e != std::string_view::npos) {
     long parsed = 0;
     std::string_view exp_text = text.substr(e + 1);
     if (!exp_text.empty() && exp_text.front() == '+') {
@@ -46,7 +62,7 @@ void measure_precision(std::string_view text, ParsedNumber& out) noexcept {
   }
   std::string_view integer = text;
   std::string_view fraction;
-  if (const auto dot = text.find('.'); dot != std::string_view::npos) {
+  if (dot != std::string_view::npos) {
     integer = text.substr(0, dot);
     fraction = text.substr(dot + 1);
   }
@@ -55,15 +71,22 @@ void measure_precision(std::string_view text, ParsedNumber& out) noexcept {
   }
   out.decimals = clamp_u8(static_cast<long>(fraction.size()) - exponent);
 
-  // Significant figures: from the first non-zero digit to the last non-zero one.
-  std::string digits{integer};
-  digits += fraction;
-  const auto first = digits.find_first_not_of('0');
-  if (first == std::string::npos) {
+  // Significant figures: from the first non-zero digit to the last non-zero one,
+  // over the integer digits followed by the fraction's.
+  const auto lead = integer.find_first_not_of('0');
+  std::size_t first = 0;
+  if (lead != std::string_view::npos) {
+    first = lead;
+  } else if (const auto in_fraction = fraction.find_first_not_of('0');
+             in_fraction != std::string_view::npos) {
+    first = integer.size() + in_fraction;
+  } else {
     out.sig_figs = 0;
     return;
   }
-  const auto last = digits.find_last_not_of('0');
+  // The fraction has no trailing zeros, so it ends the digits when it has any.
+  const std::size_t last =
+      fraction.empty() ? integer.find_last_not_of('0') : integer.size() + fraction.size() - 1;
   out.sig_figs = clamp_u8(static_cast<long>(last - first + 1));
 }
 
