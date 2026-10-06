@@ -27,6 +27,13 @@ class PriceCheck final : public Check {
 [[nodiscard]] const CheckInfo& history_segment_info() noexcept;      // DQ205
 [[nodiscard]] const CheckInfo& large_move_info() noexcept;           // DQ209
 
+// The DQ203 report of a finding as if an unreported split were its most probable
+// error, without the "; P(error)" ending and with a provisional p_error and
+// severity: for evidence found once every series is in (DQ601's siblings).
+[[nodiscard]] Violation unreported_split_base(const SeriesContext& context,
+                                              const PriceAnalysis& analysis,
+                                              const PriceFinding& finding);
+
 // A number to `digits` significant figures, for messages: 0.258512 -> "0.2585".
 [[nodiscard]] std::string significant(double value, int digits);
 

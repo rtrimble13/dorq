@@ -6,8 +6,10 @@
 #include <string_view>
 #include <vector>
 
+#include "checks/actions.hpp"
 #include "checks/check.hpp"
 #include "checks/coverage.hpp"
+#include "checks/cross.hpp"
 #include "checks/integrity.hpp"
 #include "checks/price.hpp"
 #include "checks/stale.hpp"
@@ -75,12 +77,23 @@ std::span<const Check* const> all_checks() {
   static const MoveOnZeroVolume kZeroVolumeMove;
   static const RepeatedPrice kRepeatedPrice;
   static const CarryBar kCarryBar;
-  static const std::array<const Check*, 25> kChecks = {
+  static const SplitOnFileCheck kSplitMisdated(split_misdated_info(), SplitVerdict::kMisdated);
+  static const SplitOnFileCheck kSplitNoJump(split_without_jump_info(), SplitVerdict::kNoJump);
+  static const SplitOnFileCheck kSplitRatio(split_ratio_mismatch_info(),
+                                            SplitVerdict::kRatioMismatch);
+  static const SplitOnFileCheck kSplitDouble(split_double_applied_info(),
+                                             SplitVerdict::kDoubleApplied);
+  static const DividendImplausible kDividend;
+  static const CohortMove kCohortMove;
+  static const MarketDay kMarketDay;
+  static const std::array<const Check*, 32> kChecks = {
       &kOhlcBounds,      &kNonPositive,   &kDuplicateDate,  &kMissingField,  &kNonSession,
       &kPrecisionShift,  &kZeroRange,     &kOutOfBounds,    &kBadPrint,      &kScaleShift,
       &kUnreportedSplit, &kCloseMismatch, &kHistorySegment, &kDateShift,     &kLargeMove,
       &kMissingRun,      &kSparse,        &kCohort,         &kStale,         &kFrequencyGap,
-      &kVolumeShift,     &kVolumeSpike,   &kZeroVolumeMove, &kRepeatedPrice, &kCarryBar};
+      &kVolumeShift,     &kVolumeSpike,   &kZeroVolumeMove, &kRepeatedPrice, &kCarryBar,
+      &kCohortMove,      &kMarketDay,     &kSplitMisdated,  &kSplitNoJump,   &kSplitRatio,
+      &kSplitDouble,     &kDividend};
   return kChecks;
 }
 

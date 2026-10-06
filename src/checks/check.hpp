@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -7,6 +8,7 @@
 
 #include "checks/coverage_model.hpp"
 #include "config/config.hpp"
+#include "context/context.hpp"
 #include "dorq/calendar.hpp"
 #include "dorq/frequency.hpp"
 #include "dorq/series.hpp"
@@ -31,6 +33,16 @@ struct SeriesContext {
   // The price model's findings, computed once when any DQ2xx price check runs;
   // nullptr otherwise.
   const PriceAnalysis* price_analysis = nullptr;
+  // Context inputs (doc/context.md): whether --actions was given, and this
+  // series' actions and metadata (nullptr when the files have none for it).
+  bool have_actions = false;
+  const SeriesActions* actions = nullptr;
+  const SeriesMeta* meta = nullptr;
+
+  // The exchange tick from --meta, if given.
+  [[nodiscard]] std::optional<double> meta_tick() const noexcept {
+    return meta != nullptr ? meta->tick_size : std::nullopt;
+  }
 };
 
 // A check reads one series and appends violations. Checks hold no state and are

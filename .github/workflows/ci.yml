@@ -117,6 +117,10 @@ jobs:
         run: |
           mkdir -p corpus/calendar
           build/fuzz/fuzz/fuzz_calendar -max_total_time=60 -timeout=10 corpus/calendar fuzz/corpus/calendar
+      - name: fuzz_context
+        run: |
+          mkdir -p corpus/context
+          build/fuzz/fuzz/fuzz_context -max_total_time=60 -timeout=10 corpus/context fuzz/corpus/context
       - name: Keep crashing inputs
         if: failure()
         uses: actions/upload-artifact@v4

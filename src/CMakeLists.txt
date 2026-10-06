@@ -19,8 +19,10 @@ add_dependencies(dorq_generated dorq_build_info)
 # binary runs.
 add_library(
   dorq_lib STATIC
+  checks/actions.cpp
   checks/coverage.cpp
   checks/coverage_model.cpp
+  checks/cross.cpp
   checks/integrity.cpp
   checks/price.cpp
   checks/registry.cpp
@@ -28,6 +30,7 @@ add_library(
   checks/volume.cpp
   cli/app.cpp
   config/config.cpp
+  context/context.cpp
   core/build_info.cpp
   core/calendar.cpp
   core/date.cpp

@@ -15,6 +15,7 @@
 
 #include <toml++/toml.hpp>
 
+#include "context/context.hpp"
 #include "core/text.hpp"
 #include "dorq/number.hpp"
 
@@ -301,6 +302,13 @@ void read_priors(const toml::table& table, const std::string& where, const std::
       patch.tick_move = value;
     } else if (key == "history_segment") {
       patch.history_segment = value;
+    } else if (key == "explained_split") {
+      patch.explained_split = value;
+    } else if (key == "split_on_file_error") {
+      if (value >= 1.0) {
+        fail(where, node, "\"" + path + "\" is a probability: from 0 to below 1");
+      }
+      patch.split_on_file_error = value;
     } else if (key == "stale_run") {
       if (value > 1.0) {
         fail(where, node, "\"" + path + "\" is a probability: from 0 to 1");
@@ -334,9 +342,22 @@ Profile read_profile(std::string name, const toml::table& table, const std::stri
           }
         } else if (match_key == "series") {
           profile.match_series = read_string_list(match_node, where, match_path);
+        } else if (match_key == "asset_type") {
+          profile.match_asset_type = read_string_list(match_node, where, match_path);
+          for (std::string& type : profile.match_asset_type) {
+            type = normalize_name(type);
+          }
+        } else if (match_key == "nav_priced") {
+          profile.match_nav_priced = read_bool(match_node, where, match_path);
+        } else if (match_key == "exchange") {
+          profile.match_exchange = read_string_list(match_node, where, match_path);
+        } else if (match_key == "peer_group") {
+          profile.match_peer_group = read_string_list(match_node, where, match_path);
         } else {
           fail(where, match_node,
-               "unknown key \"" + match_path + "\" (a profile matches on kind or series)");
+               "unknown key \"" + match_path +
+                   "\" (a profile matches on kind, series, asset_type, nav_priced, exchange or "
+                   "peer_group)");
         }
       }
     } else if (key == "select") {
@@ -657,6 +678,8 @@ PricePatch full_patch(const PriceSettings& settings) {
   full.scale_error = settings.priors.scale_error;
   full.tick_move = settings.priors.tick_move;
   full.history_segment = settings.priors.history_segment;
+  full.explained_split = settings.priors.explained_split;
+  full.split_on_file_error = settings.priors.split_on_file_error;
   full.stale_run = settings.priors.stale_run;
   return full;
 }
@@ -717,6 +740,8 @@ void append_priors_patch(std::string& out, const PricePatch& patch) {
   append_number(out, "scale_error", patch.scale_error);
   append_number(out, "tick_move", patch.tick_move);
   append_number(out, "history_segment", patch.history_segment);
+  append_number(out, "explained_split", patch.explained_split);
+  append_number(out, "split_on_file_error", patch.split_on_file_error);
   append_number(out, "stale_run", patch.stale_run);
 }
 
@@ -852,6 +877,8 @@ void PricePatch::apply_to(PriceSettings& settings) const {
   set(settings.priors.scale_error, scale_error);
   set(settings.priors.tick_move, tick_move);
   set(settings.priors.history_segment, history_segment);
+  set(settings.priors.explained_split, explained_split);
+  set(settings.priors.split_on_file_error, split_on_file_error);
   set(settings.priors.stale_run, stale_run);
 }
 
@@ -925,12 +952,25 @@ std::optional<Severity> SeverityThresholds::for_probability(double p) const noex
   return std::nullopt;
 }
 
-bool Profile::matches(const Series& series) const {
+bool Profile::matches(const Series& series, const SeriesMeta* meta) const {
   if (match_kind && *match_kind != series.kind) {
     return false;
   }
-  return match_series.empty() ||
-         std::find(match_series.begin(), match_series.end(), series.id) != match_series.end();
+  const auto listed = [](const std::vector<std::string>& list, const std::string& value) {
+    return list.empty() || std::find(list.begin(), list.end(), value) != list.end();
+  };
+  if (!listed(match_series, series.id)) {
+    return false;
+  }
+  if (!matches_on_meta()) {
+    return true;
+  }
+  if (meta == nullptr) {
+    return false;
+  }
+  return listed(match_asset_type, meta->asset_type) &&
+         (!match_nav_priced || meta->nav_priced == match_nav_priced) &&
+         listed(match_exchange, meta->exchange) && listed(match_peer_group, meta->peer_group);
 }
 
 std::optional<fs::path> discover_config(const fs::path& start) {
@@ -1074,11 +1114,21 @@ std::string to_toml(const Config& config) {
     if (profile.match_kind) {
       out += "kind = \"" + std::string{to_string(*profile.match_kind)} + "\"\n";
     }
-    if (!profile.match_series.empty()) {
-      out += "series = ";
-      append_toml_list(out, profile.match_series);
-      out += "\n";
+    const auto match_list = [&out](std::string_view key, const std::vector<std::string>& list) {
+      if (!list.empty()) {
+        out += key;
+        out += " = ";
+        append_toml_list(out, list);
+        out += "\n";
+      }
+    };
+    match_list("series", profile.match_series);
+    match_list("asset_type", profile.match_asset_type);
+    if (profile.match_nav_priced) {
+      out += std::string{"nav_priced = "} + (*profile.match_nav_priced ? "true" : "false") + "\n";
     }
+    match_list("exchange", profile.match_exchange);
+    match_list("peer_group", profile.match_peer_group);
     std::string integrity;
     append_integrity_patch(integrity, profile.integrity);
     if (!integrity.empty()) {
@@ -1218,6 +1268,8 @@ unreported_split = 0.02
 scale_error = 0.02
 tick_move = 0.01
 history_segment = 0.05
+explained_split = 0.9         # with --actions: a split on file between the bars explains a move
+split_on_file_error = 0.06    # with --actions: a split on file being wrong (DQ701-DQ704)
 stale_run = 0.00003           # DQ501: a run of repeated closes being a stale feed, per bar
 
 [severity]

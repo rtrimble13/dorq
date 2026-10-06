@@ -1,7 +1,9 @@
 #pragma once
 
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace dorq {
 
@@ -30,6 +32,18 @@ namespace dorq {
   }
   return text;
 }
+
+// A column name for matching: trimmed, lower case, without spaces, '_' or '-'
+// ("Trade_Date" -> "tradedate").
+[[nodiscard]] std::string normalize_name(std::string_view name);
+
+// The first column whose normalized name is one of `aliases` (tried in order),
+// or -1.
+[[nodiscard]] int find_column(const std::vector<std::string>& names,
+                              std::span<const std::string_view> aliases);
+
+// true/t/1/yes/y or false/f/0/no/n, any case. Returns false for anything else.
+[[nodiscard]] bool parse_bool(std::string_view text, bool& out);
 
 // Appends `text` as a JSON string literal, quotes included (RFC 8259, section 7).
 void append_json_string(std::string& out, std::string_view text);

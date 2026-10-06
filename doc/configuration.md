@@ -104,6 +104,8 @@ unreported_split = 0.02
 scale_error = 0.02
 tick_move = 0.01
 history_segment = 0.05
+explained_split = 0.9 # with --actions: a split on file between the bars explains the move
+split_on_file_error = 0.06  # with --actions: a split on file being wrong (DQ701-DQ704)
 stale_run = 3e-05     # DQ501: a run of repeated closes being a stale feed, per bar
 
 [severity]            # p_error -> severity, for the probabilistic checks
@@ -125,8 +127,11 @@ Lists can also be written as one comma-separated string (`ignore = "DQ106, DQ107
 ## Profiles
 
 A profile applies settings to the series it matches. It can match on
-`kind = "ohlcv" | "point"`, on a list of series ids, or on both. A profile with
-no `match` table applies to every series.
+`kind = "ohlcv" | "point"`, on a list of series ids, and on the fields of a
+`--meta` file: `asset_type`, `nav_priced`, `exchange` and `peer_group` (each a
+value or a list, but `nav_priced`, which is true or false). Every key given must
+hold, and a key on a metadata field never holds for a series the file does not
+list. A profile with no `match` table applies to every series.
 
 ```toml
 [profiles.rates]
@@ -136,9 +141,13 @@ price = { transform = "diff" }           # moves are changes: rates cross zero
 integrity = { bounds = [-5, 25] }        # a yield in percent (DQ108)
 
 [profiles.nav_funds]
-match = { series = ["VFIAX", "TDEAX"] }
-ignore = ["DQ107"]                       # a NAV strike is a flat bar
+match = { nav_priced = true }            # from --meta
+ignore = ["DQ107", "DQ4"]                # a NAV strike is a flat bar, on no volume
 integrity = { positive_point_series = true }
+
+[profiles.etfs]
+match = { asset_type = ["etf"], exchange = "ARCX" }
+priors = { unreported_split = 0.05 }     # fund families split more often
 ```
 
 A profile's `select` and `ignore` entries are **added** to the global lists. Its
@@ -148,8 +157,6 @@ set per profile. When two
 profiles match the same series, they are applied in name order, so where they
 disagree the later name wins.
 
-Matching on fields from a metadata file (`asset_type`, `nav_priced`) arrives with
-`--meta` in M5.
 
 ## Command-line options
 
@@ -162,7 +169,8 @@ The options with the same meaning as a key above are `--select`, `--extend-selec
 - `--extend-select` and `--ignore` add to their lists.
 - A `--columns` field replaces that field's column.
 
-`--show-info` is `--min-severity info`. `--show-evidence` adds each violation's
+`--actions F`, `--meta F` and `--market F` name the context inputs, which have no
+config keys; doc/context.md describes them. `--show-info` is `--min-severity info`. `--show-evidence` adds each violation's
 suggested action, hypotheses and evidence to text output (doc/output.md). `--exit-zero` always exits 0. `--as-of
 DATE` sets the date DQ304 judges staleness against; by default it is the latest
 session with a bar anywhere in the input.

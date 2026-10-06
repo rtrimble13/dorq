@@ -412,8 +412,18 @@ void MoveOnZeroVolume::run(const SeriesContext& context, std::vector<Violation>&
       ++with_volume;
     }
     if (previous < s.size() && s.volume[i] == 0.0 && s.date[i] != s.date[previous]) {
-      const double grid = std::max(tick_size(s.date[i], std::fabs(c)), written);
-      if (std::fabs(c - s.close[previous]) >= 0.5 * grid) {
+      const double tick = context.meta_tick().value_or(tick_size(s.date[i], std::fabs(c)));
+      const double grid = std::max(tick, written);
+      // A split on file between the two bars explains a move by its ratio: the
+      // feed carried the last close, adjusted.
+      const bool split =
+          context.actions != nullptr &&
+          std::any_of(context.actions->splits.begin(), context.actions->splits.end(),
+                      [&](const SplitAction& a) {
+                        return a.ex_date > s.date[previous] && a.ex_date <= s.date[i] &&
+                               std::fabs(std::log(c / s.close[previous] / a.price_factor())) < 0.05;
+                      });
+      if (std::fabs(c - s.close[previous]) >= 0.5 * grid && !split) {
         moves.emplace_back(i, previous);
       }
     }

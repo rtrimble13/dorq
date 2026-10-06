@@ -18,6 +18,84 @@ constexpr double kClip = 4.0;
 constexpr double kClassWeight = 10.0;
 // The volatility filters start from this many returns' worth of prior.
 constexpr double kPriorWeight = 10.0;
+// Beta: a series' own regression on the market, shrunk toward 1 (an ordinary
+// stock) by this many market-sized returns; locally, a discounted regression
+// either side of each bar (about 100 returns each way), shrunk toward the
+// series' own beta by as many.
+constexpr double kBetaPriorWeight = 20.0;
+constexpr double kBetaDiscount = 0.99;
+// Returns larger than this many robust standard deviations, or spanning more
+// sessions than kBetaMaxGap, say nothing about beta: a split, a bad print.
+constexpr double kBetaOutlier = 5.0;
+constexpr int kBetaMaxGap = 5;
+
+// Takes the market's move out of each return: ret[i] -= beta[i] * market[i], and y
+// follows. The market return of a bar is the market's move between the two bars'
+// dates (on or before each).
+void remove_market(PriceFeatures& f, const Series& series, const MarketSeries& market,
+                   double own_scale) {
+  const std::size_t n = f.size();
+  f.market.assign(n, 0.0);
+  f.beta.assign(n, 0.0);
+  for (std::size_t i = 1; i < n; ++i) {
+    const auto a = market.log_level_on(series.date[f.row[i - 1]]);
+    const auto b = market.log_level_on(series.date[f.row[i]]);
+    if (a && b) {
+      f.market[i] = *b - *a;
+    }
+  }
+  std::vector<bool> usable(n, false);
+  double sxy = 0.0;
+  double sxx = 0.0;
+  std::size_t count = 0;
+  for (std::size_t i = 1; i < n; ++i) {
+    const double limit = kBetaOutlier * own_scale * std::sqrt(static_cast<double>(f.elapsed[i]));
+    usable[i] = f.market[i] != 0.0 && f.elapsed[i] <= kBetaMaxGap &&
+                (!(own_scale > 0.0) || std::fabs(f.ret[i]) <= limit);
+    if (usable[i]) {
+      sxy += f.ret[i] * f.market[i];
+      sxx += f.market[i] * f.market[i];
+      ++count;
+    }
+  }
+  if (count == 0 || !(sxx > 0.0)) {
+    f.market.clear();
+    f.beta.clear();
+    return;
+  }
+  const double prior = kBetaPriorWeight * sxx / static_cast<double>(count);
+  const double own_beta = (sxy + prior * 1.0) / (sxx + prior);
+  // Discounted sums from the left (returns 1..i-1) and the right (i+1..n-1).
+  std::vector<double> left_xy(n, 0.0);
+  std::vector<double> left_xx(n, 0.0);
+  double xy = 0.0;
+  double xx = 0.0;
+  for (std::size_t i = 1; i < n; ++i) {
+    left_xy[i] = xy;
+    left_xx[i] = xx;
+    xy *= kBetaDiscount;
+    xx *= kBetaDiscount;
+    if (usable[i]) {
+      xy += f.ret[i] * f.market[i];
+      xx += f.market[i] * f.market[i];
+    }
+  }
+  xy = 0.0;
+  xx = 0.0;
+  for (std::size_t i = n; i-- > 1;) {
+    f.beta[i] = (left_xy[i] + xy + prior * own_beta) / (left_xx[i] + xx + prior);
+    xy *= kBetaDiscount;
+    xx *= kBetaDiscount;
+    if (usable[i]) {
+      xy += f.ret[i] * f.market[i];
+      xx += f.market[i] * f.market[i];
+    }
+  }
+  for (std::size_t i = 1; i < n; ++i) {
+    f.ret[i] -= f.beta[i] * f.market[i];
+    f.y[i] = f.y[i - 1] + f.ret[i];
+  }
+}
 
 }  // namespace
 
@@ -48,7 +126,7 @@ double class_volatility(double median_price, double median_dollar_volume) noexce
 }
 
 PriceFeatures compute_price_features(const Series& series, const Calendar& calendar,
-                                     const PriceSettings& settings) {
+                                     const PriceSettings& settings, const MarketSeries* market) {
   PriceFeatures f;
   f.log_scale = uses_log_scale(series, settings.transform);
   const auto scaled_value = [&f](double value) { return f.log_scale ? std::log(value) : value; };
@@ -98,10 +176,19 @@ PriceFeatures compute_price_features(const Series& series, const Calendar& calen
   // returns per session), pulled toward the class by the class prior's weight.
   std::vector<double> scaled;
   scaled.reserve(n - 1);
-  for (std::size_t i = 1; i < n; ++i) {
-    scaled.push_back(f.ret[i] / std::sqrt(static_cast<double>(f.elapsed[i])));
-  }
+  const auto scale_returns = [&] {
+    scaled.clear();
+    for (std::size_t i = 1; i < n; ++i) {
+      scaled.push_back(f.ret[i] / std::sqrt(static_cast<double>(f.elapsed[i])));
+    }
+  };
+  scale_returns();
   double own = stats::mad(scaled);
+  if (market != nullptr && f.log_scale) {
+    remove_market(f, series, *market, own);
+    scale_returns();
+    own = stats::mad(scaled);
+  }
   if (!f.log_scale) {
     // A value-scale series has no class to borrow from: its own scale, or, when
     // most of its changes are zero (a policy rate), the root mean square of them.

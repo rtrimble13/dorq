@@ -421,7 +421,8 @@ void ZeroRangeWithVolume::run(const SeriesContext& context, std::vector<Violatio
     // 0.03 is not exactly two cents in binary.
     const std::size_t from = i >= kNearby ? i - kNearby : 0;
     const std::size_t to = std::min(s.size(), i + kNearby + 1);
-    const double grid = std::max({tick_size(s.date[i], c), written, observed_step(s, from, to)});
+    const double tick = context.meta_tick().value_or(tick_size(s.date[i], c));
+    const double grid = std::max({tick, written, observed_step(s, from, to)});
     std::vector<double> nearby;
     std::size_t traded_nearby = 0;
     std::size_t flat_nearby = 0;

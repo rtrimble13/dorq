@@ -1,7 +1,9 @@
 #include "engine/engine.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -10,6 +12,8 @@
 #include <vector>
 
 #include "checks/coverage_model.hpp"
+#include "checks/cross.hpp"
+#include "checks/price.hpp"
 #include "dorq/frequency.hpp"
 #include "price/model.hpp"
 
@@ -19,6 +23,11 @@ namespace {
 const Calendar& default_calendar() {
   static const Calendar kXnys(CalendarKind::kXnys);
   return kXnys;
+}
+
+const Context& no_context() {
+  static const Context kNone;
+  return kNone;
 }
 
 bool enables(const Selection& selection, std::string_view code) {
@@ -39,7 +48,8 @@ Engine::Engine(const Config& config, EngineOptions options, ResultSink& sink)
     : config_(config),
       options_(options),
       sink_(sink),
-      calendar_(options.calendar != nullptr ? *options.calendar : default_calendar()) {
+      calendar_(options.calendar != nullptr ? *options.calendar : default_calendar()),
+      context_(options.context != nullptr ? *options.context : no_context()) {
   // Hold results when a cross-sectional check can run for any series: under the
   // global selection, or under any profile's.
   const std::vector<std::string> select = concat(config.select, config.extend_select);
@@ -48,8 +58,10 @@ Engine::Engine(const Config& config, EngineOptions options, ResultSink& sink)
     selections.emplace_back(concat(select, profile.select), concat(config.ignore, profile.ignore));
   }
   for (const Selection& selection : selections) {
-    holding_ = holding_ || enables(selection, "DQ303") || enables(selection, "DQ304");
+    holding_ = holding_ || enables(selection, "DQ303") || enables(selection, "DQ304") ||
+               enables(selection, "DQ601");
   }
+  market_days_ = context_.market.has_value() && enables(selections.front(), "DQ602");
   if (holding_) {
     cross_ = std::make_unique<CrossSection>(calendar_, config.cohort, config.severity,
                                             config.coverage, options.as_of);
@@ -76,9 +88,10 @@ Engine::~Engine() {
 }
 
 const Engine::Settings& Engine::settings_for(const Series& series) {
+  const SeriesMeta* meta = context_.meta_for(series);
   std::string key = std::string{to_string(series.kind)};
   for (const Profile& profile : config_.profiles) {
-    if (profile.matches(series)) {
+    if (profile.matches(series, meta)) {
       key += "|" + profile.name;
     }
   }
@@ -91,7 +104,7 @@ const Engine::Settings& Engine::settings_for(const Series& series) {
     std::vector<std::string> select = concat(config_.select, config_.extend_select);
     std::vector<std::string> ignore = config_.ignore;
     for (const Profile& profile : config_.profiles) {
-      if (profile.matches(series)) {
+      if (profile.matches(series, meta)) {
         select.insert(select.end(), profile.select.begin(), profile.select.end());
         ignore.insert(ignore.end(), profile.ignore.begin(), profile.ignore.end());
         profile.integrity.apply_to(slot->integrity);
@@ -109,13 +122,17 @@ const Engine::Settings& Engine::settings_for(const Series& series) {
         slot->cohort = true;
       } else if (info.code == "DQ304") {
         slot->stale = true;
+      } else if (info.code == "DQ601") {
+        slot->cohort_move = true;
       }
-      if (info.code == "DQ301" || info.code == "DQ302" || info.cross_sectional) {
+      if (info.code == "DQ301" || info.code == "DQ302" || info.code == "DQ303" ||
+          info.code == "DQ304") {
         slot->coverage_model = true;
       }
       // The price checks, and the volume and stale checks that read its features.
       if ((info.code.starts_with("DQ2") && info.code != "DQ206") || info.code == "DQ401" ||
-          info.code == "DQ402" || info.code == "DQ501") {
+          info.code == "DQ402" || info.code == "DQ501" || info.code == "DQ601" ||
+          (info.code.starts_with("DQ70") && info.code != "DQ705")) {
         slot->price_model = true;
       }
       if (info.cross_sectional ||
@@ -150,9 +167,16 @@ Engine::Processed Engine::process(Work& work) const {
     analysis =
         analyze_coverage(series, calendar_, settings.coverage, config_.cohort.confident_density);
   }
+  const SeriesActions* actions = context_.actions_for(series);
+  const SeriesMeta* meta = context_.meta_for(series);
   std::optional<PriceAnalysis> price;
   if (settings.price_model) {
-    price = analyze_prices(series, calendar_, settings.price, settings.integrity.bounds);
+    price = analyze_prices(series, calendar_, settings.price,
+                           {.bounds = settings.integrity.bounds,
+                            .have_actions = context_.have_actions,
+                            .actions = actions,
+                            .tick_size = meta != nullptr ? meta->tick_size : std::nullopt,
+                            .market = context_.market ? &*context_.market : nullptr});
   }
   const SeriesContext context{
       .series = series,
@@ -165,12 +189,42 @@ Engine::Processed Engine::process(Work& work) const {
       .analysis = analysis ? &*analysis : nullptr,
       .gap_report = config_.gap_report,
       .price_analysis = price ? &*price : nullptr,
+      .have_actions = context_.have_actions,
+      .actions = actions,
+      .meta = meta,
   };
   for (const Check* check : settings.checks) {
     check->run(context, result.violations);
   }
 
   CrossSummary& summary = out.summary;
+  summary.cohort_move = settings.cohort_move;
+  if (settings.cohort_move && price && price->applicable) {
+    // DQ601: the scored moves near a clean split ratio, each with the DQ203 report
+    // its siblings might make of it.
+    const std::string peer_group = meta != nullptr ? meta->peer_group : std::string{};
+    for (const PriceFinding& finding : price->findings) {
+      const auto split = static_cast<std::size_t>(PriceHypothesis::kUnreportedSplit);
+      // Not a move a split on file explains, nor a newest bar whose fate is open.
+      const auto explained = static_cast<std::size_t>(PriceHypothesis::kExplainedSplit);
+      if (finding.claimed || finding.provisional || !finding.split ||
+          !finding.considered.at(split) || finding.posterior.at(explained) >= 0.5 ||
+          std::fabs(std::log(finding.factor / finding.split->price_factor())) > 0.1) {
+        continue;
+      }
+      PeerMove move;
+      move.date = series.date[price->features.row[finding.bar]];
+      move.ratio = finding.split->to_string();
+      move.factor = finding.factor;
+      move.series = series.display_name();
+      move.peer_group = peer_group;
+      move.posterior = finding.posterior;
+      move.considered = finding.considered;
+      move.provisional = finding.provisional;
+      move.split = unreported_split_base(context, *price, finding);
+      summary.moves.push_back(std::move(move));
+    }
+  }
   summary.cohort = settings.cohort;
   summary.stale = settings.stale;
   summary.coverage = settings.coverage;
@@ -209,7 +263,7 @@ void Engine::filter_and_send(SeriesResult&& result) {
 
 void Engine::deliver(Processed processed) {
   if (holding_) {
-    cross_->add(processed.summary);
+    cross_->add(std::move(processed.summary));
     held_.push_back(std::move(processed.result));
     return;
   }
@@ -296,14 +350,19 @@ void Engine::finish() {
       deliver_ready();
     }
   }
-  if (!holding_) {
-    return;
+  std::vector<Violation> cohort;
+  if (holding_) {
+    cohort = cross_->finalize(held_);
+    for (SeriesResult& result : held_) {
+      filter_and_send(std::move(result));
+    }
+    held_.clear();
   }
-  std::vector<Violation> cohort = cross_->finalize(held_);
-  for (SeriesResult& result : held_) {
-    filter_and_send(std::move(result));
+  if (market_days_ && context_.market) {
+    std::vector<Violation> days = market_days(context_.market.value(), calendar_);
+    cohort.insert(cohort.end(), std::make_move_iterator(days.begin()),
+                  std::make_move_iterator(days.end()));
   }
-  held_.clear();
   if (!cohort.empty()) {
     SeriesResult cross;
     cross.sequence = next_sequence_;

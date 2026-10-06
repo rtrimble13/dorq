@@ -1,0 +1,4 @@
+security_id,ex_date,action_type,split_numerator,split_denominator,dividend_amount
+A,2020-03-30,split,2,1,
+A,2020-02-03,dividend,,,0.25
+A,2020-05-01,dividend,,,100

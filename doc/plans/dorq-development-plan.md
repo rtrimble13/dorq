@@ -1,8 +1,8 @@
 # Plan: dorq, a Bayesian data-quality linter for financial time series
 
 - Status: **accepted** (2026-10-05). The defaults in §10 are confirmed, and Q9 is answered. M0 is done
-  (PR #1), M1 is done (PR #2), M2 is done (PR #3), M3 is done (PR #4), and M4 is implemented and
-  awaiting merge.
+  (PR #1), M1 is done (PR #2), M2 is done (PR #3), M3 is done (PR #4), M4 is done (PR #5), and M5
+  is implemented and awaiting merge.
 - Scope: this repository (the C++ CLI), plus one milestone of integration work in `rtrimble13/fafnir` (M7).
 - Status legend: ⬜ planned · 🔄 in progress · ✅ done (PR #) · ⏭ carried over · ✖ dropped (reason)
 
@@ -776,9 +776,9 @@ copied-close bar is still found (doc/checks/DQ107.md).
 ### M4: Volume, stale values, point series (v0.4.0)
 | ID | Item | Size | Status |
 |---|---|---|---|
-| DR-0401 | DQ401–DQ403 | M | 🔄 awaiting merge |
-| DR-0402 | DQ501 repeated-price, DQ502 carry-bar | M | 🔄 awaiting merge |
-| DR-0403 | Point series: transforms (log, diff, auto), bounds (DQ108), unit-shift ratios, a `rates` example profile | M | 🔄 awaiting merge |
+| DR-0401 | DQ401–DQ403 | M | ✅ PR #5 |
+| DR-0402 | DQ501 repeated-price, DQ502 carry-bar | M | ✅ PR #5 |
+| DR-0403 | Point series: transforms (log, diff, auto), bounds (DQ108), unit-shift ratios, a `rates` example profile | M | ✅ PR #5 |
 
 **Result:** dorq-synth gained volume-unit eras, moves on zero volume, stale-feed
 runs, and eight rate series (`points.csv`, read with the `rates` profile in
@@ -793,10 +793,67 @@ at most one series a universe, and the gate allows one.
 ### M5: Context inputs (v0.5.0)
 | ID | Item | Size | Status |
 |---|---|---|---|
-| DR-0501 | `--actions` reader; the explained_split hypothesis; the "split between bars" rule | M | ⬜ |
-| DR-0502 | DQ701–DQ705 | L | ⬜ |
-| DR-0503 | `--meta` reader, profile matching, `peer_group` sibling evidence (DQ601) | M | ⬜ |
-| DR-0504 | `--market` reference series: rolling beta, scoring on residual returns, DQ602 market-day widening | M | ⬜ |
+| DR-0501 | `--actions` reader; the explained_split hypothesis; the "split between bars" rule | M | 🔄 awaiting merge |
+| DR-0502 | DQ701–DQ705 | L | 🔄 awaiting merge |
+| DR-0503 | `--meta` reader, profile matching, `peer_group` sibling evidence (DQ601) | M | 🔄 awaiting merge |
+| DR-0504 | `--market` reference series: rolling beta, scoring on residual returns, DQ602 market-day widening | M | 🔄 awaiting merge |
+
+**As built** (doc/context.md is the reference):
+
+- **The context files** are CSV or TSV under dorq's column names or fafnir's
+  (`core.corporate_action`, `core.security`), matched to series by id, or else by
+  label. A malformed file stops the run with exit 3.
+- **`explained_split`** has prior 0.9 (`[priors] explained_split`) where it
+  applies: only to a bar with a split on file between it and the bar before. The
+  plan's 0.10 "taken from market_move" assumed it applied to every candidate.
+  It shares every term but the return with `unreported_split`, so the
+  plausibility gate is the existing `plausible_level` term.
+- **DQ701–DQ704 are one model** over the bars within 20 sessions of each split on
+  file: confirmed, misdated (within ±5 sessions), not in the bars, the wrong
+  ratio (inverted, weight 0.3, or another clean ratio), or applied twice. They
+  share `split_on_file_error` (0.06). A move a DQ70x report accounts for is not
+  reported again as DQ203. A zero-volume bar that moves by a split's ratio across
+  its ex-date is not a DQ403 move.
+- **DQ705** is deterministic: a dividend at or above the close before it (error),
+  or one whose amount *and* yield are both ten times off the median of at least
+  three others (warn). The amount alone flagged every dividend across an
+  unreported split or a scale era.
+- **DQ601** is judged at the end of the run, like DQ303: three or more series
+  moving by the same clean split ratio on the same date, classified as a family
+  split (one `peer_group`) or a mass adjustment. Within a peer group, siblings
+  moving by the same ratio are a Bayes factor of 100 for `unreported_split`; a
+  move that becomes a DQ203 replaces the series' own report of that bar. Moves a
+  split on file explains, moves DQ70x claims, and the provisional newest bars do
+  not count.
+- **`--market`**: returns are taken net of a rolling beta (a discounted
+  regression either side of each bar, shrunk toward the series' own beta, shrunk
+  toward 1), and the ordinary move widens by half the market's move (a beta
+  error) on a big market day. DQ602 reports market days of five standard
+  deviations or more at info. Deriving a market from a broad cross-section, with
+  no `--market`, needs every series read first, which streaming rules out; it is
+  not done.
+- **`tick_size`** from `--meta` replaces the inferred tick in the price model,
+  DQ107 and DQ403. The class prior does not yet use `asset_type`: that waits for
+  `dorq calibrate` (M6) to fit per-class tables.
+
+**Result:** dorq-synth writes `actions.csv`, `meta.csv` and `market.csv`. The
+actions file holds splits on file the bars show, three of them between two
+stored bars of a thin name, and faulty splits: misdated, not in the bars, at the
+wrong ratio, and applied twice. It also holds quarterly dividends, five of them
+wrong. A family of four liquid names splits together, unreported. The gate now
+runs with all three files. On seeds 1–8:
+
+- DQ701, DQ702 and DQ705 are at precision and recall 1.0. So is DQ601, the family
+  found once a universe with every member a DQ203.
+- DQ703 has recall 0.75–1.0: a mismatched ratio within a few percent of the
+  ratio on file, plus a large ordinary move, can pass as the split on file.
+- DQ704 has recall 0.67–1.0: in a volatile spell a second move of the ratio is
+  less surprising.
+- No split on file is reported, at its ex-date or between bars.
+
+The synthetic market is mild (a 10–15% crash), so `--market` changes little
+here: thin-name hard negatives move by one either way per universe, and the gate
+allows three.
 
 ### M6: Calibration and evaluation (v0.6.0)
 | ID | Item | Size | Status |

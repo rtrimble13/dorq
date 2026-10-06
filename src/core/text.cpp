@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "dorq/number.hpp"
 
@@ -44,6 +45,44 @@ void append_json_string(std::string& out, std::string_view text) {
     }
   }
   out.push_back('"');
+}
+
+std::string normalize_name(std::string_view name) {
+  std::string out;
+  for (const char ch : trim(name)) {
+    if (ch != ' ' && ch != '_' && ch != '-') {
+      out.push_back(ascii_lower(ch));
+    }
+  }
+  return out;
+}
+
+int find_column(const std::vector<std::string>& names, std::span<const std::string_view> aliases) {
+  for (const std::string_view alias : aliases) {
+    for (std::size_t i = 0; i < names.size(); ++i) {
+      if (normalize_name(names[i]) == alias) {
+        return static_cast<int>(i);
+      }
+    }
+  }
+  return -1;
+}
+
+bool parse_bool(std::string_view text, bool& out) {
+  text = trim(text);
+  for (const std::string_view yes : {"true", "t", "1", "yes", "y"}) {
+    if (iequals(text, yes)) {
+      out = true;
+      return true;
+    }
+  }
+  for (const std::string_view no : {"false", "f", "0", "no", "n"}) {
+    if (iequals(text, no)) {
+      out = false;
+      return true;
+    }
+  }
+  return false;
 }
 
 std::string with_commas(long long value) {

@@ -32,6 +32,7 @@ const CheckInfo& info_for(H hypothesis) noexcept {
       return history_segment_info();
     case H::kMarketMove:
     case H::kTickMove:
+    case H::kExplainedSplit:
       break;
   }
   return large_move_info();
@@ -203,8 +204,14 @@ class Builder {
   }
 
   void market(Violation& v) const {
-    const bool tick = finding_.posterior.at(static_cast<std::size_t>(H::kTickMove)) >
-                      finding_.posterior.at(static_cast<std::size_t>(H::kMarketMove));
+    const auto p = [this](H h) { return finding_.posterior.at(static_cast<std::size_t>(h)); };
+    if (finding_.split_on_file && p(H::kExplainedSplit) > p(H::kMarketMove) &&
+        p(H::kExplainedSplit) > p(H::kTickMove)) {
+      v.message = move() + "): the " + finding_.split_on_file->ratio_text() +
+                  " split on file, ex " + finding_.split_on_file->ex_date.to_string();
+      return;
+    }
+    const bool tick = p(H::kTickMove) > p(H::kMarketMove);
     v.message = move() + "): probably " + (tick ? "a move of a tick or two" : "a real move");
   }
 
@@ -216,7 +223,8 @@ class Builder {
 };
 
 Violation make_violation(const SeriesContext& context, const PriceAnalysis& analysis,
-                         const PriceFinding& finding, const CheckInfo& info) {
+                         const PriceFinding& finding, const CheckInfo& info,
+                         bool with_probability = true) {
   const Builder b(context, analysis, finding);
   const std::size_t t = finding.bar;
   Violation v;
@@ -255,12 +263,15 @@ Violation make_violation(const SeriesContext& context, const PriceAnalysis& anal
         break;
       case H::kMarketMove:
       case H::kTickMove:
+      case H::kExplainedSplit:
         break;
     }
   }
-  v.message += "; P(error) = " + format_probability(finding.p_error);
-  if (finding.provisional) {
-    v.message += ", provisional";
+  if (with_probability) {
+    v.message += "; P(error) = " + format_probability(finding.p_error);
+    if (finding.provisional) {
+      v.message += ", provisional";
+    }
   }
   for (std::size_t h = 0; h < kPriceHypotheses; ++h) {
     if (finding.considered.at(h)) {
@@ -294,6 +305,14 @@ Violation make_violation(const SeriesContext& context, const PriceAnalysis& anal
 
 }  // namespace
 
+Violation unreported_split_base(const SeriesContext& context, const PriceAnalysis& analysis,
+                                const PriceFinding& finding) {
+  PriceFinding as_split = finding;
+  as_split.hypothesis = H::kUnreportedSplit;
+  as_split.p_error = std::max(as_split.p_error, context.thresholds.info);
+  return make_violation(context, analysis, as_split, unreported_split_info(), false);
+}
+
 std::string significant(double value, int digits) {
   if (value == 0.0) {
     return format_number(0.0);  // not "-0"
@@ -312,7 +331,7 @@ void PriceCheck::run(const SeriesContext& context, std::vector<Violation>& out) 
   }
   const PriceAnalysis& analysis = *context.price_analysis;
   for (const PriceFinding& finding : analysis.findings) {
-    if (&reported_as(finding, context.thresholds) != &info_) {
+    if (finding.claimed || &reported_as(finding, context.thresholds) != &info_) {
       continue;
     }
     out.push_back(make_violation(context, analysis, finding, info_));

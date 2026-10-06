@@ -20,7 +20,7 @@ data-quality process.
 
 ## Status
 
-**Pre-alpha: milestone M4 (volume, stale values, point series).** dorq reads CSV, TSV, JSON
+**Pre-alpha: milestone M5 (context inputs).** dorq reads CSV, TSV, JSON
 Lines and JSON arrays, and reports in five formats. It runs:
 
 - the deterministic integrity checks (DQ1xx);
@@ -35,9 +35,14 @@ Lines and JSON arrays, and reports in five formats. It runs:
 - the stale-value checks (DQ5xx): a close repeated on traded bars more often than
   the series' moves allow;
 - point series (rates, spreads, index levels) on the log or the difference scale,
-  with configurable bounds (DQ108).
+  with configurable bounds (DQ108);
+- with context files ([doc/context.md](doc/context.md)): corporate actions
+  (`--actions`), which explain splits on file and check them against the bars
+  (DQ7xx); series metadata (`--meta`), which profiles match on and which lets a
+  fund family's shared split count as evidence (DQ601); and a market reference
+  (`--market`), net of which every move is judged (DQ602).
 
-Corporate actions, metadata and a market reference arrive in M5. The
+Calibration from fafnir's own decisions comes in M6. The
 [development plan](doc/plans/dorq-development-plan.md) sets out what comes when.
 
 ```console
@@ -106,7 +111,7 @@ need open, high, low and close; a series with only a value column is a point
 series. When the names don't match, use `--columns date=asof,value=DGS10`.
 [doc/configuration.md](doc/configuration.md) covers columns, the config file and
 profiles. [doc/calendar.md](doc/calendar.md) covers the built-in calendars and
-reference files. [doc/output.md](doc/output.md) covers each output format,
+reference files. [doc/context.md](doc/context.md) covers the actions, metadata and market files. [doc/output.md](doc/output.md) covers each output format,
 including the `fafnir` format that maps onto `ops.data_quality_flag`.
 
 | Check | Name | Reports |
@@ -136,6 +141,13 @@ including the `fafnir` format that maps onto `ops.data_quality_flag`.
 | [DQ403](doc/checks/DQ403.md) | move-on-zero-volume | a price change on a bar with no volume, where the series rarely has one |
 | [DQ501](doc/checks/DQ501.md) | repeated-price | the same close on traded bars running: a stale feed |
 | [DQ502](doc/checks/DQ502.md) | carry-bar | info: untraded bars that carry the last close |
+| [DQ601](doc/checks/DQ601.md) | cohort-move | several series moving by the same split ratio on the same date |
+| [DQ602](doc/checks/DQ602.md) | market-day | info: a day the market reference moved far beyond its range (`--market`) |
+| [DQ701](doc/checks/DQ701.md) | split-misdated | a split on file the bars show a few sessions away (`--actions`) |
+| [DQ702](doc/checks/DQ702.md) | split-without-jump | a split on file the bars do not show: not real, or already applied |
+| [DQ703](doc/checks/DQ703.md) | split-ratio-mismatch | a split on file at the wrong ratio (often inverted) |
+| [DQ704](doc/checks/DQ704.md) | split-double-applied | a split on file the bars apply twice |
+| [DQ705](doc/checks/DQ705.md) | dividend-implausible | a dividend at or above the price, or ten times off the others |
 
 ### Exit status
 
@@ -161,7 +173,7 @@ archives, plus a `SHA256SUMS` file:
 | `dorq-<version>-macos-arm64.tar.gz` | macOS on Apple silicon |
 
 ```bash
-version=0.4.0
+version=0.5.0
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/dorq-${version}-linux-x86_64.tar.gz"
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
@@ -182,7 +194,7 @@ Clang 18+).
 ```bash
 sudo apt-get install -y build-essential cmake ninja-build git
 git clone https://github.com/rtrimble13/dorq.git && cd dorq
-git checkout v0.4.0                        # or stay on main for the latest
+git checkout v0.5.0                        # or stay on main for the latest
 cmake --workflow --preset release          # configure, build, run the tests
 sudo cmake --install build/release --prefix /opt/dorq
 /opt/dorq/bin/dorq version                 # names the commit it was built from
