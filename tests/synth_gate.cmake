@@ -9,7 +9,8 @@ if(NOT status EQUAL 0)
   message(FATAL_ERROR "dorq-synth generate failed (${status})")
 endif()
 execute_process(
-  COMMAND "${DORQ}" "${OUT}/bars.csv" "${OUT}/points.csv" --config "${CONFIG}" --exit-zero
+  COMMAND "${DORQ}" "${OUT}/bars.csv" "${OUT}/points.csv" --config "${CONFIG}" --actions
+          "${OUT}/actions.csv" --meta "${OUT}/meta.csv" --market "${OUT}/market.csv" --exit-zero
           --format csv --threads 4
   OUTPUT_FILE "${OUT}/results.csv"
   RESULT_VARIABLE status)

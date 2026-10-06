@@ -19,6 +19,7 @@ add_dependencies(dorq_generated dorq_build_info)
 # binary runs.
 add_library(
   dorq_lib STATIC
+  checks/actions.cpp
   checks/coverage.cpp
   checks/coverage_model.cpp
   checks/integrity.cpp

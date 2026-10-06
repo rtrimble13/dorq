@@ -32,6 +32,7 @@ const CheckInfo& info_for(H hypothesis) noexcept {
       return history_segment_info();
     case H::kMarketMove:
     case H::kTickMove:
+    case H::kExplainedSplit:
       break;
   }
   return large_move_info();
@@ -203,8 +204,14 @@ class Builder {
   }
 
   void market(Violation& v) const {
-    const bool tick = finding_.posterior.at(static_cast<std::size_t>(H::kTickMove)) >
-                      finding_.posterior.at(static_cast<std::size_t>(H::kMarketMove));
+    const auto p = [this](H h) { return finding_.posterior.at(static_cast<std::size_t>(h)); };
+    if (finding_.split_on_file && p(H::kExplainedSplit) > p(H::kMarketMove) &&
+        p(H::kExplainedSplit) > p(H::kTickMove)) {
+      v.message = move() + "): the " + finding_.split_on_file->ratio_text() +
+                  " split on file, ex " + finding_.split_on_file->ex_date.to_string();
+      return;
+    }
+    const bool tick = p(H::kTickMove) > p(H::kMarketMove);
     v.message = move() + "): probably " + (tick ? "a move of a tick or two" : "a real move");
   }
 
@@ -255,6 +262,7 @@ Violation make_violation(const SeriesContext& context, const PriceAnalysis& anal
         break;
       case H::kMarketMove:
       case H::kTickMove:
+      case H::kExplainedSplit:
         break;
     }
   }
@@ -312,7 +320,7 @@ void PriceCheck::run(const SeriesContext& context, std::vector<Violation>& out) 
   }
   const PriceAnalysis& analysis = *context.price_analysis;
   for (const PriceFinding& finding : analysis.findings) {
-    if (&reported_as(finding, context.thresholds) != &info_) {
+    if (finding.claimed || &reported_as(finding, context.thresholds) != &info_) {
       continue;
     }
     out.push_back(make_violation(context, analysis, finding, info_));

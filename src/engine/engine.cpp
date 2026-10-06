@@ -122,7 +122,8 @@ const Engine::Settings& Engine::settings_for(const Series& series) {
       }
       // The price checks, and the volume and stale checks that read its features.
       if ((info.code.starts_with("DQ2") && info.code != "DQ206") || info.code == "DQ401" ||
-          info.code == "DQ402" || info.code == "DQ501") {
+          info.code == "DQ402" || info.code == "DQ501" ||
+          (info.code.starts_with("DQ70") && info.code != "DQ705")) {
         slot->price_model = true;
       }
       if (info.cross_sectional ||

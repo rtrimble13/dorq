@@ -140,6 +140,7 @@ struct Candidate {
   double this_close = 0.0;
   double grid = 0.0;     // the price grid
   bool bar_ohl = false;  // open, high and low are usable
+  std::optional<SplitAction> on_file;  // a split on file between the bar and the one before
 };
 
 // The bars after a candidate: the next_bars term, and what describes it.
@@ -167,7 +168,8 @@ class Scorer {
         n_(f.size()),
         has_ohlc_(series.kind == SeriesKind::kOhlcv),
         bounds_(context.bounds),
-        tick_(context.tick_size) {
+        tick_(context.tick_size),
+        actions_(context.actions) {
     const double nu = settings.tail_dof;
     t_scale_ = nu > 2.0 ? std::sqrt((nu - 2.0) / nu) : 1.0;
     double total = 0.0;
@@ -313,7 +315,24 @@ class Scorer {
     return price >= settings_.min_price && price <= settings_.max_price;
   }
 
+  // A split on file whose ex-date falls after bar t-1 and on or before bar t: the
+  // split the move from one to the other spans.
+  [[nodiscard]] std::optional<SplitAction> split_between(std::size_t t) const {
+    if (actions_ == nullptr || t == 0 || t >= n_) {
+      return std::nullopt;
+    }
+    const Date before = date(t - 1);
+    const Date at = date(t);
+    for (const SplitAction& split : actions_->splits) {
+      if (split.ex_date > before && split.ex_date <= at) {
+        return split;
+      }
+    }
+    return std::nullopt;
+  }
+
   [[nodiscard]] PriceFinding score(std::size_t t) const;
+  [[nodiscard]] std::vector<SplitFinding> split_findings() const;
   [[nodiscard]] std::vector<StaleRun> stale_runs() const;
   [[nodiscard]] std::vector<double> move_z() const {
     std::vector<double> z(n_, 0.0);
@@ -328,7 +347,7 @@ class Scorer {
     const int elapsed = f_.elapsed[t];
     // The 50% floor is a rule about prices; a rate's 0.05 to 0.08 is not news.
     const bool floor = f_.log_scale && std::fabs(r) > std::log1p(settings_.floor_move);
-    if (floor || elapsed >= settings_.segment_gap) {
+    if (floor || elapsed >= settings_.segment_gap || (has_ohlc_ && split_between(t))) {
       return true;
     }
     if (has_ohlc_ && close_outside_range(t)) {
@@ -369,6 +388,7 @@ class Scorer {
   bool has_ohlc_ = false;
   std::optional<Bounds> bounds_;  // a point series' plausible range
   std::optional<double> tick_;    // the exchange tick from --meta
+  const SeriesActions* actions_ = nullptr;  // --actions
   double t_scale_ = 1.0;
   double written_grid_ = 0.0;  // 10^-d for the decimals most prices are written with
   std::vector<std::pair<SplitRatio, double>> splits_;
@@ -386,6 +406,7 @@ Candidate Scorer::candidate(std::size_t t) const {
   c.this_close = close(t);
   c.grid = price_grid(t - 1, t);
   c.row = f_.row[t];
+  c.on_file = has_ohlc_ ? split_between(t) : std::nullopt;
   const std::size_t row = c.row;
   c.bar_ohl = has_ohlc_ && std::isfinite(series_.open[row]) && std::isfinite(series_.high[row]) &&
               std::isfinite(series_.low[row]) && series_.open[row] > 0.0 &&
@@ -401,14 +422,15 @@ void Scorer::applicable(const Candidate& c, std::array<bool, kCount>& on) const 
   on.at(idx(H::kBadClose)) = c.bar_ohl;
   on.at(idx(H::kUnreportedSplit)) = has_ohlc_ && !splits_.empty();
   on.at(idx(H::kHistorySegment)) = c.elapsed >= settings_.segment_gap;
+  on.at(idx(H::kExplainedSplit)) = c.on_file.has_value();
 }
 
 // The prior, normalized over the hypotheses that apply; nullopt when every one of
 // them has weight zero.
 std::optional<Term> Scorer::prior_term(std::array<bool, kCount>& on) const {
   const PricePriors& p = settings_.priors;
-  const Terms weights = {p.market_move,      p.tick_move,   p.bad_print,      p.bad_close,
-                         p.unreported_split, p.scale_error, p.history_segment};
+  const Terms weights = {p.market_move, p.tick_move,        p.bad_print,      p.bad_close,
+                         p.unreported_split, p.scale_error, p.history_segment, p.explained_split};
   double total = 0.0;
   for (std::size_t h = 0; h < kCount; ++h) {
     total += on.at(h) ? weights.at(h) : 0.0;
@@ -508,6 +530,11 @@ Term Scorer::return_term(const Candidate& c, PriceFinding& out) const {
   at(term, H::kScaleError) = scale_ll(c, out);
   const double spread = kSegmentSpread * (f_.log_scale ? 1.0 : f_.level);
   at(term, H::kHistorySegment) = log_normal_pdf(c.r, 0.0, std::hypot(spread, c.base_sd));
+  // The split on file: its ratio exactly, and an ordinary move.
+  at(term, H::kExplainedSplit) =
+      c.on_file ? ordinary(c.r - std::log(c.on_file->price_factor()),
+                           std::hypot(c.base_sd, settings_.ratio_tolerance))
+                : kNegInf;
   if (out.split) {
     term.note = "nearest split " + out.split->to_string();
   }
@@ -782,6 +809,14 @@ PriceFinding Scorer::score(std::size_t t) const {
   if (out.considered.at(idx(H::kHistorySegment))) {
     segment_terms(c, terms);
   }
+  // A split on file looks like a split in everything but the return: calm bars
+  // after it, volume moving inversely.
+  out.split_on_file = c.on_file;
+  if (c.on_file) {
+    for (std::size_t i = 2; i < terms.size(); ++i) {
+      at(terms[i], H::kExplainedSplit) = at(terms[i], H::kUnreportedSplit);
+    }
+  }
 
   const std::size_t best = conclude(terms, out);
   if (out.hypothesis == H::kBadPrint) {
@@ -851,8 +886,26 @@ std::string_view to_string(PriceHypothesis hypothesis) noexcept {
       return "scale_error";
     case H::kHistorySegment:
       return "history_segment";
+    case H::kExplainedSplit:
+      return "explained_split";
   }
   return "market_move";
+}
+
+std::string_view to_string(SplitVerdict verdict) noexcept {
+  switch (verdict) {
+    case SplitVerdict::kConfirmed:
+      return "confirmed";
+    case SplitVerdict::kMisdated:
+      return "misdated";
+    case SplitVerdict::kNoJump:
+      return "no_jump";
+    case SplitVerdict::kRatioMismatch:
+      return "ratio_mismatch";
+    case SplitVerdict::kDoubleApplied:
+      return "double_applied";
+  }
+  return "confirmed";
 }
 
 // Runs of traded bars whose close repeats the bar before (DQ501). Each repeat is a
@@ -954,6 +1007,144 @@ std::vector<StaleRun> Scorer::stale_runs() const {
   return runs;
 }
 
+// Each split on file against the bars around its ex-date (DQ701-DQ704). Over the
+// bars within kDoubleWindow sessions of it, every hypothesis says the moves are
+// ordinary but for: a move of the split's ratio at the ex-date's bar (the split
+// confirmed); one within kMisdatedWindow sessions of it instead (misdated); none
+// (not in the bars: fabricated, or the bars already adjusted for it); a move of
+// another clean ratio at the ex-date's bar, or of the ratio inverted (the wrong
+// ratio on file); or two moves of the ratio, the ex-date's and one more (applied
+// twice). Only the bars that differ enter the comparison.
+std::vector<SplitFinding> Scorer::split_findings() const {
+  constexpr int kMisdatedWindow = 5;
+  constexpr int kDoubleWindow = 20;
+  std::vector<SplitFinding> out;
+  if (actions_ == nullptr || !has_ohlc_ || n_ < 3) {
+    return out;
+  }
+  const double e = settings_.priors.split_on_file_error;
+  for (const SplitAction& split : actions_->splits) {
+    // The first bar on or after the ex-date; a split outside the bars' span cannot
+    // be judged.
+    std::size_t ex = 1;
+    while (ex < n_ && date(ex) < split.ex_date) {
+      ++ex;
+    }
+    if (ex >= n_ || date(0) >= split.ex_date) {
+      continue;
+    }
+    const double rho = std::log(split.price_factor());
+    // Sessions from bar ex to bar j.
+    const auto offset = [&](std::size_t j) {
+      int sessions = 0;
+      for (std::size_t i = std::min(j, ex) + 1; i <= std::max(j, ex); ++i) {
+        sessions += f_.elapsed[i];
+      }
+      return j < ex ? -sessions : sessions;
+    };
+    const auto max_block = static_cast<std::size_t>(settings_.revert_max_bars);
+    // log [p(move | the ratio's jump) / p(move | ordinary)] at bar j.
+    const auto jump_gain = [&](std::size_t j, double ratio) {
+      const double sd = move_sd(sigma(j, max_block), j - 1, j);
+      return ordinary(f_.ret[j] - ratio, std::hypot(sd, settings_.ratio_tolerance)) -
+             ordinary(f_.ret[j], sd);
+    };
+    const double at_ex = jump_gain(ex, rho);
+    // Elsewhere: the mean gain (each bar equally likely) and the best bar.
+    struct Elsewhere {
+      double log_mean = kNegInf;
+      std::size_t best = 0;
+      double best_gain = kNegInf;
+    };
+    const auto elsewhere = [&](int window) {
+      Elsewhere w;
+      std::size_t count = 0;
+      for (std::size_t j = 1; j < n_; ++j) {
+        const int off = offset(j);
+        if (j == ex || off < -window || off > window) {
+          continue;
+        }
+        const double gain = jump_gain(j, rho);
+        w.log_mean = stats::log_add(w.log_mean, gain);
+        ++count;
+        if (gain > w.best_gain) {
+          w.best_gain = gain;
+          w.best = j;
+        }
+      }
+      if (count > 0) {
+        w.log_mean -= std::log(static_cast<double>(count));
+      }
+      return w;
+    };
+    const Elsewhere near = elsewhere(kMisdatedWindow);
+    const Elsewhere wide = elsewhere(kDoubleWindow);
+    // Another ratio at the ex-date: the clean ratios not near this one (weighted as
+    // in split_ll), or this one inverted (2:1 entered as 1:2), which is common.
+    constexpr double kInverted = 0.3;
+    const double near_rho = 3.0 * settings_.ratio_tolerance + 0.05;
+    double mismatch = std::log(kInverted) + jump_gain(ex, -rho);
+    double mismatch_best = mismatch;
+    std::string observed = format_number(split.denominator) + ":" + format_number(split.numerator);
+    double total = 0.0;
+    for (const auto& [ratio, weight] : splits_) {
+      const double r = std::log(ratio.price_factor());
+      if (std::fabs(r - rho) > near_rho && std::fabs(r + rho) > near_rho) {
+        total += weight;
+      }
+    }
+    for (const auto& [ratio, weight] : splits_) {
+      const double r = std::log(ratio.price_factor());
+      if (total <= 0.0 || std::fabs(r - rho) <= near_rho || std::fabs(r + rho) <= near_rho) {
+        continue;
+      }
+      const double gain = std::log((1.0 - kInverted) * weight / total) + jump_gain(ex, r);
+      mismatch = stats::log_add(mismatch, gain);
+      if (gain > mismatch_best) {
+        mismatch_best = gain;
+        observed = ratio.to_string();
+      }
+    }
+    std::array<double, kSplitVerdicts> ll{};
+    ll.at(0) = std::log1p(-e) + at_ex;
+    ll.at(1) = std::log(e / 4.0) + (near.best_gain > kNegInf ? near.log_mean : kNegInf);
+    ll.at(2) = std::log(e / 4.0);
+    ll.at(3) = std::log(e / 4.0) + mismatch;
+    ll.at(4) = std::log(e / 4.0) + at_ex + (wide.best_gain > kNegInf ? wide.log_mean : kNegInf);
+    double norm = kNegInf;
+    for (const double x : ll) {
+      norm = stats::log_add(norm, x);
+    }
+    SplitFinding finding;
+    finding.split = split;
+    finding.ex_bar = ex;
+    std::size_t best = 1;
+    for (std::size_t v = 0; v < kSplitVerdicts; ++v) {
+      finding.posterior.at(v) = std::exp(ll.at(v) - norm);
+      if (v > 0 && ll.at(v) > ll.at(best)) {
+        best = v;
+      }
+    }
+    finding.p_error = 1.0 - finding.posterior.at(0);
+    finding.verdict = static_cast<SplitVerdict>(best);
+    if (finding.verdict == SplitVerdict::kMisdated) {
+      finding.other_bar = near.best;
+    } else if (finding.verdict == SplitVerdict::kDoubleApplied) {
+      finding.other_bar = wide.best;
+    } else if (finding.verdict == SplitVerdict::kRatioMismatch) {
+      finding.observed = observed;
+    }
+    if (finding.other_bar) {
+      finding.sessions_off = offset(*finding.other_bar);
+    }
+    // With too few bars after the ex-date, a move there is not yet confirmed.
+    const std::size_t last = std::max(ex, finding.other_bar.value_or(ex));
+    finding.provisional = n_ - 1 - last < static_cast<std::size_t>(settings_.provisional_bars);
+    out.push_back(finding);
+  }
+  return out;
+}
+
 PriceAnalysis analyze_prices(const Series& series, const Calendar& calendar,
                              const PriceSettings& settings, const PriceContext& context) {
   PriceAnalysis out;
@@ -980,6 +1171,22 @@ PriceAnalysis analyze_prices(const Series& series, const Calendar& calendar,
     out.findings.push_back(std::move(finding));
   }
   pair_scale_eras(out.findings, settings);
+  out.split_findings = scorer.split_findings();
+  // A split on file judged wrong accounts for the move it blames: the DQ2xx checks
+  // leave that bar to it.
+  for (const SplitFinding& split : out.split_findings) {
+    if (split.p_error < 0.5) {
+      continue;
+    }
+    const std::size_t bar = split.verdict == SplitVerdict::kRatioMismatch
+                                ? split.ex_bar
+                                : split.other_bar.value_or(n);
+    for (PriceFinding& finding : out.findings) {
+      if (finding.bar == bar) {
+        finding.claimed = true;
+      }
+    }
+  }
   out.stale_runs = scorer.stale_runs();
   out.move_z = scorer.move_z();
   return out;

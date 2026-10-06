@@ -120,6 +120,12 @@ struct PricePriors {
   double scale_error = 0.02;
   double tick_move = 0.01;
   double history_segment = 0.05;  // only after a gap of segment_gap sessions
+  // With --actions: a split on file between the bar and the one before explains
+  // the move (bars with volume only).
+  double explained_split = 0.9;
+  // With --actions: a split on file being wrong (misdated, not in the bars, the
+  // wrong ratio, applied twice; DQ701-DQ704), shared among the four. Per split.
+  double split_on_file_error = 0.06;
   // DQ501: the prior chance that a run of repeated closes starting at a bar is a
   // stale feed rather than an unchanged price (per bar, not normalized with the rest).
   double stale_run = 3e-5;
@@ -174,6 +180,8 @@ struct PricePatch {
   std::optional<double> scale_error;
   std::optional<double> tick_move;
   std::optional<double> history_segment;
+  std::optional<double> explained_split;
+  std::optional<double> split_on_file_error;
   std::optional<double> stale_run;
 
   void apply_to(PriceSettings& settings) const;

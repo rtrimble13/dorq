@@ -302,6 +302,13 @@ void read_priors(const toml::table& table, const std::string& where, const std::
       patch.tick_move = value;
     } else if (key == "history_segment") {
       patch.history_segment = value;
+    } else if (key == "explained_split") {
+      patch.explained_split = value;
+    } else if (key == "split_on_file_error") {
+      if (value >= 1.0) {
+        fail(where, node, "\"" + path + "\" is a probability: from 0 to below 1");
+      }
+      patch.split_on_file_error = value;
     } else if (key == "stale_run") {
       if (value > 1.0) {
         fail(where, node, "\"" + path + "\" is a probability: from 0 to 1");
@@ -671,6 +678,8 @@ PricePatch full_patch(const PriceSettings& settings) {
   full.scale_error = settings.priors.scale_error;
   full.tick_move = settings.priors.tick_move;
   full.history_segment = settings.priors.history_segment;
+  full.explained_split = settings.priors.explained_split;
+  full.split_on_file_error = settings.priors.split_on_file_error;
   full.stale_run = settings.priors.stale_run;
   return full;
 }
@@ -731,6 +740,8 @@ void append_priors_patch(std::string& out, const PricePatch& patch) {
   append_number(out, "scale_error", patch.scale_error);
   append_number(out, "tick_move", patch.tick_move);
   append_number(out, "history_segment", patch.history_segment);
+  append_number(out, "explained_split", patch.explained_split);
+  append_number(out, "split_on_file_error", patch.split_on_file_error);
   append_number(out, "stale_run", patch.stale_run);
 }
 
@@ -866,6 +877,8 @@ void PricePatch::apply_to(PriceSettings& settings) const {
   set(settings.priors.scale_error, scale_error);
   set(settings.priors.tick_move, tick_move);
   set(settings.priors.history_segment, history_segment);
+  set(settings.priors.explained_split, explained_split);
+  set(settings.priors.split_on_file_error, split_on_file_error);
   set(settings.priors.stale_run, stale_run);
 }
 
@@ -1255,6 +1268,8 @@ unreported_split = 0.02
 scale_error = 0.02
 tick_move = 0.01
 history_segment = 0.05
+explained_split = 0.9         # with --actions: a split on file between the bars explains a move
+split_on_file_error = 0.06    # with --actions: a split on file being wrong (DQ701-DQ704)
 stale_run = 0.00003           # DQ501: a run of repeated closes being a stale feed, per bar
 
 [severity]
