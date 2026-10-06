@@ -75,11 +75,11 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   const dorq::IntegritySettings integrity;
   const dorq::CoverageSettings coverage;
   const dorq::SeverityThresholds thresholds;
-  const dorq::PriceAnalysis analysis = dorq::analyze_prices(
-      kSeries, kCalendar, price,
-      {.have_actions = context.have_actions,
-       .actions = series_actions,
-       .tick_size = meta != nullptr ? meta->tick_size : std::nullopt});
+  const dorq::PriceAnalysis analysis =
+      dorq::analyze_prices(kSeries, kCalendar, price,
+                           {.have_actions = context.have_actions,
+                            .actions = series_actions,
+                            .tick_size = meta != nullptr ? meta->tick_size : std::nullopt});
   const dorq::SeriesContext series_context{.series = kSeries,
                                            .integrity = integrity,
                                            .coverage = coverage,

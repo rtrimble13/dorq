@@ -154,7 +154,8 @@ TEST_CASE("actions: fafnir's columns or dorq's, sorted, and errors that name the
   CHECK(context.actions.at("B").dividends.size() == 1);
 
   dorq::Context mine;
-  std::istringstream tsv("series\tex_date\ttype\tnumerator\tdenominator\tamount\nX\t2020-01-02\tsplit\t3\t2\t\n");
+  std::istringstream tsv(
+      "series\tex_date\ttype\tnumerator\tdenominator\tamount\nX\t2020-01-02\tsplit\t3\t2\t\n");
   dorq::read_actions(tsv, "a.tsv", mine);
   CHECK(mine.actions.at("X").splits.at(0).ratio_text() == "3:2");
 
@@ -204,8 +205,8 @@ TEST_CASE("metadata: fields, by id or label, and duplicates") {
 
   dorq::Context twice;
   std::istringstream dup("series,asset_type\nA,etf\nA,fund\n");
-  CHECK_THROWS_WITH_AS(dorq::read_meta(dup, "m.csv", twice), "m.csv line 3: series \"A\" appears twice",
-                       dorq::InputError);
+  CHECK_THROWS_WITH_AS(dorq::read_meta(dup, "m.csv", twice),
+                       "m.csv line 3: series \"A\" appears twice", dorq::InputError);
 }
 
 TEST_CASE("profiles match on metadata, and never without it") {
@@ -263,10 +264,9 @@ TEST_CASE("a split on file explains its move; one missing from the file is DQ203
   CHECK(count_matching(alone.out, R"("code":"DQ203")") == 1);
 
   const std::string actions = std::string{kActionsHeader} + "A," + day(200) + ",split,2,1,\n";
-  const Result explained =
-      check(csv, {{"a.csv", actions}},
-            {"--isolated", "--select", "DQ2,DQ7", "--format", "jsonl", "--show-info", "--actions",
-             "a.csv"});
+  const Result explained = check(csv, {{"a.csv", actions}},
+                                 {"--isolated", "--select", "DQ2,DQ7", "--format", "jsonl",
+                                  "--show-info", "--actions", "a.csv"});
   CAPTURE(explained.out);
   CHECK(count_matching(explained.out, R"("code":"DQ203")") == 0);
   CHECK(count_matching(explained.out, R"("code":"DQ70)") == 0);
@@ -288,9 +288,9 @@ TEST_CASE("a split on file between two stored bars explains the move across them
            fixed(b.low, 2) + "," + fixed(b.close, 2) + "," + fixed(b.volume, 0) + "\n";
   }
   const std::string actions = std::string{kActionsHeader} + "A," + day(199) + ",split,2,1,\n";
-  const Result result = check(csv, {{"a.csv", actions}},
-                              {"--isolated", "--select", "DQ2,DQ7", "--format", "jsonl",
-                               "--actions", "a.csv"});
+  const Result result =
+      check(csv, {{"a.csv", actions}},
+            {"--isolated", "--select", "DQ2,DQ7", "--format", "jsonl", "--actions", "a.csv"});
   CAPTURE(result.out);
   CHECK(result.out.empty());
 }
@@ -347,9 +347,9 @@ TEST_CASE("DQ705: a dividend above the price, or a hundred times its others") {
     }
     actions += "A," + day(i) + ",dividend,,," + fixed(amount, 2) + "\n";
   }
-  const Result r = check(bars_csv("A", bars), {{"a.csv", actions}},
-                         {"--isolated", "--select", "DQ705", "--format", "jsonl", "--actions",
-                          "a.csv"});
+  const Result r =
+      check(bars_csv("A", bars), {{"a.csv", actions}},
+            {"--isolated", "--select", "DQ705", "--format", "jsonl", "--actions", "a.csv"});
   CAPTURE(r.out);
   CHECK(count_matching(r.out, R"("code":"DQ705")") == 2);
   CHECK(contains(r.out, "is at or above the close before it"));
@@ -370,9 +370,9 @@ TEST_CASE("DQ601: a family splitting together, and the siblings' evidence") {
     meta += id + ",FAM\n";
   }
   csv += bars_csv("Z", stock(400, 60.0, 0.015, 20), false);
-  const Result r = check(csv, {{"meta.csv", meta}},
-                         {"--isolated", "--select", "DQ2,DQ6", "--format", "jsonl", "--meta",
-                          "meta.csv"});
+  const Result r =
+      check(csv, {{"meta.csv", meta}},
+            {"--isolated", "--select", "DQ2,DQ6", "--format", "jsonl", "--meta", "meta.csv"});
   CAPTURE(r.out);
   CHECK(count_matching(r.out, R"("code":"DQ601")") == 1);
   CHECK(contains(r.out, "4 series move"));
