@@ -11,7 +11,7 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET
 # workflow refuses a tag that disagrees with it. See CONTRIBUTING.md.
 project(
   dorq
-  VERSION 0.5.0
+  VERSION 0.6.0
   DESCRIPTION "Bayesian data-quality linter for financial time series"
   HOMEPAGE_URL "https://github.com/rtrimble13/dorq"
   LANGUAGES CXX)
@@ -53,6 +53,7 @@ add_subdirectory(src)
 if(DORQ_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tools/synth)
+  add_subdirectory(tools/eval)
   add_subdirectory(tests)
 endif()
 

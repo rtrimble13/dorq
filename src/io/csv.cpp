@@ -39,33 +39,49 @@ void CsvParser::end_record(const RecordFn& on_record) {
 }
 
 void CsvParser::feed(std::string_view chunk, const RecordFn& on_record) {
-  for (const char ch : chunk) {
+  std::size_t i = 0;
+  while (i < chunk.size()) {
+    const char ch = chunk[i];
     switch (state_) {
       case State::kFieldStart:
         if (ch == '"') {
           state_ = State::kQuoted;
           field_was_quoted_ = true;
           record_has_content_ = true;
+          ++i;
           break;
         }
         state_ = State::kUnquoted;
         [[fallthrough]];
-      case State::kUnquoted:
-        if (ch == delimiter_) {
+      case State::kUnquoted: {
+        // Copy the run of plain characters at once: most of the input.
+        std::size_t run = i;
+        while (run < chunk.size() && chunk[run] != delimiter_ && chunk[run] != '\n' &&
+               chunk[run] != '\r') {
+          ++run;
+        }
+        if (run != i) {
+          buffer_.append(chunk.substr(i, run - i));
+          record_has_content_ = true;
+          i = run;
+          if (i == chunk.size()) {
+            break;
+          }
+        }
+        if (chunk[i] == delimiter_) {
           end_field();
           record_has_content_ = true;
           state_ = State::kFieldStart;
-        } else if (ch == '\n') {
+        } else if (chunk[i] == '\n') {
           end_record(on_record);
           ++line_;
           record_line_ = line_;
         } else {
-          buffer_.push_back(ch);
-          if (ch != '\r') {
-            record_has_content_ = true;
-          }
+          buffer_.push_back('\r');
         }
+        ++i;
         break;
+      }
       case State::kQuoted:
         if (ch == '"') {
           state_ = State::kQuoteInQuoted;
@@ -75,6 +91,7 @@ void CsvParser::feed(std::string_view chunk, const RecordFn& on_record) {
             ++line_;
           }
         }
+        ++i;
         break;
       case State::kQuoteInQuoted:
         if (ch == '"') {  // a doubled quote is a literal quote
@@ -92,6 +109,7 @@ void CsvParser::feed(std::string_view chunk, const RecordFn& on_record) {
           state_ = State::kUnquoted;
           field_was_quoted_ = false;
         }
+        ++i;
         break;
     }
   }

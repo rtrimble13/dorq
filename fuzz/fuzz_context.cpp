@@ -1,7 +1,8 @@
-// libFuzzer target: arbitrary bytes as an actions or a metadata file (the first
-// byte chooses). A bad file must be an InputError and nothing else; the actions
-// and metadata of a good one then go through the price model and every check, on
-// a fixed series, without crashing or tripping a sanitizer.
+// libFuzzer target: arbitrary bytes as an actions file, a metadata file or a
+// labels file (the first byte chooses). A bad file must be an InputError and
+// nothing else. The actions and metadata of a good one then go through the price
+// model and every check, on a fixed series; the labels' removed dates go through
+// --restore. Nothing may crash or trip a sanitizer.
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -9,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "calibrate/labels.hpp"
 #include "checks/check.hpp"
 #include "config/config.hpp"
 #include "context/context.hpp"
@@ -57,8 +59,19 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   }
   static const dorq::Series kSeries = make_series();
   static const dorq::Calendar kCalendar;
-  const bool actions = (data[0] & 1U) != 0;
+  const unsigned mode = data[0] % 3U;
+  const bool actions = mode == 1;
   std::istringstream in(std::string(reinterpret_cast<const char*>(data + 1), size - 1));
+  if (mode == 2) {
+    try {
+      const std::vector<dorq::Label> labels = dorq::read_labels(in, "fuzz");
+      const dorq::Restorer restorer(labels, {kSeries});
+      dorq::Series series = kSeries;
+      restorer.apply(series);
+    } catch (const dorq::InputError&) {
+    }
+    return 0;
+  }
   dorq::Context context;
   try {
     if (actions) {

@@ -29,6 +29,8 @@ add_library(
   checks/stale.cpp
   checks/volume.cpp
   cli/app.cpp
+  calibrate/calibrate.cpp
+  calibrate/labels.cpp
   config/config.cpp
   context/context.cpp
   core/build_info.cpp

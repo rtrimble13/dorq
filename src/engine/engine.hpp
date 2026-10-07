@@ -109,6 +109,7 @@ class Engine {
   const Settings& settings_for(const Series& series);
   [[nodiscard]] Processed process(Work& work) const;
   void deliver(Processed processed);
+  void drop_unreported(SeriesResult& result) const;  // below --min-severity, before --since
   void filter_and_send(SeriesResult&& result);
   void worker_loop();
   void deliver_ready();  // caller holds no lock

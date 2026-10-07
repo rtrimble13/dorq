@@ -2,7 +2,7 @@
 // output against the labels. See tools/synth/README.md.
 //
 //   dorq-synth generate [--seed N] --out DIR     writes DIR/bars.csv, points.csv, labels.csv,
-//                                                actions.csv, meta.csv, market.csv
+//                                                labels.jsonl, actions.csv, meta.csv, market.csv
 //   dorq-synth score --labels F --results F [--gates F] [--verbose]
 //
 // The generator draws from its own PRNG (xoshiro256**) and its own normal and t
@@ -189,11 +189,16 @@ void apply_split(SeriesPlan& plan, std::size_t from, double price_factor);
 class Generator {
  public:
   explicit Generator(std::uint64_t seed) : rng_(seed), calendar_(dorq::CalendarKind::kXnys) {}
+  // For `bench`: bars only, with `prefix` before each series id and no header.
+  Generator(std::uint64_t seed, std::string prefix) : Generator(seed) {
+    prefix_ = std::move(prefix);
+  }
 
   struct Outputs {
     std::ostream& bars;
     std::ostream& points;
     std::ostream& labels;
+    std::ostream& labels_jsonl;
     std::ostream& actions;
     std::ostream& meta;
     std::ostream& market;
@@ -243,6 +248,7 @@ class Generator {
   bool is_free(const std::string& id, std::size_t from, std::size_t to);
 
   Rng rng_;
+  std::string prefix_;
   dorq::Calendar calendar_;
   std::vector<Label> labels_;
   std::vector<Action> actions_;
@@ -1034,15 +1040,18 @@ void Generator::run(const Outputs& out) {
   inject_actions(universe);
 
   std::ostream& bars = out.bars;
-  bars << "series,date,open,high,low,close,volume\n";
+  if (prefix_.empty()) {
+    bars << "series,date,open,high,low,close,volume\n";
+  }
   for (const SeriesPlan& plan : universe) {
     for (const Bar& bar : plan.bars) {
       if (!bar.present) {
         continue;
       }
-      bars << plan.id << ',' << bar.date.to_string() << ',' << price_text(bar.open, plan.cls) << ','
-           << price_text(bar.high, plan.cls) << ',' << price_text(bar.low, plan.cls) << ','
-           << price_text(bar.close, plan.cls) << ',' << dorq::format_number(bar.volume) << '\n';
+      bars << prefix_ << plan.id << ',' << bar.date.to_string() << ','
+           << price_text(bar.open, plan.cls) << ',' << price_text(bar.high, plan.cls) << ','
+           << price_text(bar.low, plan.cls) << ',' << price_text(bar.close, plan.cls) << ','
+           << dorq::format_number(bar.volume) << '\n';
     }
   }
   std::ostream& labels = out.labels;
@@ -1050,6 +1059,26 @@ void Generator::run(const Outputs& out) {
   for (const Label& l : labels_) {
     labels << l.series << ',' << l.first.to_string() << ',' << l.last.to_string() << ',' << l.kind
            << ',' << l.expect << ',' << l.codes << '\n';
+  }
+  // The same labels in dorq's label schema (doc/labels.md), for dorq calibrate and
+  // dorq-eval: an expected code is a data error, or a context gap for a split the
+  // data does not record; a hard negative is a market fact.
+  for (const Label& l : labels_) {
+    const bool context = l.expect == "DQ203" || l.expect == "DQ601";
+    const char* cls = context ? "context_gap" : "data_error";
+    if (l.expect.empty()) {
+      cls = "market_fact";
+    }
+    out.labels_jsonl << R"({"series":")" << l.series << R"(","first":")" << l.first.to_string()
+                     << R"(","last":")" << l.last.to_string() << R"(","class":")" << cls
+                     << R"(","kind":")" << l.kind << '"';
+    if (!l.expect.empty()) {
+      out.labels_jsonl << R"(,"expect":")" << l.expect << '"';
+    }
+    if (!l.codes.empty()) {
+      out.labels_jsonl << R"(,"codes":")" << l.codes << '"';
+    }
+    out.labels_jsonl << R"(,"source":"dorq-synth"})" << '\n';
   }
   // fafnir's column names (core.corporate_action), as its export would write them.
   out.actions << "security_id,ex_date,action_type,split_numerator,split_denominator,"
@@ -1407,7 +1436,8 @@ int score(const std::string& labels_path, const std::string& results_path,
 
 int usage() {
   std::cerr << "usage: dorq-synth generate [--seed N] --out DIR\n"
-               "       dorq-synth score --labels F --results F [--gates F] [--verbose]\n";
+               "       dorq-synth score --labels F --results F [--gates F] [--verbose]\n"
+               "       dorq-synth bench --copies K [--seed N] --out FILE\n";
   return 2;
 }
 
@@ -1438,11 +1468,31 @@ int main(int argc, char** argv) {
       std::ofstream bars(std::filesystem::path(*out) / "bars.csv", std::ios::binary);
       std::ofstream points(std::filesystem::path(*out) / "points.csv", std::ios::binary);
       std::ofstream labels(std::filesystem::path(*out) / "labels.csv", std::ios::binary);
+      std::ofstream labels_jsonl(std::filesystem::path(*out) / "labels.jsonl", std::ios::binary);
       std::ofstream actions(std::filesystem::path(*out) / "actions.csv", std::ios::binary);
       std::ofstream meta(std::filesystem::path(*out) / "meta.csv", std::ios::binary);
       std::ofstream market(std::filesystem::path(*out) / "market.csv", std::ios::binary);
-      Generator(seed).run({bars, points, labels, actions, meta, market});
+      Generator(seed).run({bars, points, labels, labels_jsonl, actions, meta, market});
       return 0;
+    }
+    if (args[1] == "bench") {
+      // K universes' bars in one file, the series of copy i named "<i>_<id>": a
+      // large input for timing (doc/performance.md). Copy i uses seed N + i.
+      const auto out = value("--out");
+      const auto copies = value("--copies");
+      if (!out || !copies) {
+        return usage();
+      }
+      const std::uint64_t seed = std::stoull(value("--seed").value_or("1"));
+      std::ofstream bars(*out, std::ios::binary);
+      std::ostringstream ignored;
+      bars << "series,date,open,high,low,close,volume\n";
+      for (std::uint64_t i = 0; i < std::stoull(*copies); ++i) {
+        ignored.str("");
+        Generator(seed + i, std::to_string(i) + "_")
+            .run({bars, ignored, ignored, ignored, ignored, ignored, ignored});
+      }
+      return bars ? 0 : 2;
     }
     if (args[1] == "score") {
       const auto labels = value("--labels");

@@ -75,7 +75,7 @@ One JSON object per line. This is the record every machine format is built from:
  "detail":{"open":10,"high":9.5,"low":9,"close":10},
  "hypotheses":{},"evidence":[],"suggested_action":null,"provisional":false,
  "record_key":{"trade_date":"2024-01-03"},
- "dorq":{"version":"0.5.0","config_hash":"2dbc9760e4b8882f"}}
+ "dorq":{"version":"0.6.0","config_hash":"2dbc9760e4b8882f"}}
 ```
 
 A price check's record carries its model (wrapped the same way):
@@ -130,7 +130,7 @@ One object: the same records in a `violations` array, followed by a `summary`.
 {...}
 ],"summary":{"inputs":1,"series":2,"rows":6,"violations":6,
  "by_severity":{"error":5,"warn":1,"info":0},"by_code":{"DQ101":2,"DQ102":1,"DQ104":3},
- "dorq":{"version":"0.5.0","config_hash":"2dbc9760e4b8882f"}}}
+ "dorq":{"version":"0.6.0","config_hash":"2dbc9760e4b8882f"}}}
 ```
 
 `rows` counts every data row read, including rows skipped for an unusable date.

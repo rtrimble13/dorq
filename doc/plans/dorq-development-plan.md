@@ -1,8 +1,8 @@
 # Plan: dorq, a Bayesian data-quality linter for financial time series
 
 - Status: **accepted** (2026-10-05). The defaults in §10 are confirmed, and Q9 is answered. M0 is done
-  (PR #1), M1 is done (PR #2), M2 is done (PR #3), M3 is done (PR #4), M4 is done (PR #5), and M5
-  is implemented and awaiting merge.
+  (PR #1), M1 is done (PR #2), M2 is done (PR #3), M3 is done (PR #4), M4 is done (PR #5), M5 is
+  done (PR #7), and M6 is implemented and awaiting merge.
 - Scope: this repository (the C++ CLI), plus one milestone of integration work in `rtrimble13/fafnir` (M7).
 - Status legend: ⬜ planned · 🔄 in progress · ✅ done (PR #) · ⏭ carried over · ✖ dropped (reason)
 
@@ -82,7 +82,7 @@ dorq [check] [OPTIONS] [FILE ...]      # 'check' is the default subcommand; '-' 
 dorq list-checks [--format text|json]  # code, name, default severity, inputs needed
 dorq explain DQ203                     # full description of a check, with examples and knobs
 dorq config show|init                  # print the effective config / write a starter dorq.toml
-dorq calibrate --labels L.jsonl --data D.csv --out priors.toml   # fit priors from labelled history (M6)
+dorq calibrate D.csv --labels L.jsonl --out priors.toml         # fit priors from labelled history (M6)
 dorq version
 ```
 
@@ -638,7 +638,7 @@ and recorded in `config_hash`.
 1. **Deploy.** Unpack a GitHub release archive under `/opt` with `/opt/dorq` symlinked to it, or build
    from source with the `release` preset and `cmake --install` (both are in the README). Either way
    the binary is `/opt/dorq/bin/dorq`. Whether to build with `-march=x86-64-v3` is decided in the M6
-   performance pass (DR-0604). Then and add `[dq] dorq_path` and `dorq_config` to `fafnirrc`. `fafnir status`
+   performance pass (DR-0604). Then add `[dq] dorq_path` and `dorq_config` to `fafnirrc`. `fafnir status`
    reports the dorq version.
 2. **Export → run → ingest.** Add a new module, `src/fafnir/dq/dorq.py`:
    - `COPY (SELECT security_id, trade_date, open, high, low, close, volume FROM core.daily_price WHERE …
@@ -793,10 +793,10 @@ at most one series a universe, and the gate allows one.
 ### M5: Context inputs (v0.5.0)
 | ID | Item | Size | Status |
 |---|---|---|---|
-| DR-0501 | `--actions` reader; the explained_split hypothesis; the "split between bars" rule | M | 🔄 awaiting merge |
-| DR-0502 | DQ701–DQ705 | L | 🔄 awaiting merge |
-| DR-0503 | `--meta` reader, profile matching, `peer_group` sibling evidence (DQ601) | M | 🔄 awaiting merge |
-| DR-0504 | `--market` reference series: rolling beta, scoring on residual returns, DQ602 market-day widening | M | 🔄 awaiting merge |
+| DR-0501 | `--actions` reader; the explained_split hypothesis; the "split between bars" rule | M | ✅ PR #7 |
+| DR-0502 | DQ701–DQ705 | L | ✅ PR #7 |
+| DR-0503 | `--meta` reader, profile matching, `peer_group` sibling evidence (DQ601) | M | ✅ PR #7 |
+| DR-0504 | `--market` reference series: rolling beta, scoring on residual returns, DQ602 market-day widening | M | ✅ PR #7 |
 
 **As built** (doc/context.md is the reference):
 
@@ -858,10 +858,61 @@ allows three.
 ### M6: Calibration and evaluation (v0.6.0)
 | ID | Item | Size | Status |
 |---|---|---|---|
-| DR-0601 | The label schema (JSONL) and the ingestion of reconstructed pre-repair windows | M | ⬜ |
-| DR-0602 | `dorq calibrate`: marginal-likelihood fit of π_H and hyperparameters, isotonic map, `priors.toml` output | L | ⬜ |
-| DR-0603 | `tools/eval`: per-check precision and recall, reliability diagrams, precision@k, reports in HTML and markdown | M | ⬜ |
-| DR-0604 | Performance pass: benchmarks, profiling, and the runtime target of §8 on a 150M-row synthetic set | M | ⬜ |
+| DR-0601 | The label schema (JSONL) and the ingestion of reconstructed pre-repair windows | M | 🔄 awaiting merge |
+| DR-0602 | `dorq calibrate`: marginal-likelihood fit of π_H and hyperparameters, isotonic map, `priors.toml` output | L | 🔄 awaiting merge |
+| DR-0603 | `tools/eval`: per-check precision and recall, reliability diagrams, precision@k, reports in HTML and markdown | M | 🔄 awaiting merge |
+| DR-0604 | Performance pass: benchmarks, profiling, and the runtime target of §8 on a 150M-row synthetic set | M | 🔄 awaiting merge |
+
+**As built** (doc/labels.md, doc/calibration.md, tools/eval/README.md and
+doc/performance.md are the references):
+
+- **Labels** are flat JSON Lines with these fields: `series` (`*` for
+  cross-sectional), `first`/`last` or `date`, `class` (`data_error`,
+  `context_gap` or `market_fact`), `expect` (codes separated by `|`), `codes`
+  (`DQ2` by default for a market fact), `kind`, `source`, `note`, and `remove`.
+  dorq-synth writes `labels.jsonl` beside `labels.csv`.
+- **Pre-repair windows** are not reconstructed inside dorq. `--restore F` (on
+  `check` and `calibrate`) takes the repaired rows as they stood before repair,
+  in the input format, and upserts them by series and date. The labels' `remove`
+  dates are then dropped. Building that file from `ops.operator_override` is
+  fafnir's export (DR-0701).
+- **`dorq calibrate`** scores every labelled move with the engine's own
+  settings and profiles. Each move becomes an observation: the per-hypothesis
+  log-likelihood (`PriceFinding::log_likelihood`, every term but the prior) and
+  the hypotheses the label allows. The priors are fitted by gradient ascent on
+  Σ log P(allowed | evidence), with a Gaussian penalty of 1.5 e-folds around the
+  configured priors. `jump_prob`, `jump_scale` and `ratio_tolerance` are chosen
+  over a grid of 36 settings plus the configured one, by mean penalized
+  log-likelihood. The `p_error` map is isotonic: up to 20 equal-count bins, then
+  pool adjacent violators. The fit writes TOML for the new `include` key:
+  `[price]`, `[priors]`, and `[calibration] version, p_error_map`. Per-class
+  tables (asset_type) wait for real labels: the synthetic universe has too few
+  faults per class to fit them.
+- **dorq-eval** (`tools/eval`) reports these against labels:
+  - per check: precision, fault precision, recall and F1;
+  - precision at warn and at error;
+  - hard negatives;
+  - a reliability diagram with ECE over the Bayesian checks at every severity;
+  - precision@k.
+
+  Reports are markdown and self-contained HTML. It matches as `dorq-synth score`
+  does, and the synth gate now runs both.
+- **Performance**: on a 150M-row dorq-synth file, a full run takes 64 s on
+  4 cores with 0.8 GB peak memory. The nightly shape (19M rows) takes 10 s. Both
+  §8 targets are met on half the cores. The changes: CSV runs are copied in
+  bulk, and `parse_number` is a single pass without allocation, which together
+  cut the read path by a third. Held violations below `--min-severity` are
+  dropped before the cross-section, which takes peak memory from 2.6 GB to
+  0.8 GB. Reading is serial and is now about 80% of a 4-thread run; parallel
+  parsing is the next step if a larger universe needs it. `-march=x86-64-v3`
+  gave no measurable gain, so release builds stay at baseline x86-64 (§7).
+
+**Result:** a fit on dorq-synth seed 1, applied to seed 2, raises precision at
+warn from 0.71 to 0.83. Every gate still holds. On seed 1 the mean log
+P(label | evidence) rises from −0.168 to −0.127, and the price model's
+expected calibration error falls from 0.020 to 0.008. Across seeds 2–6, the fit
+removes every report on the thin-name and rate hard negatives, and DQ201 stays
+at precision 1.0. The real test is M7's fit on fafnir's labels (DR-0704).
 
 ### M7: fafnir integration (fafnir v-next, see §7)
 | ID | Repo | Item | Size | Status |
