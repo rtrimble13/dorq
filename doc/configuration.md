@@ -8,7 +8,9 @@ layers, each overriding the one before:
 3. Command-line options.
 
 `dorq config show` prints the effective settings, where they came from, and their
-`config_hash`. `dorq config init` writes a starter `dorq.toml` that lists every
+`config_hash`. The hash covers what can change the report: a reference calendar
+counts by its content, so the same sessions read from another directory hash the
+same, and thread count and output format do not count at all. `dorq config init` writes a starter `dorq.toml` that lists every
 key at its default value.
 
 ## Where the file is found

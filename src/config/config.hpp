@@ -259,6 +259,11 @@ struct Config {
   SeverityThresholds severity;
   CalendarKind calendar = CalendarKind::kXnys;
   std::filesystem::path calendar_file;  // optional reference calendar
+  // A digest of the calendar file's content, when it has been read. config_hash
+  // covers this rather than the path: the same sessions from another directory
+  // are the same settings (fafnir writes the file to a fresh temporary directory
+  // on every run).
+  std::string calendar_digest;
   std::string calendar_exchange;
   std::vector<Profile> profiles;  // sorted by name
   std::string fafnir_table = "core.daily_price";

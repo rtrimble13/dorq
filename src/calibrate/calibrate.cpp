@@ -72,6 +72,7 @@ std::optional<std::array<bool, kCount>> allowed_for(const Label& label) {
   if (code.empty()) {
     if (label.label_class == LabelClass::kContextGap) {
       set(H::kUnreportedSplit);
+      set(H::kExplainedSplit);
     } else {
       for (std::size_t h = 0; h < kCount; ++h) {
         a.at(h) = is_error(static_cast<H>(h));
@@ -83,6 +84,11 @@ std::optional<std::array<bool, kCount>> allowed_for(const Label& label) {
     set(H::kScaleError);
   } else if (code == "DQ203" || code == "DQ601") {
     set(H::kUnreportedSplit);
+    // A context gap is a split the data did not record. Once the split is on file
+    // (fafnir loads it as the repair), the same move is an explained split.
+    if (label.label_class == LabelClass::kContextGap) {
+      set(H::kExplainedSplit);
+    }
   } else if (code == "DQ204") {
     set(H::kBadClose);
   } else if (code == "DQ205") {

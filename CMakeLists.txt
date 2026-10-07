@@ -11,7 +11,7 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET
 # workflow refuses a tag that disagrees with it. See CONTRIBUTING.md.
 project(
   dorq
-  VERSION 0.6.0
+  VERSION 0.7.0
   DESCRIPTION "Bayesian data-quality linter for financial time series"
   HOMEPAGE_URL "https://github.com/rtrimble13/dorq"
   LANGUAGES CXX)
@@ -67,3 +67,6 @@ endif()
 include(GNUInstallDirs)
 install(TARGETS dorq RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES LICENSE README.md DESTINATION ${CMAKE_INSTALL_DOCDIR})
+# Configurations for known deployments (priors/fafnir.toml): share/dorq/priors.
+install(DIRECTORY priors/ DESTINATION ${CMAKE_INSTALL_DATADIR}/dorq/priors
+        FILES_MATCHING PATTERN "*.toml")

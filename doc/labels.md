@@ -44,7 +44,7 @@ days of the label's span. The label says which explanations are acceptable:
 |---|---|
 | `expect` DQ201 | bad print |
 | `expect` DQ202 | scale error |
-| `expect` DQ203 or DQ601, or a `context_gap` with no `expect` | unreported split |
+| `expect` DQ203 or DQ601, or a `context_gap` with no `expect` | unreported split; for a `context_gap`, also explained split, since the repair is to put the split on file |
 | `expect` DQ204 | bad close |
 | `expect` DQ205 | history segment |
 | `data_error` with no `expect` | any error |

@@ -1,6 +1,7 @@
 #include "cli/app.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -8,6 +9,7 @@
 #include <optional>
 #include <ostream>
 #include <span>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -206,6 +208,34 @@ void apply_overrides(const CheckOptions& o, CLI::App& cmd, Config& config) {
   }
 }
 
+// FNV-1a over a file's bytes, as hex: what config_hash covers in place of the
+// calendar file's path. Empty when the file cannot be read (load_calendar then
+// reports it).
+std::string file_digest(const fs::path& path) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    return {};
+  }
+  std::uint64_t hash = 0xcbf29ce484222325ULL;
+  std::array<char, 1 << 16> block{};
+  while (in.read(block.data(), block.size()) || in.gcount() > 0) {
+    for (std::streamsize i = 0; i < in.gcount(); ++i) {
+      hash ^= static_cast<unsigned char>(block.at(static_cast<std::size_t>(i)));
+      hash *= 0x100000001b3ULL;
+    }
+  }
+  std::ostringstream out;
+  out << std::hex << hash;
+  return out.str();
+}
+
+void stamp_calendar_digest(Config& config, const fs::path& cwd) {
+  if (!config.calendar_file.empty()) {
+    config.calendar_digest = file_digest(
+        config.calendar_file.is_relative() ? cwd / config.calendar_file : config.calendar_file);
+  }
+}
+
 // The built-in calendar, with the reference file over it when one is given.
 Calendar load_calendar(const Config& config, const fs::path& cwd) {
   Calendar calendar(config.calendar);
@@ -312,6 +342,7 @@ int run_check(const CheckOptions& options, CLI::App& cmd, Io& io) {
     }
   }
   const Calendar calendar = load_calendar(config, io.cwd);
+  stamp_calendar_digest(config, io.cwd);
   const Context context = load_context(options, io.cwd);
   const Restorer restorer = load_restorer(options, load_labels(options.labels, io.cwd), io.cwd);
 
@@ -512,8 +543,9 @@ int run_explain(const std::string& what, Io& io) {
 }
 
 int run_config_show(const std::string& config_path, bool isolated, Io& io) {
-  const Config config = load_effective_config(config_path, isolated, io.cwd);
+  Config config = load_effective_config(config_path, isolated, io.cwd);
   validate_selection(config);
+  stamp_calendar_digest(config, io.cwd);
   io.out << "# source: " << (config.source.empty() ? "defaults" : config.source.string()) << "\n"
          << "# config_hash: " << config_hash(config) << "\n\n"
          << to_toml(config);

@@ -38,6 +38,9 @@ function(dorq_cli_exit_test name expected)
 endfunction()
 
 dorq_cli_exit_test(help 0 --help)
+# The configuration shipped for fafnir (priors/fafnir.toml) must stay valid.
+dorq_cli_exit_test(fafnir-config 0 config show --config
+                   "${PROJECT_SOURCE_DIR}/priors/fafnir.toml")
 dorq_cli_exit_test(version-json 0 version --format json)
 dorq_cli_exit_test(list-checks 0 list-checks)
 dorq_cli_exit_test(explain 0 explain DQ101)
