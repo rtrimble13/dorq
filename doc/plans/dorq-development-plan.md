@@ -975,7 +975,10 @@ at precision 1.0. The real test is M7's fit on fafnir's labels (DR-0704).
 - **Determinism across runs.** fafnir writes the calendar file to a fresh temp
   directory each run, and `config_hash` hashed its path. The hash now covers a
   reference calendar's *content*, so repeated runs give byte-identical output, as
-  §8 requires.
+  §8 requires. *(Completed in v0.8.0: the path also reached the output through
+  the calendar's description, in the cross-sectional rows' `source`, DQ303's
+  `detail.calendar` and the DQ105 and DQ206 messages. The description now names the
+  file without its directory, and a test runs the same input from two directories.)*
 - **A bad context row no longer stops the run** (v0.8.0, ADR 0004). The first
   run on the fafnir host stopped with exit 3 on dividends of zero, which
   `core.corporate_action` allows and the actions reader refused. DQ705 now reports

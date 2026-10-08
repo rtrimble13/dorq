@@ -103,7 +103,7 @@ A price check's record carries its model (wrapped the same way):
 |---|---|
 | `series` | The series id: the series column, or the file's stem when there is none. `null` for a cross-sectional violation (DQ303, DQ601, DQ602) |
 | `label` | The label column (e.g. a ticker), or `null` |
-| `source` | The input file, or `<stdin>`. For DQ109, the context file's name without its directory |
+| `source` | The input file, or `<stdin>`. For DQ109, the context file's name without its directory. For a cross-sectional violation, the calendar: `XNYS`, or `XNYS, with sessions.csv for 1990-01-02..2027-12-31`, naming a reference file without its directory |
 | `date` | The date the violation is about; `null` for a row with no usable date |
 | `end_date` | Present only on a violation that spans dates |
 | `line` | The source line (CSV) or record (JSON) when one row is at fault, else `null`. For DQ109, the line of the context file |
