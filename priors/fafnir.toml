@@ -1,0 +1,32 @@
+# dorq for fafnir's warehouse (rtrimble13/fafnir, doc/dorq.md there; plan DR-0704).
+#
+# fafnir runs `dorq check --format fafnir` with this file as [dq] dorq_config, and
+# passes the context itself: --calendar-file (ref.trading_calendar for the venue),
+# --actions (core.corporate_action), --meta (core.security: asset_type, exchange,
+# nav_priced) and --as-of (the market's latest open session).
+#
+# This is the starting point, not the fit. The priors below are dorq's defaults.
+# DR-0704 replaces them with a calibration on fafnir's own labels:
+#
+#   fafnir dq export-labels --out labels.jsonl --restore before.csv
+#   dorq calibrate bars.csv --labels labels.jsonl --restore before.csv \
+#        --config priors/fafnir.toml --holdout 0.3 --out fafnir-calibration.toml
+#
+# and then this file includes it (uncomment below). Keep the labels and the fit
+# under version control together; the [calibration] version names the pair.
+
+# include = "fafnir-calibration.toml"
+
+[calendar]
+name = "XNYS"          # outside the span of the calendar file fafnir passes
+
+[fafnir]
+table_name = "core.daily_price"
+
+# A NAV-priced fund (fafnir's own rule: asset_type 'fund', or is_fund on anything
+# that does not trade in sessions) strikes one price a day: a flat bar, on no
+# volume. The volume checks and the flat-bar check have nothing to judge, and a
+# money-market fund's constant $1.00 is a fact, not a stale feed.
+[profiles.nav_funds]
+match = { nav_priced = true }
+ignore = ["DQ107", "DQ4", "DQ501", "DQ502"]

@@ -2,7 +2,8 @@
 
 - Status: **accepted** (2026-10-05). The defaults in §10 are confirmed, and Q9 is answered. M0 is done
   (PR #1), M1 is done (PR #2), M2 is done (PR #3), M3 is done (PR #4), M4 is done (PR #5), M5 is
-  done (PR #7), and M6 is implemented and awaiting merge.
+  done (PR #7), M6 is done (PR #8), and M7's code is implemented and awaiting merge in both
+  repositories; its labelling pass, calibration and shadow period are operational work to follow.
 - Scope: this repository (the C++ CLI), plus one milestone of integration work in `rtrimble13/fafnir` (M7).
 - Status legend: ⬜ planned · 🔄 in progress · ✅ done (PR #) · ⏭ carried over · ✖ dropped (reason)
 
@@ -858,10 +859,10 @@ allows three.
 ### M6: Calibration and evaluation (v0.6.0)
 | ID | Item | Size | Status |
 |---|---|---|---|
-| DR-0601 | The label schema (JSONL) and the ingestion of reconstructed pre-repair windows | M | 🔄 awaiting merge |
-| DR-0602 | `dorq calibrate`: marginal-likelihood fit of π_H and hyperparameters, isotonic map, `priors.toml` output | L | 🔄 awaiting merge |
-| DR-0603 | `tools/eval`: per-check precision and recall, reliability diagrams, precision@k, reports in HTML and markdown | M | 🔄 awaiting merge |
-| DR-0604 | Performance pass: benchmarks, profiling, and the runtime target of §8 on a 150M-row synthetic set | M | 🔄 awaiting merge |
+| DR-0601 | The label schema (JSONL) and the ingestion of reconstructed pre-repair windows | M | ✅ PR #8 |
+| DR-0602 | `dorq calibrate`: marginal-likelihood fit of π_H and hyperparameters, isotonic map, `priors.toml` output | L | ✅ PR #8 |
+| DR-0603 | `tools/eval`: per-check precision and recall, reliability diagrams, precision@k, reports in HTML and markdown | M | ✅ PR #8 |
+| DR-0604 | Performance pass: benchmarks, profiling, and the runtime target of §8 on a 150M-row synthetic set | M | ✅ PR #8 |
 
 **As built** (doc/labels.md, doc/calibration.md, tools/eval/README.md and
 doc/performance.md are the references):
@@ -917,13 +918,68 @@ at precision 1.0. The real test is M7's fit on fafnir's labels (DR-0704).
 ### M7: fafnir integration (fafnir v-next, see §7)
 | ID | Repo | Item | Size | Status |
 |---|---|---|---|---|
-| DR-0701 | fafnir | `fafnir dq export-labels`, then the one-time labelling pass (operator plus agent) | M | ⬜ |
-| DR-0702 | fafnir | `dq/dorq.py`: export, run, temp-table ingest with the open and accepted guards; `fafnirrc` keys | L | ⬜ |
-| DR-0703 | fafnir | `--engine`/`--shadow`, `fafnir dq compare` | M | ⬜ |
-| DR-0704 | dorq | Calibrate on the fafnir labels and ship `priors/fafnir.toml` | S | ⬜ |
-| DR-0705 | fafnir | Recheck by rerun-and-negate for the `dorq_*` checks; tests | M | ⬜ |
-| DR-0706 | fafnir | Skill and playbook updates, tiers, `NEVER_AUTO_RESOLVE`, the test pinning the two | M | ⬜ |
-| DR-0707 | fafnir | Shadow period (≥ 20 sessions), a go/no-go against §8, cutover, retiring the SQL checks | M | ⬜ |
+| DR-0701 | fafnir | `fafnir dq export-labels`, then the one-time labelling pass (operator plus agent) | M | 🔄 command awaiting merge; the labelling pass follows on the host |
+| DR-0702 | fafnir | `dq/dorq.py`: export, run, temp-table ingest with the open and accepted guards; `fafnirrc` keys | L | 🔄 awaiting merge |
+| DR-0703 | fafnir | `--engine`/`--shadow`, `fafnir dq compare` | M | 🔄 awaiting merge |
+| DR-0704 | dorq | Calibrate on the fafnir labels and ship `priors/fafnir.toml` | S | 🔄 `priors/fafnir.toml` awaiting merge; the fit needs the labelling pass |
+| DR-0705 | fafnir | Recheck by rerun-and-negate for the `dorq_*` checks; tests | M | 🔄 awaiting merge |
+| DR-0706 | fafnir | Skill and playbook updates, tiers, `NEVER_AUTO_RESOLVE`, the test pinning the two | M | 🔄 awaiting merge |
+| DR-0707 | fafnir | Shadow period (≥ 20 sessions), a go/no-go against §8, cutover, retiring the SQL checks | M | ⬜ needs the deployed code and 20 sessions |
+
+**As built** (fafnir's doc/dorq.md and ADR 0013 are the references; dorq v0.7.0):
+
+- **Engine selection.** `fafnir dq run --engine sql|dorq|both` defaults to
+  `[dq] engine`, which defaults to `sql`, so a host without dorq runs as before.
+  `[dq] dorq_shadow` defaults to true. In shadow, dorq's rows go to
+  `var/dorq-shadow/<as-of>.jsonl` and the queue is untouched; `--no-shadow` (or
+  the config) writes them.
+- **Export.** The bars stream from `COPY ... ORDER BY security_id, trade_date`
+  into dorq's stdin. The calendar, actions and security master (`nav_priced` by
+  the loader's own rule) go beside them as files. A nightly run reads 260
+  sessions of bars and reports from five sessions before the previous run's as-of
+  date, held in `ops.load_watermark` (source `dorq`). Every run passes `--as-of`,
+  the market's latest open session, so DQ304 judges a subset of securities
+  against the market and not the subset's newest bar.
+- **Ingest.** Rows go into a temp table and are written by one `INSERT ...
+  SELECT` with the two `NOT EXISTS` guards. The guards match a NULL `security_id`
+  as a value, for the cross-sectional rows. Two rows for one condition in a run
+  become one flag. Runs are recorded in `ops.ingestion_run`.
+- **`dq compare`.** It reports a shadow night's overlap with the SQL checks both
+  ways. The successor codes are: `outlier` → DQ2xx and DQ7xx; `gap` → DQ301 and
+  DQ303; `stale` → DQ304 and DQ501. It also reports precision against labels at
+  warn and at error, with dorq-eval's matching.
+- **`dq export-labels`.** It labels these as faults:
+  - deleted bars (any code);
+  - shifted histories (DQ206);
+  - rescaled eras (DQ202);
+  - security splits (DQ205);
+  - added splits (`context_gap`, DQ203).
+
+  Outlier and `dorq_*` flags closed by judgement become market facts; accepted
+  `dorq_*` flags become faults. `--restore` writes each repaired bar as it stood
+  (`ops.operator_override.detail.row`). Vendor corrections, action
+  deletes/re-dates and gaps are left out. To let these labels calibrate,
+  `context_gap` labels for a split now allow `explained_split` as well as
+  `unreported_split`, since the repair is to put the split on file.
+- **Recheck.** dorq re-runs over the full history of the securities with open
+  `dorq_*` flags, and closes each flag it no longer emits. It excludes
+  `NEVER_AUTO_RESOLVE` (now including `dorq_scale_shift`,
+  `dorq_split_without_jump` and `dorq_split_double_applied`) and the
+  cross-sectional `dorq_cohort_gap`, `dorq_cohort_move` and `dorq_market_day`.
+  When the dorq version differs, the note says so.
+- **Determinism across runs.** fafnir writes the calendar file to a fresh temp
+  directory each run, and `config_hash` hashed its path. The hash now covers a
+  reference calendar's *content*, so repeated runs give byte-identical output, as
+  §8 requires.
+- **`priors/fafnir.toml`** is the starting configuration, installed to
+  `share/dorq/priors/`. It sets the XNYS fallback calendar and a NAV-fund profile
+  that drops the volume, flat-bar and repeated-price checks (a money-market fund's
+  constant $1.00 is a fact). The priors stay at dorq's defaults until DR-0704's
+  fit on the labels.
+- **Runtime on a test cluster.** 2.3M bars take 4.6 s through `fafnir dq run`, of
+  which Postgres's sorted COPY is 3.1 s and dorq alone 1.4 s. The export, not
+  dorq, bounds a full run: about 5 minutes for 150M bars. A nightly window of
+  about 8M bars takes about 16 s.
 
 ### M8: Stretch
 - DQ801 cross-vendor disagreement (FMP vs Sharadar) for the parallel run.

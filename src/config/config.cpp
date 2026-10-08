@@ -813,6 +813,9 @@ std::string canonical(const Config& config) {
   copy.fail_on = Severity::kWarn;
   copy.input_format = InputFormat::kAuto;
   copy.source.clear();
+  if (!copy.calendar_digest.empty()) {
+    copy.calendar_file = "content:" + copy.calendar_digest;
+  }
   return to_toml(copy);
 }
 

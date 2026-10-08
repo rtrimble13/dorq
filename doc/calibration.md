@@ -64,7 +64,7 @@ same input, labels and configuration therefore give the same file.
 ## The output
 
 ```toml
-# Written by `dorq calibrate` (dorq 0.6.0). Include it from a
+# Written by `dorq calibrate` (dorq 0.7.0). Include it from a
 # config file: include = "priors.toml". See doc/calibration.md.
 #
 # labels: 499, of which 413 about price moves and 240 matching a scored move

@@ -252,3 +252,26 @@ TEST_CASE("config init writes a starter file that loads") {
   CHECK(run_in(dir.path(), {"config", "init", "--force"}).status == 0);
   CHECK(run_in(dir.path(), {"config", "show"}).status == 0);
 }
+
+TEST_CASE("config_hash covers a calendar file's content, not where it lives") {
+  const dorq::test::TempDir dir;
+  std::filesystem::create_directories(dir.path() / "a");
+  std::filesystem::create_directories(dir.path() / "b");
+  const std::string sessions = "trade_date\n2024-01-02\n2024-01-03\n2024-01-04\n2024-01-05\n";
+  dorq::test::write_file(dir.path() / "a" / "cal.csv", sessions);
+  dorq::test::write_file(dir.path() / "b" / "cal.csv", sessions);
+  const auto hash = [&dir](const char* sub) {
+    const std::string file = (dir.path() / sub / "cal.csv").string();
+    const Result r =
+        run_in(dir.path(),
+               {"--isolated", "--calendar-file", file.c_str(), "--format", "jsonl", "--exit-zero"},
+               kBadBars);
+    const auto at = r.out.find(R"("config_hash":")");
+    REQUIRE(at != std::string::npos);
+    return r.out.substr(at + 15, 16);
+  };
+  const std::string a = hash("a");
+  CHECK(hash("b") == a);  // the same sessions, another directory
+  dorq::test::write_file(dir.path() / "b" / "cal.csv", sessions + "2024-01-08\n");
+  CHECK(hash("b") != a);  // another session: other settings
+}
