@@ -130,6 +130,7 @@ including the `fafnir` format that maps onto `ops.data_quality_flag`.
 | [DQ106](doc/checks/DQ106.md) | precision-shift | computed (e.g. back-adjusted) prices among quoted ones |
 | [DQ107](doc/checks/DQ107.md) | zero-range-with-volume | a flat bar on the series' typical volume |
 | [DQ108](doc/checks/DQ108.md) | out-of-bounds | a value outside the configured bounds |
+| [DQ109](doc/checks/DQ109.md) | bad-context-row | a row of an `--actions` or `--meta` file that cannot be used: skipped, not fatal |
 | [DQ201](doc/checks/DQ201.md) | bad-print | a wrong bar, or block of up to five, that the series reverts from |
 | [DQ202](doc/checks/DQ202.md) | scale-shift | a level change by a power of ten (an era at the wrong scale) |
 | [DQ203](doc/checks/DQ203.md) | unreported-split | a level change by a split ratio, with volume moving inversely |
@@ -166,6 +167,12 @@ The exit codes are fixed. Scripts can rely on them.
 | 2 | Usage or configuration error; nothing was checked |
 | 3 | The input could not be read or parsed |
 
+Exit status 3 means a file could not be read as a whole: it is missing, empty,
+lacks a required column, or is not valid CSV or JSON. A row that cannot be used is
+a finding instead: reported (DQ104 in the input, DQ109 in a context file) and
+skipped, while the run checks everything else
+([ADR 0004](doc/adr/0004-bad-rows-are-findings.md)).
+
 ## Install
 
 ### Release binaries
@@ -179,14 +186,18 @@ archives, plus a `SHA256SUMS` file:
 | `dorq-<version>-macos-arm64.tar.gz` | macOS on Apple silicon |
 
 ```bash
-version=0.7.0
+version=0.8.0
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/dorq-${version}-linux-x86_64.tar.gz"
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
-sudo tar -xzf "dorq-${version}-linux-x86_64.tar.gz" -C /opt
+sudo tar --no-same-owner -xzf "dorq-${version}-linux-x86_64.tar.gz" -C /opt
 sudo ln -sfn "/opt/dorq-${version}-linux-x86_64" /opt/dorq     # /opt/dorq/bin/dorq
 /opt/dorq/bin/dorq --version
 ```
+
+Keep `--no-same-owner`. Run as root, tar otherwise gives the files the owner the
+archive records. From 0.8.0 that is root, but earlier archives recorded the build
+machine's uid, which on a host is whichever local account has it.
 
 Upgrading means unpacking the new version beside the old one and moving the
 symlink. Rolling back means moving it back.
@@ -200,7 +211,7 @@ Clang 18+).
 ```bash
 sudo apt-get install -y build-essential cmake ninja-build git
 git clone https://github.com/rtrimble13/dorq.git && cd dorq
-git checkout v0.7.0                        # or stay on main for the latest
+git checkout v0.8.0                        # or stay on main for the latest
 cmake --workflow --preset release          # configure, build, run the tests
 sudo cmake --install build/release --prefix /opt/dorq
 /opt/dorq/bin/dorq version                 # names the commit it was built from

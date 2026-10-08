@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "checks/check.hpp"
+#include "context/context.hpp"
 
 namespace dorq {
 
@@ -57,5 +58,17 @@ class OutOfBounds final : public Check {
   [[nodiscard]] const CheckInfo& info() const noexcept override;
   void run(const SeriesContext& context, std::vector<Violation>& out) const override;
 };
+
+// DQ109: a row of a context file (--actions, --meta) that cannot be used, and was
+// skipped. The engine reports Context::issues at the end of the run, each under
+// the series and the file it names, whether or not that series is in the input.
+class BadContextRow final : public Check {
+ public:
+  [[nodiscard]] const CheckInfo& info() const noexcept override;
+  void run(const SeriesContext& /*context*/, std::vector<Violation>& /*out*/) const override {}
+};
+
+// The DQ109 report of one skipped row or field.
+[[nodiscard]] Violation bad_context_row(const ContextIssue& issue);
 
 }  // namespace dorq

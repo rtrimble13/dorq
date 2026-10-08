@@ -100,6 +100,17 @@ TEST_CASE("a reference file overrides the built-in calendar within its span only
   CHECK(calendar.is_session(d("2023-12-29")));        // before the span: built-in XNYS
   CHECK(calendar.is_session(d("2024-01-09")));        // after the span: built-in XNYS
   CHECK(calendar.description() == "XNYS, with ref.csv for 2024-01-02..2024-01-08");
+
+  // The description reaches the output, so it names the file without its
+  // directory; an error, on stderr, keeps the path it was given.
+  std::istringstream in("date\n2024-01-02\n");
+  Calendar elsewhere;
+  elsewhere.apply_reference(dorq::read_reference_calendar(in, "/tmp/run-1/sessions.csv", ""));
+  CHECK(elsewhere.description() == "XNYS, with sessions.csv for 2024-01-02..2024-01-02");
+  std::istringstream bad("date\nsoon\n");
+  CHECK_THROWS_WITH_AS(
+      static_cast<void>(dorq::read_reference_calendar(bad, "/tmp/run-1/sessions.csv", "")),
+      "/tmp/run-1/sessions.csv line 2: \"soon\" is not a date", dorq::CalendarError);
 }
 
 TEST_CASE("reference files: a plain list, exchanges, and errors") {

@@ -69,7 +69,17 @@ jobs:
           set -euo pipefail
           name="dorq-${GITHUB_REF_NAME#v}-${{ matrix.platform }}"
           cmake --install build/release --prefix "staging/${name}"
-          tar -C staging -czf "${name}.tar.gz" "${name}"
+          # Owned by root in the archive, not by the runner's uid: tar run as root
+          # keeps the recorded owner, and on a host that uid is whichever local
+          # account has it, which could then replace the binary. GNU tar on Linux,
+          # bsdtar on macOS.
+          if [[ "${RUNNER_OS}" == "Linux" ]]; then
+            owner=(--owner=0 --group=0 --numeric-owner)
+          else
+            owner=(--uid 0 --gid 0)
+          fi
+          tar "${owner[@]}" -C staging -czf "${name}.tar.gz" "${name}"
+          tar -tvzf "${name}.tar.gz"
           if [[ "${RUNNER_OS}" == "Linux" ]]; then
             ldd "staging/${name}/bin/dorq"
           else

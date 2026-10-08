@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <istream>
 #include <optional>
 #include <set>
@@ -184,7 +185,10 @@ void Calendar::apply_reference(const ReferenceCalendar& reference) {
     }
   }
   rebuild_prefix();
-  description_ = std::string{to_string(kind_)} + ", with " + reference.source + " for " +
+  // The file by its name, not its path: the description reaches the output, and
+  // fafnir writes the file to a new temporary directory each run (ADR 0001).
+  description_ = std::string{to_string(kind_)} + ", with " +
+                 std::filesystem::path(reference.source).filename().string() + " for " +
                  reference.first.to_string() + ".." + reference.last.to_string();
 }
 

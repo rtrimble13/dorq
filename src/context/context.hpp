@@ -10,6 +10,7 @@
 
 #include "dorq/date.hpp"
 #include "dorq/series.hpp"
+#include "dorq/violation.hpp"
 
 namespace dorq {
 
@@ -64,12 +65,26 @@ struct MarketSeries {
   [[nodiscard]] std::optional<double> log_level_on(Date when) const;
 };
 
+// A row of a context file, or one field of it, that dorq could not use and
+// skipped. Reported as DQ109; the run goes on without it.
+struct ContextIssue {
+  std::string series;  // as the row names it; empty when it names none
+  // The file's name without its directory: fafnir writes its exports to a new
+  // temporary directory each run, and the output must not change with it.
+  std::string source;
+  std::uint32_t line = 0;
+  std::optional<Date> date;  // the row's ex-date, when it has a usable one
+  Severity severity = Severity::kError;
+  std::string message;  // "numerator \"0\" is not a positive number; the row is skipped"
+};
+
 struct Context {
   bool have_actions = false;
   bool have_meta = false;
   std::unordered_map<std::string, SeriesActions> actions;  // by series id
   std::unordered_map<std::string, SeriesMeta> meta;        // by series id
   std::optional<MarketSeries> market;
+  std::vector<ContextIssue> issues;  // in the order the files were read
 
   // A series' entries, by its id or else its label (a ticker); nullptr if none.
   [[nodiscard]] const SeriesActions* actions_for(const Series& series) const;
@@ -79,11 +94,17 @@ struct Context {
 // Read a CSV or TSV actions file into `context`: columns series, ex_date, type
 // (split or dividend), numerator, denominator, amount, under the names fafnir's
 // core.corporate_action uses as well (security_id, action_type, split_numerator,
-// split_denominator, dividend_amount). Throws InputError naming the file and line.
+// split_denominator, dividend_amount). A row that cannot be used (no date, an
+// unknown type, a split without its ratio) is skipped and added to
+// `context.issues`. Throws InputError, naming the file, only when the file cannot
+// be read as a whole: empty, no series, ex_date or type column, or an unterminated
+// quote.
 void read_actions(std::istream& in, const std::string& source, Context& context);
 
 // Read a CSV or TSV metadata file: series, asset_type, nav_priced, tick_size,
-// peer_group, exchange (or exchange_code). Throws InputError.
+// peer_group, exchange (or exchange_code). A series listed twice keeps its first
+// row; a nav_priced or tick_size that cannot be read is left unset. Each goes to
+// `context.issues`. Throws InputError when the file cannot be read as a whole.
 void read_meta(std::istream& in, const std::string& source, Context& context);
 
 // The market reference from a series' dates and closes (the first of each date;

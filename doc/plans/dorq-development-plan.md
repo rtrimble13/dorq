@@ -128,6 +128,8 @@ means a usage or config error. `3` means the input could not be read or parsed.
   each value had as written, for the precision check DQ106.
 - `--actions`: `series, ex_date, type(split|dividend), numerator, denominator, amount`.
 - `--meta`: `series, asset_type, nav_priced, tick_size, peer_group, exchange`.
+- A file that cannot be read as a whole is exit 3. A row that cannot be used is reported and skipped:
+  DQ104 in the input, DQ109 in a context file ([ADR 0004](../adr/0004-bad-rows-are-findings.md)).
 
 ### 2.3 Output
 
@@ -803,7 +805,10 @@ at most one series a universe, and the gate allows one.
 
 - **The context files** are CSV or TSV under dorq's column names or fafnir's
   (`core.corporate_action`, `core.security`), matched to series by id, or else by
-  label. A malformed file stops the run with exit 3.
+  label. A malformed file stops the run with exit 3. *(Corrected in v0.8.0: only a
+  file that cannot be read as a whole does. A row that cannot be used is DQ109,
+  skipped, and a dividend of zero or less is read and reported by DQ705; see M7
+  and ADR 0004.)*
 - **`explained_split`** has prior 0.9 (`[priors] explained_split`) where it
   applies: only to a bar with a split on file between it and the bar before. The
   plan's 0.10 "taken from market_move" assumed it applied to every candidate.
@@ -970,7 +975,18 @@ at precision 1.0. The real test is M7's fit on fafnir's labels (DR-0704).
 - **Determinism across runs.** fafnir writes the calendar file to a fresh temp
   directory each run, and `config_hash` hashed its path. The hash now covers a
   reference calendar's *content*, so repeated runs give byte-identical output, as
-  §8 requires.
+  §8 requires. *(Completed in v0.8.0: the path also reached the output through
+  the calendar's description, in the cross-sectional rows' `source`, DQ303's
+  `detail.calendar` and the DQ105 and DQ206 messages. The description now names the
+  file without its directory, and a test runs the same input from two directories.)*
+- **A bad context row no longer stops the run** (v0.8.0, ADR 0004). The first
+  run on the fafnir host stopped with exit 3 on dividends of zero, which
+  `core.corporate_action` allows and the actions reader refused. DQ705 now reports
+  a zero dividend (warn) or a negative one (error), and leaves both out of the
+  median it compares the others with. Any other row of `--actions` or `--meta`
+  that cannot be used is DQ109 `bad-context-row`, filed under the series it
+  names, and skipped; the run goes on. Only a file that cannot be read as a whole
+  is exit 3. The reference calendar and the labels file stay strict.
 - **`priors/fafnir.toml`** is the starting configuration, installed to
   `share/dorq/priors/`. It sets the XNYS fallback calendar and a NAV-fund profile
   that drops the volume, flat-bar and repeated-price checks (a money-market fund's

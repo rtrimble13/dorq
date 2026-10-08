@@ -174,18 +174,29 @@ std::optional<Violation> judge_dividend(const Series& s,
   constexpr std::size_t kMinHistory = 3;
   constexpr double kOrder = 10.0;
   const DividendAction& dividend = dividends[d];
-  const std::optional<std::size_t> before = close_before(s, dividend.ex_date);
-  if (!before) {
-    return std::nullopt;
-  }
-  const double prior_close = s.close[*before];
   const std::string amount = format_number(dividend.amount);
   const std::string ex = dividend.ex_date.to_string();
   Violation v;
   v.check = &info;
   v.date = dividend.ex_date;
   v.detail = {{"amount", dividend.amount}, {"ex_date", ex}};
-  if (dividend.amount >= prior_close) {
+  // An amount of zero or less needs no close to judge; the others do.
+  const std::optional<std::size_t> before = close_before(s, dividend.ex_date);
+  if (dividend.amount > 0.0 && !before) {
+    return std::nullopt;
+  }
+  const double prior_close = before ? s.close[*before] : 0.0;
+  if (dividend.amount < 0.0) {
+    v.severity = Severity::kError;
+    v.message = "dividend " + amount + " ex " + ex + " is negative";
+  } else if (dividend.amount == 0.0) {
+    // Harmless to an adjustment (its factor is 1), but no cash dividend pays
+    // nothing: the feed lost the amount, or the event is not cash.
+    v.severity = Severity::kWarn;
+    v.message = "dividend 0 ex " + ex +
+                " pays nothing: an amount missing from the feed, or a distribution that is not "
+                "cash";
+  } else if (dividend.amount >= prior_close) {
     v.severity = Severity::kError;
     v.line = s.line[*before];
     v.message = "dividend " + amount + " ex " + ex + " is at or above the close before it, " +
@@ -194,10 +205,11 @@ std::optional<Violation> judge_dividend(const Series& s,
   } else {
     // The others' amounts, and their yields on the close before each: a split
     // changes the one, a price error the other; a slip in the amount changes both.
+    // A zero or negative other is reported on its own and is no measure of these.
     std::vector<double> amounts;
     std::vector<double> yields;
     for (std::size_t o = 0; o < dividends.size(); ++o) {
-      if (o == d) {
+      if (o == d || !(dividends[o].amount > 0.0)) {
         continue;
       }
       amounts.push_back(dividends[o].amount);
