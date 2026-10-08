@@ -190,10 +190,14 @@ version=0.8.0
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/dorq-${version}-linux-x86_64.tar.gz"
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
-sudo tar -xzf "dorq-${version}-linux-x86_64.tar.gz" -C /opt
+sudo tar --no-same-owner -xzf "dorq-${version}-linux-x86_64.tar.gz" -C /opt
 sudo ln -sfn "/opt/dorq-${version}-linux-x86_64" /opt/dorq     # /opt/dorq/bin/dorq
 /opt/dorq/bin/dorq --version
 ```
+
+Keep `--no-same-owner`. Run as root, tar otherwise gives the files the owner the
+archive records. From 0.8.0 that is root, but earlier archives recorded the build
+machine's uid, which on a host is whichever local account has it.
 
 Upgrading means unpacking the new version beside the old one and moving the
 symlink. Rolling back means moving it back.
