@@ -179,11 +179,17 @@ void read_actions(std::istream& in, const std::string& source, Context& context)
           }
           actions.splits.push_back({*date, *numerator, *denominator, line});
         } else if (type == "dividend") {
-          const auto amount = positive(fields, amount_col, source, line, "amount");
-          if (!amount) {
+          // Any number: a zero or negative amount is DQ705's to report, not a
+          // malformed file. fafnir's core.corporate_action allows a zero.
+          const std::string_view text = cell(fields, amount_col);
+          const ParsedNumber amount = parse_number(text);
+          if (amount.status == ParsedNumber::Status::kMissing) {
             fail(source, line, "a dividend needs an amount");
           }
-          actions.dividends.push_back({*date, *amount, line});
+          if (amount.status != ParsedNumber::Status::kOk) {
+            fail(source, line, "amount \"" + std::string{text} + "\" is not a number");
+          }
+          actions.dividends.push_back({*date, amount.value, line});
         } else {
           fail(source, line,
                "type \"" + std::string{cell(fields, type_col)} + "\" is not split or dividend");

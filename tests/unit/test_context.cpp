@@ -153,6 +153,17 @@ TEST_CASE("actions: fafnir's columns or dorq's, sorted, and errors that name the
   CHECK(a.dividends[0].amount == 0.25);
   CHECK(context.actions.at("B").dividends.size() == 1);
 
+  // A zero or negative amount is read, for DQ705 to report: fafnir's
+  // core.corporate_action allows a zero, written at the column's scale.
+  dorq::Context odd;
+  std::istringstream zero(std::string{kActionsHeader} +
+                          "A,2020-03-02,dividend,,,0.000000\n"
+                          "A,2020-06-01,dividend,,,-0.25\n");
+  dorq::read_actions(zero, "actions.csv", odd);
+  REQUIRE(odd.actions.at("A").dividends.size() == 2);
+  CHECK(odd.actions.at("A").dividends[0].amount == 0.0);
+  CHECK(odd.actions.at("A").dividends[1].amount == -0.25);
+
   dorq::Context mine;
   std::istringstream tsv(
       "series\tex_date\ttype\tnumerator\tdenominator\tamount\nX\t2020-01-02\tsplit\t3\t2\t\n");
@@ -174,8 +185,10 @@ TEST_CASE("actions: fafnir's columns or dorq's, sorted, and errors that name the
   CHECK(contains(error(std::string{kActionsHeader} + "A,2020-01-02,split,2,,\n"),
                  "a split needs a numerator and a denominator"));
   CHECK(contains(error(std::string{kActionsHeader} + "A,soon,split,2,1,\n"), "is not a date"));
-  CHECK(contains(error(std::string{kActionsHeader} + "A,2020-01-02,dividend,,,-1\n"),
-                 "is not a positive number"));
+  CHECK(error(std::string{kActionsHeader} + "A,2020-01-02,dividend,,,x\n") ==
+        "a.csv line 2: amount \"x\" is not a number");
+  CHECK(error(std::string{kActionsHeader} + "A,2020-01-02,dividend,,,\n") ==
+        "a.csv line 2: a dividend needs an amount");
   CHECK(contains(error("series,date\nA,2020-01-02\n"), "needs series, ex_date and type"));
   CHECK(error("") == "a.csv is empty");
 }
@@ -354,6 +367,38 @@ TEST_CASE("DQ705: a dividend above the price, or a hundred times its others") {
   CHECK(count_matching(r.out, R"("code":"DQ705")") == 2);
   CHECK(contains(r.out, "is at or above the close before it"));
   CHECK(contains(r.out, "×100 the series' usual 0.25"));
+}
+
+TEST_CASE("DQ705: a zero or negative dividend is reported, and the run goes on") {
+  std::vector<Bar> bars = stock(400, 50.0, 0.015, 5);
+  bars[300].close *= 3.0;  // a bad print, for the rest of the run to find
+  bars[300].high = bars[300].close;
+  std::string actions = kActionsHeader;
+  // Six zeros among the usual 0.25: a zero is no measure of the others, so the
+  // slip is still ×100 the usual 0.25, not ×inf a median of 0.
+  for (int i = 30; i < 400; i += 63) {
+    actions += "A," + day(i) + ",dividend,,," + (i == 156 ? "25.000000" : "0.250000") + "\n";
+    actions += "A," + day(i + 5) + ",dividend,,,0.000000\n";
+  }
+  actions += "A,2019-06-03,dividend,,,0\n";  // before the bars: no close needed
+  actions += "A," + day(40) + ",dividend,,,-0.25\n";
+  const Result r = check(bars_csv("A", bars), {{"a.csv", actions}},
+                         {"--isolated", "--format", "jsonl", "--actions", "a.csv"});
+  CAPTURE(r.out);
+  CHECK(r.status == 1);
+  CHECK(count_matching(r.out, "pays nothing") == 7);
+  CHECK(
+      count_matching(
+          r.out,
+          R"("severity":"warn","p_error":1,"classification":"data_error","message":"dividend 0 ex)") ==
+      7);
+  CHECK(contains(r.out, R"("date":"2019-06-03")"));
+  CHECK(contains(
+      r.out,
+      R"("severity":"error","p_error":1,"classification":"data_error","message":"dividend -0.25 ex )" +
+          day(40) + " is negative\""));
+  CHECK(contains(r.out, "×100 the series' usual 0.25 (the median of 5 others)"));
+  CHECK(contains(r.out, R"("date":")" + day(300) + R"(","line":302,"code":"DQ2)"));
 }
 
 // ---------------------------------------------------------------------------

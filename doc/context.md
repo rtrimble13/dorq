@@ -51,7 +51,8 @@ With `--actions`:
   a split's ratio across its ex-date is not a DQ403 move.
 - **Every split on file is judged against the bars** (DQ701–DQ704).
 - **Dividends are checked** against the price and the series' other dividends
-  (DQ705).
+  (DQ705). A zero or negative amount is read and reported there, not refused:
+  fafnir's `core.corporate_action` allows a zero.
 - A split the bars show but the file does not have is still DQ203.
 
 ## Metadata: `--meta`
