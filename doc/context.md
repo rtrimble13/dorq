@@ -11,9 +11,15 @@ dorq judges a series by its own bars. Three optional files add context:
 fafnir passes exports of `core.corporate_action` and `core.security`, and dorq
 accepts their column names as they are. Each file is CSV or TSV: the delimiter is
 whichever of tab and comma the header line has more of. Column names are matched
-ignoring case, spaces, `_` and `-`. A file that cannot be read, or a row that makes
-no sense (a split with no ratio, a dividend with no amount, an unknown action
-type), stops the run with exit status 3, naming the file and line.
+ignoring case, spaces, `_` and `-`.
+
+A file that cannot be read as a whole stops the run with exit status 3, naming
+the file: one that cannot be opened, is empty, lacks a required column, or has an
+unterminated quote. A row that makes no sense (a split with no ratio, a dividend
+with no amount, an unknown action type, a date that is not one) is skipped and
+reported as DQ109, and the run goes on: one bad row must not cost every other
+check ([ADR 0004](adr/0004-bad-rows-are-findings.md)). In a metadata file, a field
+that cannot be read is left unset, and a series listed twice keeps its first row.
 
 Series are matched by id: the series column of the bars. When a series has no row
 under its id, its label (a ticker, from `--columns label=...`) is tried.

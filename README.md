@@ -130,6 +130,7 @@ including the `fafnir` format that maps onto `ops.data_quality_flag`.
 | [DQ106](doc/checks/DQ106.md) | precision-shift | computed (e.g. back-adjusted) prices among quoted ones |
 | [DQ107](doc/checks/DQ107.md) | zero-range-with-volume | a flat bar on the series' typical volume |
 | [DQ108](doc/checks/DQ108.md) | out-of-bounds | a value outside the configured bounds |
+| [DQ109](doc/checks/DQ109.md) | bad-context-row | a row of an `--actions` or `--meta` file that cannot be used: skipped, not fatal |
 | [DQ201](doc/checks/DQ201.md) | bad-print | a wrong bar, or block of up to five, that the series reverts from |
 | [DQ202](doc/checks/DQ202.md) | scale-shift | a level change by a power of ten (an era at the wrong scale) |
 | [DQ203](doc/checks/DQ203.md) | unreported-split | a level change by a split ratio, with volume moving inversely |
@@ -165,6 +166,12 @@ The exit codes are fixed. Scripts can rely on them.
 | 1 | Ran, and found violations at or above `--fail-on` |
 | 2 | Usage or configuration error; nothing was checked |
 | 3 | The input could not be read or parsed |
+
+Exit status 3 means a file could not be read as a whole: it is missing, empty,
+lacks a required column, or is not valid CSV or JSON. A row that cannot be used is
+a finding instead: reported (DQ104 in the input, DQ109 in a context file) and
+skipped, while the run checks everything else
+([ADR 0004](doc/adr/0004-bad-rows-are-findings.md)).
 
 ## Install
 

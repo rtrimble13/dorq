@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <span>
 #include <sstream>
@@ -78,19 +79,30 @@ std::string_view cell(Row fields, int col) {
 constexpr std::array<std::string_view, 5> kSeries = {"series", "securityid", "id", "symbol",
                                                      "ticker"};
 
-// A positive number, or nullopt for an empty cell; anything else fails.
-std::optional<double> positive(Row fields, int col, const std::string& source, std::uint32_t line,
-                               std::string_view what) {
+// A field that should hold a positive number: its value (nullopt for an empty
+// cell), or else what is wrong with it.
+struct Positive {
+  std::optional<double> value;
+  std::string problem;  // empty when the field is usable
+};
+
+Positive positive(Row fields, int col, std::string_view what) {
   const std::string_view text = cell(fields, col);
   const ParsedNumber number = parse_number(text);
   if (number.status == ParsedNumber::Status::kMissing) {
-    return std::nullopt;
+    return {};
   }
   if (number.status != ParsedNumber::Status::kOk || !(number.value > 0.0)) {
-    fail(source, line,
-         std::string{what} + " \"" + std::string{text} + "\" is not a positive number");
+    return {
+        .value = std::nullopt,
+        .problem = std::string{what} + " \"" + std::string{text} + "\" is not a positive number"};
   }
-  return number.value;
+  return {.value = number.value, .problem = {}};
+}
+
+// What a ContextIssue names its file by (see there).
+std::string file_name(const std::string& source) {
+  return std::filesystem::path(source).filename().string();
 }
 
 }  // namespace
@@ -145,6 +157,7 @@ void read_actions(std::istream& in, const std::string& source, Context& context)
   int denominator_col = -1;
   int amount_col = -1;
   context.have_actions = true;
+  const std::string name = file_name(source);
   read_table(
       in, source,
       [&](const std::vector<std::string>& names, std::uint32_t line) {
@@ -161,38 +174,53 @@ void read_actions(std::istream& in, const std::string& source, Context& context)
         }
       },
       [&](Row fields, std::uint32_t line) {
+        // A row that cannot be used is skipped and reported (DQ109): one bad row
+        // must not cost the run every other check.
         const std::string id{cell(fields, series_col)};
+        const std::string_view date_text = cell(fields, date_col);
+        const auto date = parse_date(date_text);
+        const auto skip = [&](const std::string& what) {
+          context.issues.push_back({.series = id,
+                                    .source = name,
+                                    .line = line,
+                                    .date = date,
+                                    .severity = Severity::kError,
+                                    .message = what + "; the row is skipped"});
+        };
         if (id.empty()) {
-          fail(source, line, "the series is empty");
+          skip("the series is empty");
+          return;
         }
-        const auto date = parse_date(cell(fields, date_col));
         if (!date) {
-          fail(source, line, "\"" + std::string{cell(fields, date_col)} + "\" is not a date");
+          skip("ex_date \"" + std::string{date_text} + "\" is not a date");
+          return;
         }
         const std::string type = normalize_name(cell(fields, type_col));
-        SeriesActions& actions = context.actions[id];
         if (type == "split") {
-          const auto numerator = positive(fields, numerator_col, source, line, "numerator");
-          const auto denominator = positive(fields, denominator_col, source, line, "denominator");
-          if (!numerator || !denominator) {
-            fail(source, line, "a split needs a numerator and a denominator");
+          const Positive numerator = positive(fields, numerator_col, "numerator");
+          const Positive denominator = positive(fields, denominator_col, "denominator");
+          if (!numerator.problem.empty() || !denominator.problem.empty()) {
+            skip(numerator.problem.empty() ? denominator.problem : numerator.problem);
+          } else if (!numerator.value || !denominator.value) {
+            skip("a split needs a numerator and a denominator");
+          } else {
+            context.actions[id].splits.push_back(
+                {*date, *numerator.value, *denominator.value, line});
           }
-          actions.splits.push_back({*date, *numerator, *denominator, line});
         } else if (type == "dividend") {
-          // Any number: a zero or negative amount is DQ705's to report, not a
-          // malformed file. fafnir's core.corporate_action allows a zero.
+          // Any number: a zero or negative amount is DQ705's to report, not an
+          // unusable row. fafnir's core.corporate_action allows a zero.
           const std::string_view text = cell(fields, amount_col);
           const ParsedNumber amount = parse_number(text);
           if (amount.status == ParsedNumber::Status::kMissing) {
-            fail(source, line, "a dividend needs an amount");
+            skip("a dividend needs an amount");
+          } else if (amount.status != ParsedNumber::Status::kOk) {
+            skip("amount \"" + std::string{text} + "\" is not a number");
+          } else {
+            context.actions[id].dividends.push_back({*date, amount.value, line});
           }
-          if (amount.status != ParsedNumber::Status::kOk) {
-            fail(source, line, "amount \"" + std::string{text} + "\" is not a number");
-          }
-          actions.dividends.push_back({*date, amount.value, line});
         } else {
-          fail(source, line,
-               "type \"" + std::string{cell(fields, type_col)} + "\" is not split or dividend");
+          skip("type \"" + std::string{cell(fields, type_col)} + "\" is not split or dividend");
         }
       });
   for (auto& [id, actions] : context.actions) {
@@ -218,6 +246,7 @@ void read_meta(std::istream& in, const std::string& source, Context& context) {
   int peer_col = -1;
   int exchange_col = -1;
   context.have_meta = true;
+  const std::string name = file_name(source);
   read_table(
       in, source,
       [&](const std::vector<std::string>& names, std::uint32_t line) {
@@ -232,23 +261,42 @@ void read_meta(std::istream& in, const std::string& source, Context& context) {
         }
       },
       [&](Row fields, std::uint32_t line) {
+        // As for actions, what cannot be used is reported (DQ109) and the run
+        // goes on: at warn, since a series loses no more than a profile match
+        // or its tick.
         const std::string id{cell(fields, series_col)};
+        const auto note = [&](const std::string& what) {
+          context.issues.push_back({.series = id,
+                                    .source = name,
+                                    .line = line,
+                                    .date = std::nullopt,
+                                    .severity = Severity::kWarn,
+                                    .message = what});
+        };
         if (id.empty()) {
-          fail(source, line, "the series is empty");
+          note("the series is empty; the row is skipped");
+          return;
         }
         if (context.meta.contains(id)) {
-          fail(source, line, "series \"" + id + "\" appears twice");
+          note("series \"" + id + "\" appears twice; the row is skipped, and the first kept");
+          return;
         }
         SeriesMeta meta;
         meta.asset_type = normalize_name(cell(fields, asset_col));
         if (const std::string_view nav = cell(fields, nav_col); !nav.empty()) {
           bool value = false;
-          if (!parse_bool(nav, value)) {
-            fail(source, line, "nav_priced \"" + std::string{nav} + "\" is not true or false");
+          if (parse_bool(nav, value)) {
+            meta.nav_priced = value;
+          } else {
+            note("nav_priced \"" + std::string{nav} + "\" is not true or false; it is left unset");
           }
-          meta.nav_priced = value;
         }
-        meta.tick_size = positive(fields, tick_col, source, line, "tick_size");
+        const Positive tick = positive(fields, tick_col, "tick_size");
+        if (tick.problem.empty()) {
+          meta.tick_size = tick.value;
+        } else {
+          note(tick.problem + "; it is left unset");
+        }
         meta.peer_group = std::string{cell(fields, peer_col)};
         meta.exchange = std::string{cell(fields, exchange_col)};
         context.meta.emplace(id, std::move(meta));

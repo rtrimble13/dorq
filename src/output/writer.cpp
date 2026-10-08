@@ -513,7 +513,7 @@ std::string statistics_text(const Summary& summary) {
 // The report owns the result; the writer only reads it, so nothing is moved.
 // NOLINTNEXTLINE(cppcoreguidelines-rvalue-reference-param-not-moved)
 void Report::series_done(SeriesResult&& result) {
-  if (!result.cross_sectional) {
+  if (!result.cross_sectional && !result.from_context) {
     ++summary_.series;
     summary_.rows += result.rows;
   }

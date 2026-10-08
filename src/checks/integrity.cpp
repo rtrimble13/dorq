@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "dorq/number.hpp"
@@ -497,6 +498,39 @@ void OutOfBounds::run(const SeriesContext& context, std::vector<Violation>& out)
     v.detail = {{std::string{field}, value}, {"low", bounds->low}, {"high", bounds->high}};
     out.push_back(std::move(v));
   }
+}
+
+// ---------------------------------------------------------------------------
+// DQ109 bad-context-row
+
+const CheckInfo& BadContextRow::info() const noexcept {
+  static const CheckInfo kInfo{
+      .code = "DQ109",
+      .name = "bad-context-row",
+      .summary = "a row of an --actions or --meta file that cannot be used: skipped, not fatal",
+      .default_severity = Severity::kError,
+      .applies = Applies::kAny,
+      .cross_sectional = true,
+  };
+  return kInfo;
+}
+
+Violation bad_context_row(const ContextIssue& issue) {
+  static const BadContextRow kCheck;
+  Violation v;
+  v.check = &kCheck.info();
+  v.severity = issue.severity;
+  v.date = issue.date;
+  v.line = issue.line;
+  v.message = issue.source + ": " + issue.message;
+  v.detail = {{"file", issue.source}};
+  SuggestedAction action;
+  action.kind = "fix_context_row";
+  action.fields = {{"file", issue.source}, {"line", std::int64_t{issue.line}}};
+  action.text = "fix line " + std::to_string(issue.line) + " of " + issue.source +
+                ", or the table it was exported from";
+  v.suggested_action = std::move(action);
+  return v;
 }
 
 }  // namespace dorq

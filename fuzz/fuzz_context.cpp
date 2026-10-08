@@ -1,8 +1,9 @@
 // libFuzzer target: arbitrary bytes as an actions file, a metadata file or a
 // labels file (the first byte chooses). A bad file must be an InputError and
 // nothing else. The actions and metadata of a good one then go through the price
-// model and every check, on a fixed series; the labels' removed dates go through
-// --restore. Nothing may crash or trip a sanitizer.
+// model and every check, on a fixed series, and its skipped rows through DQ109;
+// the labels' removed dates go through --restore. Nothing may crash or trip a
+// sanitizer.
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -12,6 +13,7 @@
 
 #include "calibrate/labels.hpp"
 #include "checks/check.hpp"
+#include "checks/integrity.hpp"
 #include "config/config.hpp"
 #include "context/context.hpp"
 #include "io/input_error.hpp"
@@ -104,6 +106,9 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
                                            .actions = series_actions,
                                            .meta = meta};
   std::vector<dorq::Violation> found;
+  for (const dorq::ContextIssue& issue : context.issues) {
+    found.push_back(dorq::bad_context_row(issue));
+  }
   for (const dorq::Check* check : dorq::all_checks()) {
     if (!check->info().cross_sectional && check->info().code[2] != '3') {
       check->run(series_context, found);
