@@ -66,7 +66,8 @@ class Calendar {
   // Sessions in [from, to] by weekday (0 = Monday).
   [[nodiscard]] std::array<int, 7> sessions_by_weekday(Date from, Date to) const noexcept;
 
-  // "XNYS", or "XNYS, with sessions.csv for 1990-01-02..2035-12-31".
+  // "XNYS", or "XNYS, with sessions.csv for 1990-01-02..2035-12-31": a reference
+  // file by its name, without its directory, so the output does not depend on it.
   [[nodiscard]] const std::string& description() const noexcept { return description_; }
   [[nodiscard]] CalendarKind kind() const noexcept { return kind_; }
 

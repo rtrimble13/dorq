@@ -13,6 +13,7 @@
 
 #include "checks/coverage_model.hpp"
 #include "checks/cross.hpp"
+#include "checks/integrity.hpp"
 #include "checks/price.hpp"
 #include "dorq/frequency.hpp"
 #include "price/model.hpp"
@@ -62,6 +63,8 @@ Engine::Engine(const Config& config, EngineOptions options, ResultSink& sink)
                enables(selection, "DQ601");
   }
   market_days_ = context_.market.has_value() && enables(selections.front(), "DQ602");
+  // A row of a context file belongs to no series' profile: the global selection.
+  context_issues_ = !context_.issues.empty() && enables(selections.front(), "DQ109");
   if (holding_) {
     cross_ = std::make_unique<CrossSection>(calendar_, config.cohort, config.severity,
                                             config.coverage, options.as_of);
@@ -366,6 +369,17 @@ void Engine::finish() {
       filter_and_send(std::move(result));
     }
     held_.clear();
+  }
+  if (context_issues_) {
+    for (const ContextIssue& issue : context_.issues) {
+      SeriesResult result;
+      result.sequence = next_sequence_;
+      result.id = issue.series;
+      result.source = issue.source;
+      result.from_context = true;
+      result.violations.push_back(bad_context_row(issue));
+      filter_and_send(std::move(result));
+    }
   }
   if (market_days_ && context_.market) {
     std::vector<Violation> days = market_days(context_.market.value(), calendar_);

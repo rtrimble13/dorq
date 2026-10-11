@@ -35,6 +35,9 @@ struct SeriesResult {
   // The DQ303 violations, which belong to no one series, arrive last as a result
   // of their own with this set.
   bool cross_sectional = false;
+  // A DQ109 report of a context file's row: `id` is the series the row names and
+  // `source` the file. Not a series of the input, so not counted as one.
+  bool from_context = false;
 };
 
 // Receives results in input order, on the thread that calls Engine::submit() and
@@ -65,7 +68,8 @@ struct EngineOptions {
 //
 // The cross-sectional checks (DQ303, DQ304) can only be judged once every series is
 // in. While either is enabled, results are held until finish() and handed on then,
-// still in input order, followed by the DQ303 result.
+// still in input order, followed by the DQ109 reports of the context files' rows
+// and then the DQ303 result.
 class Engine {
  public:
   Engine(const Config& config, EngineOptions options, ResultSink& sink);
@@ -124,7 +128,8 @@ class Engine {
 
   // Cross-sectional checks.
   bool holding_ = false;
-  bool market_days_ = false;  // DQ602 enabled, and a market given
+  bool market_days_ = false;     // DQ602 enabled, and a market given
+  bool context_issues_ = false;  // DQ109 enabled, and a context file has a row skipped
   std::unique_ptr<CrossSection> cross_;
   std::vector<SeriesResult> held_;
 

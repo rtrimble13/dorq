@@ -440,6 +440,12 @@ int run_calibrate(const CalibrateCommand& command, CLI::App& cmd, Io& io) {
   validate_selection(config);
   const Calendar calendar = load_calendar(config, io.cwd);
   const Context context = load_context(options, io.cwd);
+  if (!context.issues.empty()) {
+    // check reports each as DQ109; calibrate reports no violations.
+    io.err << "dorq: warning: " << context.issues.size()
+           << " row(s) of the context files could not be used and were skipped; "
+              "dorq check --select DQ109 lists them\n";
+  }
   const std::vector<Label> labels = load_labels(options.labels, io.cwd);
   const Restorer restorer = load_restorer(options, labels, io.cwd);
 

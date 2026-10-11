@@ -133,7 +133,7 @@ const char* const kActionsHeader =
 // ---------------------------------------------------------------------------
 // Readers
 
-TEST_CASE("actions: fafnir's columns or dorq's, sorted, and errors that name the line") {
+TEST_CASE("actions: fafnir's columns or dorq's, sorted; a bad row skipped, a bad file an error") {
   dorq::Context context;
   std::istringstream fafnir(std::string{kActionsHeader} +
                             "A,2021-06-01,split,2,1,\n"
@@ -153,12 +153,60 @@ TEST_CASE("actions: fafnir's columns or dorq's, sorted, and errors that name the
   CHECK(a.dividends[0].amount == 0.25);
   CHECK(context.actions.at("B").dividends.size() == 1);
 
+  // A zero or negative amount is read, for DQ705 to report: fafnir's
+  // core.corporate_action allows a zero, written at the column's scale.
+  dorq::Context odd;
+  std::istringstream zero(std::string{kActionsHeader} +
+                          "A,2020-03-02,dividend,,,0.000000\n"
+                          "A,2020-06-01,dividend,,,-0.25\n");
+  dorq::read_actions(zero, "actions.csv", odd);
+  REQUIRE(odd.actions.at("A").dividends.size() == 2);
+  CHECK(odd.actions.at("A").dividends[0].amount == 0.0);
+  CHECK(odd.actions.at("A").dividends[1].amount == -0.25);
+
   dorq::Context mine;
   std::istringstream tsv(
       "series\tex_date\ttype\tnumerator\tdenominator\tamount\nX\t2020-01-02\tsplit\t3\t2\t\n");
   dorq::read_actions(tsv, "a.tsv", mine);
   CHECK(mine.actions.at("X").splits.at(0).ratio_text() == "3:2");
 
+  // A row that cannot be used is skipped and kept as an issue (DQ109), under the
+  // file's name without its directory; the rows around it are read.
+  dorq::Context bad;
+  std::istringstream rows(std::string{kActionsHeader} +
+                          "A,2020-01-02,spinoff,,,\n"
+                          "A,2020-01-03,split,2,,\n"
+                          "A,2020-01-06,split,0,1,\n"
+                          "B,soon,split,2,1,\n"
+                          "B,2020-01-07,dividend,,,x\n"
+                          "B,2020-01-08,dividend,,,\n"
+                          ",2020-01-09,dividend,,,0.5\n"
+                          "A,2020-01-10,split,2,1,\n");
+  dorq::read_actions(rows, "/tmp/run-1234/a.csv", bad);
+  REQUIRE(bad.actions.contains("A"));
+  CHECK(bad.actions.at("A").splits.size() == 1);
+  CHECK_FALSE(bad.actions.contains("B"));
+  CHECK_FALSE(bad.actions.contains(""));
+  REQUIRE(bad.issues.size() == 7);
+  const auto issue = [&bad](std::size_t i) {
+    const dorq::ContextIssue& e = bad.issues.at(i);
+    return e.series + " " + e.source + ":" + std::to_string(e.line) + " " +
+           (e.date ? e.date->to_string() : std::string{"-"}) + " " +
+           std::string{dorq::to_string(e.severity)} + " " + e.message;
+  };
+  CHECK(issue(0) ==
+        "A a.csv:2 2020-01-02 error type \"spinoff\" is not split or dividend; the row is skipped");
+  CHECK(issue(1) ==
+        "A a.csv:3 2020-01-03 error a split needs a numerator and a denominator; the row is "
+        "skipped");
+  CHECK(issue(2) ==
+        "A a.csv:4 2020-01-06 error numerator \"0\" is not a positive number; the row is skipped");
+  CHECK(issue(3) == "B a.csv:5 - error ex_date \"soon\" is not a date; the row is skipped");
+  CHECK(issue(4) == "B a.csv:6 2020-01-07 error amount \"x\" is not a number; the row is skipped");
+  CHECK(issue(5) == "B a.csv:7 2020-01-08 error a dividend needs an amount; the row is skipped");
+  CHECK(issue(6) == " a.csv:8 2020-01-09 error the series is empty; the row is skipped");
+
+  // Only a file that cannot be read as a whole is an error.
   const auto error = [](const std::string& text) {
     dorq::Context c;
     std::istringstream in(text);
@@ -169,15 +217,10 @@ TEST_CASE("actions: fafnir's columns or dorq's, sorted, and errors that name the
     }
     return std::string{};
   };
-  CHECK(error(std::string{kActionsHeader} + "A,2020-01-02,spinoff,,,\n") ==
-        "a.csv line 2: type \"spinoff\" is not split or dividend");
-  CHECK(contains(error(std::string{kActionsHeader} + "A,2020-01-02,split,2,,\n"),
-                 "a split needs a numerator and a denominator"));
-  CHECK(contains(error(std::string{kActionsHeader} + "A,soon,split,2,1,\n"), "is not a date"));
-  CHECK(contains(error(std::string{kActionsHeader} + "A,2020-01-02,dividend,,,-1\n"),
-                 "is not a positive number"));
   CHECK(contains(error("series,date\nA,2020-01-02\n"), "needs series, ex_date and type"));
   CHECK(error("") == "a.csv is empty");
+  CHECK(contains(error(std::string{kActionsHeader} + "A,2020-01-02,\"split,2,1,\n"),
+                 "a.csv: unterminated quoted field"));
 }
 
 TEST_CASE("metadata: fields, by id or label, and duplicates") {
@@ -203,10 +246,32 @@ TEST_CASE("metadata: fields, by id or label, and duplicates") {
   CHECK(context.meta_for(by_label)->nav_priced == true);
   CHECK_FALSE(context.meta_for(by_label)->tick_size.has_value());
 
+  // A series listed twice keeps its first row; a field that cannot be read is
+  // left unset. Each is an issue (DQ109) at warn.
   dorq::Context twice;
-  std::istringstream dup("series,asset_type\nA,etf\nA,fund\n");
-  CHECK_THROWS_WITH_AS(dorq::read_meta(dup, "m.csv", twice),
-                       "m.csv line 3: series \"A\" appears twice", dorq::InputError);
+  std::istringstream dup(
+      "series,asset_type,nav_priced,tick_size\nA,etf,maybe,0.01\nA,fund,true,\nB,etf,,0\n,etf,,\n");
+  dorq::read_meta(dup, "m.csv", twice);
+  REQUIRE(twice.meta.contains("A"));
+  CHECK(twice.meta.at("A").asset_type == "etf");
+  CHECK_FALSE(twice.meta.at("A").nav_priced.has_value());
+  CHECK(twice.meta.at("A").tick_size == 0.01);
+  REQUIRE(twice.meta.contains("B"));
+  CHECK(twice.meta.at("B").asset_type == "etf");
+  CHECK_FALSE(twice.meta.at("B").tick_size.has_value());
+  REQUIRE(twice.issues.size() == 4);
+  for (const dorq::ContextIssue& e : twice.issues) {
+    CHECK(e.severity == dorq::Severity::kWarn);
+    CHECK_FALSE(e.date.has_value());
+  }
+  CHECK(twice.issues[0].message == "nav_priced \"maybe\" is not true or false; it is left unset");
+  CHECK(twice.issues[1].line == 3);
+  CHECK(twice.issues[1].message ==
+        "series \"A\" appears twice; the row is skipped, and the first kept");
+  CHECK(twice.issues[2].series == "B");
+  CHECK(twice.issues[2].message == "tick_size \"0\" is not a positive number; it is left unset");
+  CHECK(twice.issues[3].message == "the series is empty; the row is skipped");
+  CHECK_FALSE(twice.meta.contains(""));
 }
 
 TEST_CASE("profiles match on metadata, and never without it") {
@@ -247,10 +312,74 @@ TEST_CASE("context files that cannot be used are input errors") {
   Result result = check(csv, {}, {"--isolated", "--actions", "nope.csv"});
   CHECK(result.status == 3);
   CHECK(contains(result.err, "nope.csv: cannot open the actions file"));
+  result = check(csv, {{"a.csv", "security_id,ex_date\nA,2020-01-02\n"}},
+                 {"--isolated", "--actions", "a.csv"});
+  CHECK(result.status == 3);
+  CHECK(contains(result.err, "a.csv line 1: an actions file needs series, ex_date and type"));
   result = check(csv, {{"m.csv", "series,date,close\nA,2020-01-02,1\nB,2020-01-02,1\n"}},
                  {"--isolated", "--market", "m.csv"});
   CHECK(result.status == 3);
   CHECK(contains(result.err, "the market file must hold one series (it holds 2)"));
+}
+
+TEST_CASE("DQ109: a context row that cannot be used is reported, and the run goes on") {
+  std::vector<Bar> b = stock(300, 40.0, 0.015, 3);
+  b[200].close *= 3.0;  // a bad print, for the rest of the run to find
+  b[200].high = b[200].close;
+  const std::string csv = bars_csv("A", stock(300, 50.0, 0.015, 1)) + bars_csv("B", b, false);
+  std::string actions = kActionsHeader;
+  actions += "A," + day(100) + ",split,0,1,\n";       // line 2
+  actions += "A,2020-02-30,dividend,,,0.25\n";        // line 3
+  actions += "Z," + day(50) + ",split,2,,\n";         // line 4, a series not in the bars
+  actions += "A," + day(150) + ",dividend,,,0.25\n";  // line 5, usable
+  const std::string meta = "series,nav_priced\nB,sometimes\n";
+  const std::vector<std::pair<std::string, std::string>> files = {{"a.csv", actions},
+                                                                  {"m.csv", meta}};
+
+  Result r = check(csv, files,
+                   {"--isolated", "--format", "json", "--actions", "a.csv", "--meta", "m.csv"});
+  CAPTURE(r.out);
+  CAPTURE(r.err);
+  CHECK(r.status == 1);
+  CHECK(r.err.empty());
+  CHECK(count_matching(r.out, R"("code":"DQ109")") == 4);
+  CHECK(contains(r.out,
+                 R"({"series":"A","label":null,"source":"a.csv","date":")" + day(100) +
+                     R"(","line":2,"code":"DQ109","check":"bad-context-row","severity":"error")"));
+  CHECK(contains(
+      r.out, R"("message":"a.csv: numerator \"0\" is not a positive number; the row is skipped")"));
+  CHECK(contains(
+      r.out, R"({"series":"A","label":null,"source":"a.csv","date":null,"line":3,"code":"DQ109")"));
+  CHECK(contains(r.out, R"({"series":"Z","label":null,"source":"a.csv","date":")" + day(50) +
+                            R"(","line":4,"code":"DQ109")"));
+  CHECK(contains(
+      r.out,
+      R"({"series":"B","label":null,"source":"m.csv","date":null,"line":2,"code":"DQ109","check":"bad-context-row","severity":"warn")"));
+  CHECK(
+      contains(r.out, R"("suggested_action":{"kind":"fix_context_row","file":"a.csv","line":2})"));
+  // The bars are still checked, and the rows are not counted as series.
+  CHECK(contains(r.out, R"({"series":"B","label":null,"source":"<stdin>","date":")" + day(200)));
+  CHECK(contains(r.out, R"("summary":{"inputs":1,"series":2,"rows":600,)"));
+
+  r = check(csv, files, {"--isolated", "--format", "fafnir", "--actions", "a.csv"});
+  CHECK(contains(
+      r.out, R"({"security_id":"Z","table_name":"core.daily_price","record_key":{"trade_date":")" +
+                 day(50) + R"("},"check_name":"dorq_bad_context_row","severity":"error")"));
+  CHECK(contains(r.out, R"("record_key":{"line":3},"check_name":"dorq_bad_context_row")"));
+
+  r = check(csv, files,
+            {"--isolated", "--ignore", "DQ109", "--actions", "a.csv", "--meta", "m.csv"});
+  CHECK_FALSE(contains(r.out, "DQ109"));
+  CHECK(contains(r.out, "B  " + day(200) + "  DQ2"));
+  const std::string since = day(60);
+  r = check(csv, files,
+            {"--isolated", "--select", "DQ109", "--since", since.c_str(), "--actions", "a.csv"});
+  // In the order of the file.
+  CHECK(r.out == "A  " + day(100) +
+                     "  DQ109 error  bad-context-row  a.csv: numerator \"0\" is not a positive "
+                     "number; the row is skipped  (line 2)\n"
+                     "A  line 3  DQ109 error  bad-context-row  a.csv: ex_date \"2020-02-30\" is "
+                     "not a date; the row is skipped\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -354,6 +483,38 @@ TEST_CASE("DQ705: a dividend above the price, or a hundred times its others") {
   CHECK(count_matching(r.out, R"("code":"DQ705")") == 2);
   CHECK(contains(r.out, "is at or above the close before it"));
   CHECK(contains(r.out, "×100 the series' usual 0.25"));
+}
+
+TEST_CASE("DQ705: a zero or negative dividend is reported, and the run goes on") {
+  std::vector<Bar> bars = stock(400, 50.0, 0.015, 5);
+  bars[300].close *= 3.0;  // a bad print, for the rest of the run to find
+  bars[300].high = bars[300].close;
+  std::string actions = kActionsHeader;
+  // Six zeros among the usual 0.25: a zero is no measure of the others, so the
+  // slip is still ×100 the usual 0.25, not ×inf a median of 0.
+  for (int i = 30; i < 400; i += 63) {
+    actions += "A," + day(i) + ",dividend,,," + (i == 156 ? "25.000000" : "0.250000") + "\n";
+    actions += "A," + day(i + 5) + ",dividend,,,0.000000\n";
+  }
+  actions += "A,2019-06-03,dividend,,,0\n";  // before the bars: no close needed
+  actions += "A," + day(40) + ",dividend,,,-0.25\n";
+  const Result r = check(bars_csv("A", bars), {{"a.csv", actions}},
+                         {"--isolated", "--format", "jsonl", "--actions", "a.csv"});
+  CAPTURE(r.out);
+  CHECK(r.status == 1);
+  CHECK(count_matching(r.out, "pays nothing") == 7);
+  CHECK(
+      count_matching(
+          r.out,
+          R"("severity":"warn","p_error":1,"classification":"data_error","message":"dividend 0 ex)") ==
+      7);
+  CHECK(contains(r.out, R"("date":"2019-06-03")"));
+  CHECK(contains(
+      r.out,
+      R"("severity":"error","p_error":1,"classification":"data_error","message":"dividend -0.25 ex )" +
+          day(40) + " is negative\""));
+  CHECK(contains(r.out, "×100 the series' usual 0.25 (the median of 5 others)"));
+  CHECK(contains(r.out, R"("date":")" + day(300) + R"(","line":302,"code":"DQ2)"));
 }
 
 // ---------------------------------------------------------------------------

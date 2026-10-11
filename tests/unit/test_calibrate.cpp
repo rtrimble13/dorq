@@ -348,6 +348,16 @@ TEST_CASE("dorq calibrate: fits the labels, writes priors.toml that dorq check r
   REQUIRE(again.status == 0);
   CHECK(read_text(again_path) == priors);
 
+  // A context row that cannot be used is skipped with a warning: calibrate reports
+  // no violations to carry it as DQ109.
+  const std::string actions = path("actions.csv");
+  write_file(actions, "series,ex_date,type,amount\nZ,2020-01-02,spinoff,\n");
+  const Result skipped =
+      run_in(dir.path(), {"calibrate", bars.c_str(), "--labels", labels.c_str(), "--actions",
+                          actions.c_str(), "--isolated", "--threads", "2"});
+  CHECK(skipped.status == 0);
+  CHECK(contains(skipped.err, "dorq: warning: 1 row(s) of the context files could not be used"));
+
   write_file(config_path, "include = \"priors.toml\"\n");
   const Result check =
       run_in(dir.path(), {bars.c_str(), "--config", config_path.c_str(), "--exit-zero"});

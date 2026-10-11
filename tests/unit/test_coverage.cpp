@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -196,4 +197,33 @@ TEST_CASE("the cohort row in the fafnir format, and per-session reporting") {
   const Result per_run = run({"--isolated"}, csv);
   CHECK(count_matching(per_run.out, "DQ301") == 1);
   CHECK(contains(per_run.out, "3 sessions with no bar"));
+}
+
+TEST_CASE("output does not depend on where the calendar file lives") {
+  // fafnir writes its calendar to a new temporary directory each run. The same
+  // sessions must give the same output: in the cohort row's source and detail,
+  // and in the per-series messages that name the calendar.
+  std::string calendar = "exchange_code,trade_date,is_open\n";
+  for (const dorq::Date d : sessions("2023-01-03", "2023-12-29")) {
+    calendar +=
+        "XNYS," + d.to_string() + "," + (d.to_string() == "2023-03-01" ? "false" : "true") + "\n";
+  }
+  const dorq::test::TempDir dir;
+  const auto run_from = [&](const char* sub) {
+    std::filesystem::create_directories(dir.path() / sub);
+    const std::string file = (dir.path() / sub / "sessions.csv").string();
+    dorq::test::write_file(file, calendar);
+    return dorq::test::run_in(dir.path(),
+                              {"--isolated", "--format", "fafnir", "--calendar-file", file.c_str()},
+                              universe());
+  };
+  const Result a = run_from("run-a");
+  const Result b = run_from("run-b");
+  CAPTURE(a.err);
+  CHECK(count_matching(a.out, R"("code":"DQ303")") == 1);
+  // DQ105 on the closed day: the 30 liquid names, and the 3 thin ones trading then.
+  CHECK(count_matching(a.out, "not a session on XNYS, with sessions.csv for") == 33);
+  CHECK(contains(a.out, R"("source":"XNYS, with sessions.csv for 2023-01-03..2023-12-29")"));
+  CHECK_FALSE(contains(a.out, dir.path().string()));
+  CHECK(a.out == b.out);
 }

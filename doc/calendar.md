@@ -97,6 +97,12 @@ exchange = "NASDAQ"
 An unreadable or malformed calendar file is a configuration error (exit 2).
 Nothing is checked against a calendar dorq could not read.
 
+The output names a reference file by its name, without its directory: "not a
+session on XNYS, with sessions.csv for 1990-01-02..2027-12-31". The same sessions
+from another directory give the same output, and `config_hash` covers the file's
+content, not its path. fafnir writes the file to a new temporary directory each
+run.
+
 ## Choosing a calendar
 
 - **US equities and ETFs:** the default.

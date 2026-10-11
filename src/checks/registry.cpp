@@ -60,6 +60,7 @@ std::span<const Check* const> all_checks() {
   static const NonSessionBar kNonSession;
   static const ZeroRangeWithVolume kZeroRange;
   static const OutOfBounds kOutOfBounds;
+  static const BadContextRow kBadContextRow;
   static const PriceCheck kBadPrint(bad_print_info());
   static const PriceCheck kScaleShift(scale_shift_info());
   static const PriceCheck kUnreportedSplit(unreported_split_info());
@@ -86,14 +87,14 @@ std::span<const Check* const> all_checks() {
   static const DividendImplausible kDividend;
   static const CohortMove kCohortMove;
   static const MarketDay kMarketDay;
-  static const std::array<const Check*, 32> kChecks = {
-      &kOhlcBounds,      &kNonPositive,   &kDuplicateDate,  &kMissingField,  &kNonSession,
-      &kPrecisionShift,  &kZeroRange,     &kOutOfBounds,    &kBadPrint,      &kScaleShift,
-      &kUnreportedSplit, &kCloseMismatch, &kHistorySegment, &kDateShift,     &kLargeMove,
-      &kMissingRun,      &kSparse,        &kCohort,         &kStale,         &kFrequencyGap,
-      &kVolumeShift,     &kVolumeSpike,   &kZeroVolumeMove, &kRepeatedPrice, &kCarryBar,
-      &kCohortMove,      &kMarketDay,     &kSplitMisdated,  &kSplitNoJump,   &kSplitRatio,
-      &kSplitDouble,     &kDividend};
+  static const std::array<const Check*, 33> kChecks = {
+      &kOhlcBounds,     &kNonPositive,     &kDuplicateDate, &kMissingField,   &kNonSession,
+      &kPrecisionShift, &kZeroRange,       &kOutOfBounds,   &kBadContextRow,  &kBadPrint,
+      &kScaleShift,     &kUnreportedSplit, &kCloseMismatch, &kHistorySegment, &kDateShift,
+      &kLargeMove,      &kMissingRun,      &kSparse,        &kCohort,         &kStale,
+      &kFrequencyGap,   &kVolumeShift,     &kVolumeSpike,   &kZeroVolumeMove, &kRepeatedPrice,
+      &kCarryBar,       &kCohortMove,      &kMarketDay,     &kSplitMisdated,  &kSplitNoJump,
+      &kSplitRatio,     &kSplitDouble,     &kDividend};
   return kChecks;
 }
 

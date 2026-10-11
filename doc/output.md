@@ -13,8 +13,10 @@ That order doesn't depend on `--threads` ([ADR 0001](adr/0001-stateless-determin
 The cross-sectional checks, DQ303 (cohort gaps) and DQ304 (stale feeds), can only
 be judged once every series has been read. While either is enabled (the default),
 dorq holds every series' violations until the input ends and then writes them all,
-in the same order. The DQ303 violations belong to no single series, so they come
-last. To get output as each series finishes, ignore both checks.
+in the same order. The DQ109 reports of the context files' unusable rows come
+after the series, in the order of the files. The DQ303 violations belong to no
+single series, so they come last. To get output as each series finishes, ignore
+both checks.
 
 `--min-severity` (default `warn`) and `--since` decide which violations are
 reported. `--fail-on` (default `warn`) decides the exit status: 1 if any
@@ -38,7 +40,8 @@ The fields are:
 - **code and severity**.
 - **check name**.
 - **message**.
-- **`(line N)`**: the source line, when one row is at fault.
+- **`(line N)`**: the source line, when one row is at fault. For DQ109 it is a line
+  of the context file the message names.
 
 `--show-evidence` adds indented lines under each violation that compares
 explanations (the DQ2xx price checks): the suggested action, every hypothesis
@@ -75,7 +78,7 @@ One JSON object per line. This is the record every machine format is built from:
  "detail":{"open":10,"high":9.5,"low":9,"close":10},
  "hypotheses":{},"evidence":[],"suggested_action":null,"provisional":false,
  "record_key":{"trade_date":"2024-01-03"},
- "dorq":{"version":"0.7.0","config_hash":"2dbc9760e4b8882f"}}
+ "dorq":{"version":"0.8.0","config_hash":"2dbc9760e4b8882f"}}
 ```
 
 A price check's record carries its model (wrapped the same way):
@@ -100,10 +103,10 @@ A price check's record carries its model (wrapped the same way):
 |---|---|
 | `series` | The series id: the series column, or the file's stem when there is none. `null` for a cross-sectional violation (DQ303, DQ601, DQ602) |
 | `label` | The label column (e.g. a ticker), or `null` |
-| `source` | The input file, or `<stdin>` |
+| `source` | The input file, or `<stdin>`. For DQ109, the context file's name without its directory. For a cross-sectional violation, the calendar: `XNYS`, or `XNYS, with sessions.csv for 1990-01-02..2027-12-31`, naming a reference file without its directory |
 | `date` | The date the violation is about; `null` for a row with no usable date |
 | `end_date` | Present only on a violation that spans dates |
-| `line` | The source line (CSV) or record (JSON) when one row is at fault, else `null` |
+| `line` | The source line (CSV) or record (JSON) when one row is at fault, else `null`. For DQ109, the line of the context file |
 | `code`, `check` | The check's code and name ([ADR 0003](adr/0003-check-codes.md)) |
 | `severity` | `info`, `warn` or `error` |
 | `p_error` | The probability that this is a data error. Deterministic checks report 1 |
@@ -130,7 +133,7 @@ One object: the same records in a `violations` array, followed by a `summary`.
 {...}
 ],"summary":{"inputs":1,"series":2,"rows":6,"violations":6,
  "by_severity":{"error":5,"warn":1,"info":0},"by_code":{"DQ101":2,"DQ102":1,"DQ104":3},
- "dorq":{"version":"0.7.0","config_hash":"2dbc9760e4b8882f"}}}
+ "dorq":{"version":"0.8.0","config_hash":"2dbc9760e4b8882f"}}}
 ```
 
 `rows` counts every data row read, including rows skipped for an unusable date.
