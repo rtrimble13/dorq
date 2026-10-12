@@ -41,6 +41,12 @@ dorq_cli_exit_test(help 0 --help)
 # The configuration shipped for fafnir (priors/fafnir.toml) must stay valid.
 dorq_cli_exit_test(fafnir-config 0 config show --config
                    "${PROJECT_SOURCE_DIR}/priors/fafnir.toml")
+# config show takes a check command line as it is (fafnir's, here), to print the
+# config_hash that run reports. It reads no input or context file.
+dorq_cli_exit_test(
+  config-show-check-options 0 config show --config "${PROJECT_SOURCE_DIR}/priors/fafnir.toml" -
+  --format fafnir --exit-zero --calendar-exchange NASDAQ --actions actions.csv --meta meta.csv
+  --as-of 2026-10-09)
 dorq_cli_exit_test(version-json 0 version --format json)
 dorq_cli_exit_test(list-checks 0 list-checks)
 dorq_cli_exit_test(explain 0 explain DQ101)

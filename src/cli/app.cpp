@@ -147,12 +147,15 @@ void validate_selection(const Config& config) {
   }
 }
 
-// Command-line options override the config file.
-void apply_overrides(const CheckOptions& o, CLI::App& cmd, Config& config) {
+// Command-line options override the config file. Returns whether any was given.
+bool apply_overrides(const CheckOptions& o, CLI::App& cmd, Config& config) {
+  bool any = false;
   // Whether an option was given; false for one this command does not take.
-  const auto given = [&cmd](const char* name) {
+  const auto given = [&cmd, &any](const char* name) {
     const CLI::Option* option = cmd.get_option_no_throw(name);
-    return option != nullptr && option->count() > 0;
+    const bool was_given = option != nullptr && option->count() > 0;
+    any = any || was_given;
+    return was_given;
   };
   // CLI11 has already checked each value against its list; the ifs only unwrap.
   if (const auto kind = parse_kind_option(o.kind); given("--kind") && kind) {
@@ -190,12 +193,14 @@ void apply_overrides(const CheckOptions& o, CLI::App& cmd, Config& config) {
   }
   if (o.show_info) {
     config.min_severity = Severity::kInfo;
+    any = true;
   }
   if (given("--fail-on")) {
     config.fail_on = o.fail_on == "never" ? std::nullopt : parse_severity(o.fail_on);
   }
   if (o.threads >= 0) {
     config.threads = o.threads;
+    any = true;
   }
   if (const auto kind = parse_calendar_name(o.calendar); given("--calendar") && kind) {
     config.calendar = *kind;
@@ -206,6 +211,7 @@ void apply_overrides(const CheckOptions& o, CLI::App& cmd, Config& config) {
   if (given("--calendar-exchange")) {
     config.calendar_exchange = o.calendar_exchange;
   }
+  return any;
 }
 
 // FNV-1a over a file's bytes, as hex: what config_hash covers in place of the
@@ -548,11 +554,14 @@ int run_explain(const std::string& what, Io& io) {
   return to_int(ExitCode::kOk);
 }
 
-int run_config_show(const std::string& config_path, bool isolated, Io& io) {
-  Config config = load_effective_config(config_path, isolated, io.cwd);
+// The settings a check run with these options uses, and the config_hash it reports.
+int run_config_show(const CheckOptions& options, CLI::App& cmd, Io& io) {
+  Config config = load_effective_config(options.config, options.isolated, io.cwd);
+  const bool overridden = apply_overrides(options, cmd, config);
   validate_selection(config);
   stamp_calendar_digest(config, io.cwd);
-  io.out << "# source: " << (config.source.empty() ? "defaults" : config.source.string()) << "\n"
+  io.out << "# source: " << (config.source.empty() ? "defaults" : config.source.string())
+         << (overridden ? ", with command-line options" : "") << "\n"
          << "# config_hash: " << config_hash(config) << "\n\n"
          << to_toml(config);
   return to_int(ExitCode::kOk);
@@ -576,6 +585,63 @@ int run_config_init(const std::string& path_text, bool force, Io& io) {
   return to_int(ExitCode::kOk);
 }
 
+// The options `check` takes. `config show` takes them too, so that a check command
+// line shows the settings, and the config_hash, that the run reports.
+void add_check_options(CLI::App& cmd, CheckOptions& o) {
+  cmd.add_option("files", o.files, "Input files; '-' or none reads stdin");
+  cmd.add_option("--kind", o.kind, "Series kind")->check(CLI::IsMember({"auto", "ohlcv", "point"}));
+  cmd.add_option("--input-format", o.input_format, "Input format")
+      ->check(CLI::IsMember({"auto", "csv", "tsv", "jsonl", "json"}));
+  cmd.add_option("--columns", o.columns, "Column names, e.g. date=trade_date,series=security_id");
+  cmd.add_option("--format", o.format, "Output format")
+      ->check(CLI::IsMember({"text", "json", "jsonl", "csv", "fafnir"}));
+  cmd.add_option("--select", o.select, "Checks to run (codes, prefixes, names)")->delimiter(',');
+  cmd.add_option("--extend-select", o.extend_select, "Checks to add")->delimiter(',');
+  cmd.add_option("--ignore", o.ignore, "Checks to skip")->delimiter(',');
+  cmd.add_option("--min-severity", o.min_severity, "Lowest severity to report")
+      ->check(CLI::IsMember({"info", "warn", "error"}));
+  cmd.add_flag("--show-info", o.show_info, "Report info too (--min-severity info)");
+  cmd.add_flag("--show-evidence", o.show_evidence,
+               "In text output, show each violation's suggested action, hypotheses and "
+               "evidence");
+  cmd.add_option("--fail-on", o.fail_on, "Lowest severity that fails the run")
+      ->check(CLI::IsMember({"info", "warn", "error", "never"}));
+  cmd.add_flag("--exit-zero", o.exit_zero, "Exit 0 even when violations are found");
+  cmd.add_option("--since", o.since, "Report only violations dated on or after");
+  cmd.add_flag("--statistics", o.statistics, "Print counts per check");
+  cmd.add_option("--threads", o.threads, "Worker threads (0: one per core)")
+      ->check(CLI::Range(0, 1024));
+  cmd.add_flag("--buffer", o.buffer,
+               "Read all input before checking (for large input not grouped by series)");
+  cmd.add_option("--config", o.config, "Config file to use");
+  cmd.add_flag("--isolated", o.isolated, "Ignore all config files");
+  cmd.add_option("--calendar", o.calendar, "Built-in calendar")
+      ->check(
+          CLI::IsMember({"XNYS", "NYSE", "XNAS", "NASDAQ", "weekdays", "24x7"}, CLI::ignore_case));
+  cmd.add_option("--calendar-file", o.calendar_file,
+                 "Reference calendar (CSV: date[, is_open][, exchange]); overrides the "
+                 "built-in calendar within its span");
+  cmd.add_option("--calendar-exchange", o.calendar_exchange,
+                 "The exchange to take from a multi-exchange calendar file");
+  cmd.add_option("--as-of", o.as_of,
+                 "Date DQ304 judges staleness against (default: the latest bar)");
+  cmd.add_option("--actions", o.actions,
+                 "Corporate actions (CSV: series, ex_date, type, numerator, denominator, "
+                 "amount); enables DQ7xx and explains splits on file");
+  cmd.add_option("--meta", o.meta,
+                 "Series metadata (CSV: series, asset_type, nav_priced, tick_size, "
+                 "peer_group, exchange); profiles match on it");
+  cmd.add_option("--market", o.market,
+                 "A market reference series (e.g. SPY); moves are judged net of it");
+  cmd.add_option("--restore", o.restore,
+                 "Bars as they stood before repairs, over the input (doc/labels.md)");
+  cmd.add_option("--labels", o.labels,
+                 "Labels (JSON Lines) whose `remove` dates are dropped, with --restore");
+  cmd.add_option("--color", o.color, "Colour text output")
+      ->check(CLI::IsMember({"auto", "always", "never"}))
+      ->capture_default_str();
+}
+
 }  // namespace
 
 int run(std::span<const char* const> args, Io& io) {
@@ -590,62 +656,7 @@ int run(std::span<const char* const> args, Io& io) {
   // check
   CheckOptions check_options;
   CLI::App* check = app.add_subcommand("check", "Check time series (the default command)");
-  check->add_option("files", check_options.files, "Input files; '-' or none reads stdin");
-  check->add_option("--kind", check_options.kind, "Series kind")
-      ->check(CLI::IsMember({"auto", "ohlcv", "point"}));
-  check->add_option("--input-format", check_options.input_format, "Input format")
-      ->check(CLI::IsMember({"auto", "csv", "tsv", "jsonl", "json"}));
-  check->add_option("--columns", check_options.columns,
-                    "Column names, e.g. date=trade_date,series=security_id");
-  check->add_option("--format", check_options.format, "Output format")
-      ->check(CLI::IsMember({"text", "json", "jsonl", "csv", "fafnir"}));
-  check->add_option("--select", check_options.select, "Checks to run (codes, prefixes, names)")
-      ->delimiter(',');
-  check->add_option("--extend-select", check_options.extend_select, "Checks to add")
-      ->delimiter(',');
-  check->add_option("--ignore", check_options.ignore, "Checks to skip")->delimiter(',');
-  check->add_option("--min-severity", check_options.min_severity, "Lowest severity to report")
-      ->check(CLI::IsMember({"info", "warn", "error"}));
-  check->add_flag("--show-info", check_options.show_info, "Report info too (--min-severity info)");
-  check->add_flag("--show-evidence", check_options.show_evidence,
-                  "In text output, show each violation's suggested action, hypotheses and "
-                  "evidence");
-  check->add_option("--fail-on", check_options.fail_on, "Lowest severity that fails the run")
-      ->check(CLI::IsMember({"info", "warn", "error", "never"}));
-  check->add_flag("--exit-zero", check_options.exit_zero, "Exit 0 even when violations are found");
-  check->add_option("--since", check_options.since, "Report only violations dated on or after");
-  check->add_flag("--statistics", check_options.statistics, "Print counts per check");
-  check->add_option("--threads", check_options.threads, "Worker threads (0: one per core)")
-      ->check(CLI::Range(0, 1024));
-  check->add_flag("--buffer", check_options.buffer,
-                  "Read all input before checking (for large input not grouped by series)");
-  check->add_option("--config", check_options.config, "Config file to use");
-  check->add_flag("--isolated", check_options.isolated, "Ignore all config files");
-  check->add_option("--calendar", check_options.calendar, "Built-in calendar")
-      ->check(
-          CLI::IsMember({"XNYS", "NYSE", "XNAS", "NASDAQ", "weekdays", "24x7"}, CLI::ignore_case));
-  check->add_option("--calendar-file", check_options.calendar_file,
-                    "Reference calendar (CSV: date[, is_open][, exchange]); overrides the "
-                    "built-in calendar within its span");
-  check->add_option("--calendar-exchange", check_options.calendar_exchange,
-                    "The exchange to take from a multi-exchange calendar file");
-  check->add_option("--as-of", check_options.as_of,
-                    "Date DQ304 judges staleness against (default: the latest bar)");
-  check->add_option("--actions", check_options.actions,
-                    "Corporate actions (CSV: series, ex_date, type, numerator, denominator, "
-                    "amount); enables DQ7xx and explains splits on file");
-  check->add_option("--meta", check_options.meta,
-                    "Series metadata (CSV: series, asset_type, nav_priced, tick_size, "
-                    "peer_group, exchange); profiles match on it");
-  check->add_option("--market", check_options.market,
-                    "A market reference series (e.g. SPY); moves are judged net of it");
-  check->add_option("--restore", check_options.restore,
-                    "Bars as they stood before repairs, over the input (doc/labels.md)");
-  check->add_option("--labels", check_options.labels,
-                    "Labels (JSON Lines) whose `remove` dates are dropped, with --restore");
-  check->add_option("--color", check_options.color, "Colour text output")
-      ->check(CLI::IsMember({"auto", "always", "never"}))
-      ->capture_default_str();
+  add_check_options(*check, check_options);
 
   // calibrate
   CalibrateCommand calibrate_command;
@@ -703,11 +714,17 @@ int run(std::span<const char* const> args, Io& io) {
   // config
   CLI::App* config = app.add_subcommand("config", "Show or create the configuration");
   config->require_subcommand(1);
-  CLI::App* show = config->add_subcommand("show", "Print the effective configuration");
-  std::string show_config;
-  bool show_isolated = false;
-  show->add_option("--config", show_config, "Config file to use");
-  show->add_flag("--isolated", show_isolated, "Ignore all config files");
+  CLI::App* show = config->add_subcommand(
+      "show", "Print the effective configuration and its config_hash; takes check's options");
+  CheckOptions show_options;
+  add_check_options(*show, show_options);
+  // Taken so that a check command line can be passed as it is; they change no setting.
+  for (const char* name :
+       {"files", "--show-evidence", "--exit-zero", "--since", "--statistics", "--buffer", "--as-of",
+        "--actions", "--meta", "--market", "--restore", "--labels", "--color"}) {
+    show->get_option(name)->group("Check options that change no setting");
+  }
+  show->get_option("files")->description("Input files (read by check, not here)");
   CLI::App* init = config->add_subcommand("init", "Write a starter dorq.toml");
   std::string init_path = "dorq.toml";
   bool init_force = false;
@@ -743,7 +760,7 @@ int run(std::span<const char* const> args, Io& io) {
       return run_explain(explain_what, io);
     }
     if (show->parsed()) {
-      return run_config_show(show_config, show_isolated, io);
+      return run_config_show(show_options, *show, io);
     }
     if (init->parsed()) {
       return run_config_init(init_path, init_force, io);
