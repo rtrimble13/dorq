@@ -118,7 +118,7 @@ A price check's record carries its model (wrapped the same way):
 | `suggested_action` | What would fix it: `kind` (`delete_bars`, `refetch_bar`, `add_split`, `rescale`, `rescale_volume`, `split_history`, `redate_split`, `check_split`, `fix_split_ratio`, `fix_dividend`) and its fields, or `null`. dorq never changes data |
 | `provisional` | `true` when the violation was judged with fewer bars after it than the model needs; a later run may change it. Its severity is at most `warn` |
 | `record_key` | `{"trade_date": "..."}`, or `{"line": N}` when there is no date |
-| `dorq` | The version, and the hash of the settings that can change what is reported (`dorq config show` prints it). A reference calendar counts by its content, not its path |
+| `dorq` | The version, and the hash of the settings that can change what is reported. `dorq config show`, given the run's options, prints it; [configuration.md](configuration.md#what-config_hash-covers) lists what it covers. A reference calendar counts by its content, not its path |
 
 Numbers are written in their shortest exact form. A value that is not a finite
 number is written as `null`.

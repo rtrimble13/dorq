@@ -106,6 +106,7 @@ dorq --show-evidence prices.csv              # repairs, hypotheses and evidence 
 dorq list-checks                             # every check, its severity and what it needs
 dorq explain DQ106                           # a check's full documentation
 dorq config show                             # the effective settings and their hash
+dorq config show --calendar-file s.csv       # with check's options: the hash that run reports
 dorq config init                             # write a starter dorq.toml
 dorq calibrate prices.csv --labels labels.jsonl --out priors.toml   # fit priors to labels
 ```

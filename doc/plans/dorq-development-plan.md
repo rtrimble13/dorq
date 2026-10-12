@@ -979,6 +979,12 @@ at precision 1.0. The real test is M7's fit on fafnir's labels (DR-0704).
   the calendar's description, in the cross-sectional rows' `source`, DQ303's
   `detail.calendar` and the DQ105 and DQ206 messages. The description now names the
   file without its directory, and a test runs the same input from two directories.)*
+  *(v0.8.1: on the host, `dorq config show --config /etc/fafnir/dorq.toml` printed
+  `c0195518ff64845f` while the run's rows carried `119a126869e5c4f0`, because the
+  run's `--calendar-file` and `--calendar-exchange` are settings and `config show`
+  took neither. `config show` now takes check's options, so the run's command line
+  with `check` replaced by `config show` prints the run's hash. doc/configuration.md
+  lists what the hash covers.)*
 - **A bad context row no longer stops the run** (v0.8.0, ADR 0004). The first
   run on the fafnir host stopped with exit 3 on dividends of zero, which
   `core.corporate_action` allows and the actions reader refused. DQ705 now reports

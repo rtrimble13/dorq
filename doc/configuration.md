@@ -8,10 +8,11 @@ layers, each overriding the one before:
 3. Command-line options.
 
 `dorq config show` prints the effective settings, where they came from, and their
-`config_hash`. The hash covers what can change the report: a reference calendar
-counts by its content, so the same sessions read from another directory hash the
-same, and thread count and output format do not count at all. `dorq config init` writes a starter `dorq.toml` that lists every
-key at its default value.
+`config_hash`. It takes the options `dorq check` takes, so a check command line
+with `check` replaced by `config show` prints the settings that run uses and the
+hash on every record it reports ([What config_hash covers](#what-config_hash-covers)).
+`dorq config init` writes a starter `dorq.toml` that lists every key at its default
+value.
 
 ## Where the file is found
 
@@ -201,6 +202,44 @@ dates go with it (doc/labels.md). `--show-info` is `--min-severity info`. `--sho
 suggested action, hypotheses and evidence to text output (doc/output.md). `--exit-zero` always exits 0. `--as-of
 DATE` sets the date DQ304 judges staleness against; by default it is the latest
 session with a bar anywhere in the input.
+
+## What config_hash covers
+
+Every record carries `dorq.config_hash`, a hash of the settings that can change
+what is reported, so a flag can be traced to the settings that produced it. It
+covers:
+
+- the effective settings from the config file, with what it includes and its
+  profiles;
+- the options that override a key: `--select`, `--extend-select`, `--ignore`,
+  `--min-severity` (and `--show-info`), `--kind`, `--columns`, `--calendar`,
+  `--calendar-file` and `--calendar-exchange`;
+- a reference calendar by its content, not its path, so the same sessions read
+  from another directory hash the same.
+
+It does not cover:
+
+- the keys that change only presentation, speed or the exit status: `format`,
+  `threads`, `fail_on` and `input_format`, from the file or the command line;
+- the inputs of a run: the data, `--actions`, `--meta`, `--market`, `--restore`,
+  `--labels`, `--as-of` and `--since`. Other inputs give other reports under the
+  same hash. fafnir passes a new `--as-of` every night, and its hash stays the same
+  for as long as its settings do;
+- the dorq version, which every record carries beside the hash.
+
+To reproduce the hash a run reported, run its command line with `check` replaced
+by `config show`:
+
+```bash
+dorq check --config dorq.toml - --format fafnir --calendar-file sessions.csv --calendar-exchange NASDAQ --as-of 2026-10-09
+dorq config show --config dorq.toml - --format fafnir --calendar-file sessions.csv --calendar-exchange NASDAQ --as-of 2026-10-09
+```
+
+`config show` takes every option `check` takes, so the line can be passed as it
+is. It reads the config file and the reference calendar, and none of the inputs;
+the options that change no setting are listed apart in `dorq config show --help`.
+When options change the settings, its `# source:` line ends `with command-line
+options`.
 
 ## Reading input
 

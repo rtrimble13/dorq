@@ -275,3 +275,57 @@ TEST_CASE("config_hash covers a calendar file's content, not where it lives") {
   dorq::test::write_file(dir.path() / "b" / "cal.csv", sessions + "2024-01-08\n");
   CHECK(hash("b") != a);  // another session: other settings
 }
+
+TEST_CASE("config show takes check's options and prints the config_hash that run reports") {
+  // fafnir's command line, with `check` replaced by `config show`.
+  const dorq::test::TempDir dir;
+  const std::string config = (dir.path() / "dorq.toml").string();
+  const std::string calendar = (dir.path() / "cal.csv").string();
+  const std::string actions = (dir.path() / "actions.csv").string();
+  dorq::test::write_file(config, "[integrity]\nflat_bar_steps = 4\n");
+  dorq::test::write_file(calendar,
+                         "exchange_code,trade_date,is_open\nNASDAQ,2024-01-02,t\n"
+                         "NASDAQ,2024-01-03,t\nNASDAQ,2024-01-04,t\nNASDAQ,2024-01-05,t\n"
+                         "NASDAQ,2024-01-08,t\nXNYS,2024-01-02,t\n");
+  dorq::test::write_file(actions,
+                         "series,ex_date,type,numerator,denominator,amount\n"
+                         "AAA,2024-01-04,dividend,,,0.1\n");
+  const auto shown_hash = [](const Result& r) {
+    const auto at = r.out.find("# config_hash: ");
+    REQUIRE(at != std::string::npos);
+    return r.out.substr(at + 15, 16);
+  };
+
+  const Result checked =
+      run_in(dir.path(),
+             {"check", "--config", config.c_str(), "-", "--format", "fafnir", "--exit-zero",
+              "--calendar-file", calendar.c_str(), "--calendar-exchange", "NASDAQ",
+              "--min-severity", "info", "--actions", actions.c_str(), "--as-of", "2024-01-08"},
+             kBadBars);
+  REQUIRE(checked.status == 0);
+  const auto at = checked.out.find(R"("config_hash":")");
+  REQUIRE(at != std::string::npos);
+  const std::string run_hash = checked.out.substr(at + 15, 16);
+
+  const Result shown =
+      run_in(dir.path(),
+             {"config", "show", "--config", config.c_str(), "-", "--format", "fafnir",
+              "--exit-zero", "--calendar-file", calendar.c_str(), "--calendar-exchange", "NASDAQ",
+              "--min-severity", "info", "--actions", actions.c_str(), "--as-of", "2024-01-08"});
+  CHECK(shown.status == 0);
+  CHECK(shown_hash(shown) == run_hash);
+  CHECK(contains(shown.out, "dorq.toml, with command-line options\n"));
+  CHECK(contains(shown.out, "exchange = \"NASDAQ\""));
+  CHECK(contains(shown.out, "min_severity = \"info\""));
+
+  // The file alone is other settings. The options that change none (the input, the
+  // context files, --as-of, --exit-zero) leave the hash and the source as they are.
+  const Result file_only = run_in(dir.path(), {"config", "show", "--config", config.c_str()});
+  CHECK(shown_hash(file_only) != run_hash);
+  const Result run_only =
+      run_in(dir.path(), {"config", "show", "--config", config.c_str(), "-", "--exit-zero",
+                          "--actions", actions.c_str(), "--as-of", "2024-01-08"});
+  CHECK(run_only.status == 0);
+  CHECK(shown_hash(run_only) == shown_hash(file_only));
+  CHECK_FALSE(contains(run_only.out, "with command-line options"));
+}
