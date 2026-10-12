@@ -26,16 +26,16 @@ dorq::Series one_series(const std::string& csv) {
 }
 
 std::vector<dorq::Violation> run_check(const dorq::Check& check, const dorq::Series& series,
-                                       const dorq::IntegritySettings& settings = {}) {
+                                       const dorq::IntegritySettings& settings = {},
+                                       const dorq::CoverageSettings& coverage = {}) {
   static const dorq::Calendar kCalendar;
-  static const dorq::CoverageSettings kCoverage;
   static const dorq::SeverityThresholds kThresholds;
   static const dorq::PriceSettings kPrice;
   std::vector<dorq::Violation> out;
   const dorq::SeriesContext context{
       .series = series,
       .integrity = settings,
-      .coverage = kCoverage,
+      .coverage = coverage,
       .calendar = kCalendar,
       .thresholds = kThresholds,
       .price = kPrice,
@@ -164,6 +164,44 @@ TEST_CASE("DQ107: flat_bar_steps sets what a coarse grid is") {
   // Bars span 4 cents: more than the default 3 steps.
   CHECK(run_check(dorq::ZeroRangeWithVolume{}, series).size() == 1);
   CHECK(run_check(dorq::ZeroRangeWithVolume{}, series, {.flat_bar_steps = 4.0}).empty());
+}
+
+namespace {
+
+// A small fund that prints one 100-share lot a day, so every bar is flat, with a
+// few days of two or three lots.
+dorq::Series one_lot_series() {
+  std::vector<std::string> rows;
+  rows.reserve(80);
+  for (int d = 0; d < 80; ++d) {
+    const double c = 30.0 + 0.01 * ((d * 3) % 8);
+    rows.push_back(bar_row(d, c, c, c, c, d % 9 == 4 ? 200 + 100 * (d % 2) : 100));
+  }
+  return one_series(bars(rows));
+}
+
+}  // namespace
+
+TEST_CASE("DQ107: a series that trades one lot a day prints flat bars") {
+  // A median of 100 shares is under one trade_size (1,000): one price a day is how
+  // it trades, and with no ranged bar nearby there is no lost range to report.
+  CHECK(run_check(dorq::ZeroRangeWithVolume{}, one_lot_series()).empty());
+}
+
+TEST_CASE("DQ107: trade_size sets what one lot is") {
+  // At a trade_size of 50, the same median of 100 is two trades a day, and flat
+  // bars with no ranged bar nearby are reported again. A median of exactly
+  // trade_size is not under one lot.
+  const dorq::Series series = one_lot_series();
+  for (const double trade_size : {50.0, 100.0}) {
+    CAPTURE(trade_size);
+    dorq::CoverageSettings coverage;
+    coverage.trade_size = trade_size;
+    const auto found = run_check(dorq::ZeroRangeWithVolume{}, series, {}, coverage);
+    REQUIRE(found.size() == series.size());
+    CHECK(dorq::test::contains(found.front().message, "(median 100)"));
+    CHECK(dorq::test::contains(found.front().message, "with no bar nearby that has a range"));
+  }
 }
 
 TEST_CASE("selection: the most specific entry wins, as in flake8") {

@@ -929,7 +929,7 @@ at precision 1.0. The real test is M7's fit on fafnir's labels (DR-0704).
 | DR-0704 | dorq | Calibrate on the fafnir labels and ship `priors/fafnir.toml` | S | 🔄 `priors/fafnir.toml` awaiting merge; the fit needs the labelling pass |
 | DR-0705 | fafnir | Recheck by rerun-and-negate for the `dorq_*` checks; tests | M | 🔄 awaiting merge |
 | DR-0706 | fafnir | Skill and playbook updates, tiers, `NEVER_AUTO_RESOLVE`, the test pinning the two | M | 🔄 awaiting merge |
-| DR-0707 | fafnir | Shadow period (≥ 20 sessions), a go/no-go against §8, cutover, retiring the SQL checks | M | ⬜ needs the deployed code and 20 sessions |
+| DR-0707 | fafnir | Shadow period (≥ 20 sessions), a go/no-go against §8, cutover, retiring the SQL checks | M | 🔄 first shadow night run (as of 2026-10-09); DQ107 on one-lot series fixed in v0.8.1 |
 
 **As built** (fafnir's doc/dorq.md and ADR 0013 are the references; dorq v0.7.0):
 
@@ -996,6 +996,16 @@ at precision 1.0. The real test is M7's fit on fafnir's labels (DR-0704).
   which Postgres's sorted COPY is 3.1 s and dorq alone 1.4 s. The export, not
   dorq, bounds a full run: about 5 minutes for 150M bars. A nightly window of
   about 8M bars takes about 16 s.
+- **DQ107 on series that trade one lot a day** (v0.8.1). On the first shadow
+  night (260 sessions, 17,309 series), 16,272 of 20,601 reports were DQ107, and
+  15,632 of those had no ranged bar nearby. They fell on 577 series, mostly small
+  ETFs printing one 100-share lot a day, whose bars are flat because one print has
+  one price. A flat bar with no ranged bar nearby is now reported only when the
+  series' median volume is at least `[coverage] trade_size`, the volume DQ301
+  already takes as one trade. By the host's count on that night's data, this
+  keeps about 500 of the 15,632, including repeated bars such as one flat at 0.015 on the same 18,349,172
+  shares on four dates. The 640 reports with ranged neighbours are unchanged, and
+  so is DQ107 on dorq-synth.
 
 ### M8: Stretch
 - DQ801 cross-vendor disagreement (FMP vs Sharadar) for the parallel run.

@@ -375,7 +375,8 @@ void ZeroRangeWithVolume::run(const SeriesContext& context, std::vector<Violatio
   // A single trade prints a flat bar on small volume, and on a thin name that is
   // normal. A flat bar on the volume the series usually trades is not -- unless
   // the price grid is coarse for the price, as for a sub-dime stock quoted in
-  // cents, whose bars span a tick or two and are often flat.
+  // cents, whose bars span a tick or two and are often flat, or the series trades
+  // under one lot a day.
   constexpr std::size_t kMinTradedRows = 20;
   constexpr std::size_t kNearby = 20;        // bars either side that judge the usual range
   constexpr std::size_t kMinNearby = 5;      // bars with a range needed to judge it
@@ -440,6 +441,13 @@ void ZeroRangeWithVolume::run(const SeriesContext& context, std::vector<Violatio
     }
     const double usual =
         nearby.size() >= kMinNearby ? median(nearby) : std::numeric_limits<double>::quiet_NaN();
+    // A series that trades under one lot a day (a median volume below trade_size,
+    // the volume dorq takes as one trade; doc/checks/DQ301.md) prints one price on
+    // most days, so a run of flat bars with no ranged bar nearby is how it trades,
+    // not a lost range. A lost range on a series that trades is still reported.
+    if (!std::isfinite(usual) && typical < context.coverage.trade_size) {
+      continue;
+    }
     if (usual <= context.integrity.flat_bar_steps) {
       continue;  // the bars here span a step or two: a flat one is ordinary
     }
