@@ -37,8 +37,8 @@ Lines and JSON arrays, and reports in five formats. It runs:
 - point series (rates, spreads, index levels) on the log or the difference scale,
   with configurable bounds (DQ108);
 - with context files ([doc/context.md](doc/context.md)): corporate actions
-  (`--actions`), which explain splits on file and check them against the bars
-  (DQ7xx); series metadata (`--meta`), which profiles match on and which lets a
+  (`--actions`), which explain the moves at splits and cash dividends on file
+  and check the splits against the bars (DQ7xx); series metadata (`--meta`), which profiles match on and which lets a
   fund family's shared split count as evidence (DQ601); and a market reference
   (`--market`), net of which every move is judged (DQ602).
 
@@ -187,7 +187,7 @@ archives, plus a `SHA256SUMS` file:
 | `dorq-<version>-macos-arm64.tar.gz` | macOS on Apple silicon |
 
 ```bash
-version=0.8.1
+version=0.9.0
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/dorq-${version}-linux-x86_64.tar.gz"
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
@@ -212,7 +212,7 @@ Clang 18+).
 ```bash
 sudo apt-get install -y build-essential cmake ninja-build git
 git clone https://github.com/rtrimble13/dorq.git && cd dorq
-git checkout v0.8.1                        # or stay on main for the latest
+git checkout v0.9.0                        # or stay on main for the latest
 cmake --workflow --preset release          # configure, build, run the tests
 sudo cmake --install build/release --prefix /opt/dorq
 /opt/dorq/bin/dorq version                 # names the commit it was built from

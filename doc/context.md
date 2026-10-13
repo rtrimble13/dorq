@@ -4,7 +4,7 @@ dorq judges a series by its own bars. Three optional files add context:
 
 | Option | What it holds | What it does |
 |---|---|---|
-| `--actions F` | splits and dividends on file | explains moves at a split's ex-date; enables DQ701–DQ705 |
+| `--actions F` | splits and dividends on file | explains moves at a split's or a dividend's ex-date; enables DQ701–DQ705 |
 | `--meta F` | per-series metadata | profiles match on it; `tick_size` replaces the inferred tick; `peer_group` feeds DQ601 |
 | `--market F` | a market reference series (an index, SPY) | moves are judged net of the market; enables DQ602 |
 
@@ -55,7 +55,20 @@ With `--actions`:
   split on file". This holds when the ex-date is a session with no bar, as on a
   thin name: the split is between two stored bars. A zero-volume bar that moves by
   a split's ratio across its ex-date is not a DQ403 move.
+- **A split on file needs no volume to confirm it.** A feed's unadjusted volume is
+  sometimes adjusted for the split already, and a reverse split draws a burst of
+  trading, so the volume after may be anywhere from unchanged to the ratio. The
+  move must still match the ratio within an ordinary move.
 - **Every split on file is judged against the bars** (DQ701–DQ704).
+- **A cash dividend on file explains the drop at its ex-date.** When dividends
+  on file have ex-dates after one bar and on or before the next, the price model
+  weighs `explained_dividend`: the move net of them, `close / (previous close −
+  dividends)`, is an ordinary move. A fund's year-end distribution, a third of
+  its price, is then DQ209, "the 8.87 dividend on file", not an unreported 3:2
+  split. A dividend smaller than an ordinary move is not weighed, and one DQ705
+  reports at error is not credited. A wrong dividend on file invents no move:
+  where the price did not drop, nothing is reported. A cohort of fund
+  distributions on file is not DQ601.
 - **Dividends are checked** against the price and the series' other dividends
   (DQ705). A zero or negative amount is read and reported there, not refused:
   fafnir's `core.corporate_action` allows a zero.

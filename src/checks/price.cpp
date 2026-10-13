@@ -33,6 +33,7 @@ const CheckInfo& info_for(H hypothesis) noexcept {
     case H::kMarketMove:
     case H::kTickMove:
     case H::kExplainedSplit:
+    case H::kExplainedDividend:
       break;
   }
   return large_move_info();
@@ -205,14 +206,25 @@ class Builder {
 
   void market(Violation& v) const {
     const auto p = [this](H h) { return finding_.posterior.at(static_cast<std::size_t>(h)); };
-    if (finding_.split_on_file && p(H::kExplainedSplit) > p(H::kMarketMove) &&
-        p(H::kExplainedSplit) > p(H::kTickMove)) {
+    // The most probable of the explanations that are not errors.
+    H best = H::kMarketMove;
+    for (const H h : {H::kTickMove, H::kExplainedSplit, H::kExplainedDividend}) {
+      best = p(h) > p(best) ? h : best;
+    }
+    if (best == H::kExplainedSplit && finding_.split_on_file) {
       v.message = move() + "): the " + finding_.split_on_file->ratio_text() +
                   " split on file, ex " + finding_.split_on_file->ex_date.to_string();
-      return;
+    } else if (best == H::kExplainedDividend && finding_.dividend_on_file) {
+      const DividendOnFile& d = *finding_.dividend_on_file;
+      v.message = move() + "): " +
+                  (d.count == 1 ? "the " + price(d.amount) + " dividend on file"
+                                : std::to_string(d.count) + " dividends on file, " +
+                                      price(d.amount) + " in all") +
+                  ", ex " + d.ex_date.to_string();
+    } else {
+      v.message = move() + "): probably " +
+                  (best == H::kTickMove ? "a move of a tick or two" : "a real move");
     }
-    const bool tick = p(H::kTickMove) > p(H::kMarketMove);
-    v.message = move() + "): probably " + (tick ? "a move of a tick or two" : "a real move");
   }
 
  private:
@@ -264,6 +276,7 @@ Violation make_violation(const SeriesContext& context, const PriceAnalysis& anal
       case H::kMarketMove:
       case H::kTickMove:
       case H::kExplainedSplit:
+      case H::kExplainedDividend:
         break;
     }
   }

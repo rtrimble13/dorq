@@ -42,6 +42,10 @@ struct IntegritySettings {
   // DQ107: a flat bar is expected where the bars nearby usually span this many
   // steps of the price grid or fewer (see doc/checks/DQ107.md).
   double flat_bar_steps = 3.0;
+  // DQ107: with no ranged bar nearby, a series is pinned (a flat bar is ordinary)
+  // when a grid step is under this share of the price and the closes nearby move
+  // flat_bar_steps steps or fewer.
+  double pinned_step_share = 0.002;
   // DQ108: the range a value (a point series' value, a bar's close) must lie in;
   // none by default. A profile sets it, e.g. [-5, 25] for a 10-year yield.
   std::optional<Bounds> bounds = std::nullopt;
@@ -55,6 +59,7 @@ struct IntegrityPatch {
   std::optional<int> precision_min_segment;
   std::optional<double> precision_min_contrast;
   std::optional<double> flat_bar_steps;
+  std::optional<double> pinned_step_share;
   std::optional<Bounds> bounds;
 
   void apply_to(IntegritySettings& settings) const;
@@ -124,6 +129,9 @@ struct PricePriors {
   // With --actions: a split on file between the bar and the one before explains
   // the move (bars with volume only).
   double explained_split = 0.9;
+  // With --actions: a cash dividend on file between the bar and the one before,
+  // larger than an ordinary move, came off the price (bars only).
+  double explained_dividend = 0.9;
   // With --actions: a split on file being wrong (misdated, not in the bars, the
   // wrong ratio, applied twice; DQ701-DQ704), shared among the four. Per split.
   double split_on_file_error = 0.06;
@@ -186,6 +194,7 @@ struct PricePatch {
   std::optional<double> tick_move;
   std::optional<double> history_segment;
   std::optional<double> explained_split;
+  std::optional<double> explained_dividend;
   std::optional<double> split_on_file_error;
   std::optional<double> stale_run;
 

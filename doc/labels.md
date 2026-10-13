@@ -48,7 +48,7 @@ days of the label's span. The label says which explanations are acceptable:
 | `expect` DQ204 | bad close |
 | `expect` DQ205 | history segment |
 | `data_error` with no `expect` | any error |
-| `market_fact` with `codes` DQ, DQ2 or DQ2x | market move, tick move, explained split |
+| `market_fact` with `codes` DQ, DQ2 or DQ2x | market move, tick move, explained split, explained dividend |
 
 Labels about something the price model does not judge are counted but not used.
 That covers gaps (DQ3xx), volume (DQ4xx), stale runs (DQ5xx) and splits on file

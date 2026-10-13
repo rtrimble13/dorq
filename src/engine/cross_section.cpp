@@ -156,12 +156,14 @@ Violation CrossSection::cohort_violation(Date date, const std::string& ratio,
         return moves_[j].second.peer_group == first.peer_group;
       });
   std::string names;
+  std::string ids;  // every member, for a reader matching the row to its series
   std::vector<double> factors;
   for (std::size_t m = 0; m < members.size(); ++m) {
     factors.push_back(moves_[members[m]].second.factor);
     if (m < kNamesShown) {
       names += (m == 0 ? "" : ", ") + moves_[members[m]].second.series;
     }
+    ids += (m == 0 ? "" : ",") + moves_[members[m]].second.id;
   }
   if (members.size() > kNamesShown) {
     names += " and " + std::to_string(members.size() - kNamesShown) + " more";
@@ -180,7 +182,8 @@ Violation CrossSection::cohort_violation(Date date, const std::string& ratio,
                       : ": a vendor's mass adjustment, or splits the actions file is missing");
   v.detail = {{"series_moving", static_cast<std::int64_t>(members.size())},
               {"ratio", ratio},
-              {"factor", factor}};
+              {"factor", factor},
+              {"members", ids}};
   if (family) {
     v.detail.push_back({"peer_group", first.peer_group});
   }

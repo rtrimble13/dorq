@@ -75,6 +75,26 @@ double log_cauchy(double x, double scale) noexcept {
   return stats::student_t_log_pdf(x, 1.0, scale);
 }
 
+// log density at x of a level anywhere between a and b, uniformly, plus a Normal
+// error with standard deviation sd: a flat top with Normal shoulders.
+double log_flat_top(double x, double a, double b, double sd) noexcept {
+  const double lo = std::min(a, b);
+  const double hi = std::max(a, b);
+  if (hi - lo < 1e-6 * sd) {
+    return log_normal_pdf(x, lo, sd);
+  }
+  // The density is symmetric about the middle: take x at or below it, where both
+  // terms are lower tails and lose no precision.
+  const double y = std::min(x, lo + hi - x);
+  const double z = (y - lo) / sd;
+  const double mass = stats::normal_cdf(z) - stats::normal_cdf((y - hi) / sd);
+  if (mass > 0.0) {
+    return std::log(mass / (hi - lo));
+  }
+  // Far below: the lower tail at z is about the Normal density over |z|.
+  return log_normal_pdf(y, lo, sd) + std::log(sd / (std::fabs(z) * (hi - lo)));
+}
+
 double split_weight(const SplitRatio& ratio) noexcept {
   struct Known {
     SplitRatio ratio;
@@ -141,6 +161,10 @@ struct Candidate {
   double grid = 0.0;                   // the price grid
   bool bar_ohl = false;                // open, high and low are usable
   std::optional<SplitAction> on_file;  // a split on file between the bar and the one before
+  // Cash dividends on file between the bar and the one before, when they move the
+  // price more than an ordinary move does.
+  std::optional<DividendOnFile> dividend;
+  double net_r = 0.0;  // the return with those dividends added back
 };
 
 // The bars after a candidate: the next_bars term, and what describes it.
@@ -331,6 +355,32 @@ class Scorer {
     return std::nullopt;
   }
 
+  // The cash dividends on file whose ex-dates fall after bar t-1 and on or before
+  // bar t, summed: what came off the price between the two. An amount DQ705
+  // reports at error (zero or less, or at or above the close before) is left out;
+  // nullopt when none is left, or they add up to the whole price.
+  [[nodiscard]] std::optional<DividendOnFile> dividend_between(std::size_t t) const {
+    if (actions_ == nullptr || t == 0 || t >= n_) {
+      return std::nullopt;
+    }
+    const Date before = date(t - 1);
+    const Date at = date(t);
+    const double prev = close(t - 1);
+    DividendOnFile on_file;
+    for (const DividendAction& dividend : actions_->dividends) {
+      if (dividend.ex_date > before && dividend.ex_date <= at && dividend.amount > 0.0 &&
+          dividend.amount < prev) {
+        on_file.amount += dividend.amount;
+        on_file.ex_date = dividend.ex_date;  // the list is sorted by ex-date
+        ++on_file.count;
+      }
+    }
+    if (on_file.count == 0 || on_file.amount >= prev) {
+      return std::nullopt;
+    }
+    return on_file;
+  }
+
   [[nodiscard]] PriceFinding score(std::size_t t) const;
   [[nodiscard]] std::vector<SplitFinding> split_findings() const;
   [[nodiscard]] std::vector<StaleRun> stale_runs() const;
@@ -419,6 +469,15 @@ Candidate Scorer::candidate(std::size_t t) const {
   c.grid = price_grid(t - 1, t);
   c.row = f_.row[t];
   c.on_file = has_ohlc_ ? split_between(t) : std::nullopt;
+  // A dividend comes off the price at its ex-date. One smaller than an ordinary
+  // move explains nothing a real move does not, and would only dilute the errors'
+  // share of the prior on every ex-date.
+  c.dividend = has_ohlc_ ? dividend_between(t) : std::nullopt;
+  const double drop = c.dividend ? -std::log1p(-c.dividend->amount / c.prev_close) : 0.0;
+  if (drop <= c.base_sd) {
+    c.dividend.reset();
+  }
+  c.net_r = c.dividend ? c.r + drop : c.r;
   const std::size_t row = c.row;
   c.bar_ohl = has_ohlc_ && std::isfinite(series_.open[row]) && std::isfinite(series_.high[row]) &&
               std::isfinite(series_.low[row]) && series_.open[row] > 0.0 &&
@@ -435,14 +494,16 @@ void Scorer::applicable(const Candidate& c, std::array<bool, kCount>& on) const 
   on.at(idx(H::kUnreportedSplit)) = has_ohlc_ && !splits_.empty();
   on.at(idx(H::kHistorySegment)) = c.elapsed >= settings_.segment_gap;
   on.at(idx(H::kExplainedSplit)) = c.on_file.has_value();
+  on.at(idx(H::kExplainedDividend)) = c.dividend.has_value();
 }
 
 // The prior, normalized over the hypotheses that apply; nullopt when every one of
 // them has weight zero.
 std::optional<Term> Scorer::prior_term(std::array<bool, kCount>& on) const {
   const PricePriors& p = settings_.priors;
-  const Terms weights = {p.market_move,      p.tick_move,   p.bad_print,       p.bad_close,
-                         p.unreported_split, p.scale_error, p.history_segment, p.explained_split};
+  const Terms weights = {p.market_move,     p.tick_move,        p.bad_print,
+                         p.bad_close,       p.unreported_split, p.scale_error,
+                         p.history_segment, p.explained_split,  p.explained_dividend};
   double total = 0.0;
   for (std::size_t h = 0; h < kCount; ++h) {
     total += on.at(h) ? weights.at(h) : 0.0;
@@ -547,6 +608,10 @@ Term Scorer::return_term(const Candidate& c, PriceFinding& out) const {
                                      ? ordinary(c.r - std::log(c.on_file->price_factor()),
                                                 std::hypot(c.base_sd, settings_.ratio_tolerance))
                                      : kNegInf;
+  // The dividend on file: the price falls by it, and the rest is an ordinary move.
+  // When the price did not fall, the move left is the dividend itself, and a wrong
+  // row on file invents no move.
+  at(term, H::kExplainedDividend) = c.dividend ? ordinary(c.net_r, c.base_sd) : kNegInf;
   if (out.split) {
     term.note = "nearest split " + out.split->to_string();
   }
@@ -563,13 +628,15 @@ NextBars Scorer::next_bars(const Candidate& c) const {
   out.term = Term{"next_bars", false, {}, {}};
   std::vector<double> plain;  // log density of each later return, as ordinary
   double all_plain = 0.0;
-  double all_stirred = 0.0;  // and as ordinary after a real move
+  double all_stirred = 0.0;      // and as ordinary after a real move
+  double all_stirred_net = 0.0;  // after a real move the size of what a dividend leaves
   double largest = 0.0;
   for (std::size_t j = 1; j <= c.max_block && t + j < n_; ++j) {
     const double sd = move_sd(c.sig, t + j - 1, t + j);
     plain.push_back(ordinary(f_.ret[t + j], sd));
     all_plain += plain.back();
     all_stirred += ordinary(f_.ret[t + j], std::hypot(sd, kAftershock * std::fabs(c.r)));
+    all_stirred_net += ordinary(f_.ret[t + j], std::hypot(sd, kAftershock * std::fabs(c.net_r)));
     largest = std::fabs(f_.ret[t + j]) > std::fabs(largest) ? f_.ret[t + j] : largest;
   }
   double norm = 0.0;
@@ -595,8 +662,15 @@ NextBars Scorer::next_bars(const Candidate& c) const {
     }
   }
   out.term.ll.fill(all_plain);
-  at(out.term, H::kMarketMove) =
-      stats::log_add(std::log(0.5) + all_stirred, std::log(0.5) + all_plain);
+  const auto real_move = [all_plain](double stirred) {
+    return stats::log_add(std::log(0.5) + stirred, std::log(0.5) + all_plain);
+  };
+  at(out.term, H::kMarketMove) = real_move(all_stirred);
+  // A split on file is a real event, often followed by a real move's volatility
+  // (a reverse split by a selloff); a distribution is a real move of what is left
+  // once the dividend is added back.
+  at(out.term, H::kExplainedSplit) = at(out.term, H::kMarketMove);
+  at(out.term, H::kExplainedDividend) = real_move(all_stirred_net);
   at(out.term, H::kBadPrint) = mixture;
   at(out.term, H::kBadClose) = first;
   out.count = plain.size();
@@ -666,7 +740,10 @@ void Scorer::volume_terms(const Candidate& c, PriceFinding& out, std::vector<Ter
     };
     // Volume rises with how surprising a real move is: not at all for an ordinary
     // one (a tick on a coarse grid), fully from about six standard deviations.
-    const double surprise = std::clamp((std::fabs(c.r) / c.base_sd - 2.0) / 4.0, 0.0, 1.0);
+    const auto surprise_of = [&c](double r) {
+      return std::clamp((std::fabs(r) / c.base_sd - 2.0) / 4.0, 0.0, 1.0);
+    };
+    const double surprise = surprise_of(c.r);
     at(term, H::kMarketMove) = ll(0.002, lpre + kSurge * surprise, spread);
     at(term, H::kTickMove) = ll(0.002, lpre, spread);
     at(term, H::kBadPrint) = ll(0.05, lpre + kBadPrintVolume * surprise, spread);
@@ -674,6 +751,9 @@ void Scorer::volume_terms(const Candidate& c, PriceFinding& out, std::vector<Ter
     at(term, H::kUnreportedSplit) = ll(0.002, lpost, spread);
     at(term, H::kScaleError) = ll(0.002, lpost, spread);
     at(term, H::kHistorySegment) = ll(0.002, lpost, 2.0 * spread);
+    at(term, H::kExplainedSplit) = at(term, H::kUnreportedSplit);
+    // A distribution moves no volume: only what is left of the move can.
+    at(term, H::kExplainedDividend) = ll(0.002, lpre + kSurge * surprise_of(c.net_r), spread);
     term.note = "against the median before";
     terms.push_back(std::move(term));
   }
@@ -697,6 +777,17 @@ void Scorer::volume_terms(const Candidate& c, PriceFinding& out, std::vector<Ter
   at(term, H::kMarketMove) = log_normal_pdf(dv, -0.5 * c.r, std::hypot(kVolumeDrift, noise));
   at(term, H::kUnreportedSplit) = log_normal_pdf(dv, -c.r, std::hypot(kSplitVolumeDrift, noise));
   at(term, H::kHistorySegment) = log_normal_pdf(dv, 0.0, std::hypot(2.0, noise));
+  if (c.on_file) {
+    // A split on file needs no volume to confirm it. A feed's unadjusted volume
+    // is sometimes adjusted for the split already, and a reverse split draws a
+    // burst of trading: the level after lands anywhere from unchanged to the
+    // ratio, with the usual drift either side. Without a split on file, the
+    // volume is what tells a split from a scale error.
+    at(term, H::kExplainedSplit) = log_flat_top(dv, 0.0, -std::log(c.on_file->price_factor()),
+                                                std::hypot(kVolumeDrift, noise));
+  }
+  at(term, H::kExplainedDividend) =
+      log_normal_pdf(dv, -0.5 * c.net_r, std::hypot(kVolumeDrift, noise));
   term.note = "median after / before";
   terms.push_back(std::move(term));
 }
@@ -821,14 +912,11 @@ PriceFinding Scorer::score(std::size_t t) const {
   if (out.considered.at(idx(H::kHistorySegment))) {
     segment_terms(c, terms);
   }
-  // A split on file looks like a split in everything but the return: calm bars
-  // after it, volume moving inversely.
+  // A split on file looks like a split in the bar's own fields and the volume on
+  // the day; the bars after it and the volume level are a real event's (next_bars,
+  // volume_terms). A dividend on file looks like a real move net of the dividend.
   out.split_on_file = c.on_file;
-  if (c.on_file) {
-    for (std::size_t i = 2; i < terms.size(); ++i) {
-      at(terms[i], H::kExplainedSplit) = at(terms[i], H::kUnreportedSplit);
-    }
-  }
+  out.dividend_on_file = c.dividend;
 
   const std::size_t best = conclude(terms, out);
   for (std::size_t h = 0; h < kCount; ++h) {
@@ -926,6 +1014,8 @@ std::string_view to_string(PriceHypothesis hypothesis) noexcept {
       return "history_segment";
     case H::kExplainedSplit:
       return "explained_split";
+    case H::kExplainedDividend:
+      return "explained_dividend";
   }
   return "market_move";
 }
