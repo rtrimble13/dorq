@@ -208,10 +208,14 @@ Engine::Processed Engine::process(Work& work) const {
     const std::string peer_group = meta != nullptr ? meta->peer_group : std::string{};
     for (const PriceFinding& finding : price->findings) {
       const auto split = static_cast<std::size_t>(PriceHypothesis::kUnreportedSplit);
-      // Not a move a split on file explains, nor a newest bar whose fate is open.
-      const auto explained = static_cast<std::size_t>(PriceHypothesis::kExplainedSplit);
+      // Not a move a split or a dividend on file explains (a fund family's year-end
+      // distributions look like a family splitting together), nor a newest bar
+      // whose fate is open.
+      const double explained =
+          finding.posterior.at(static_cast<std::size_t>(PriceHypothesis::kExplainedSplit)) +
+          finding.posterior.at(static_cast<std::size_t>(PriceHypothesis::kExplainedDividend));
       if (finding.claimed || finding.provisional || !finding.split ||
-          !finding.considered.at(split) || finding.posterior.at(explained) >= 0.5 ||
+          !finding.considered.at(split) || explained >= 0.5 ||
           std::fabs(std::log(finding.factor / finding.split->price_factor())) > 0.1) {
         continue;
       }
@@ -220,6 +224,7 @@ Engine::Processed Engine::process(Work& work) const {
       move.ratio = finding.split->to_string();
       move.factor = finding.factor;
       move.series = series.display_name();
+      move.id = series.id;
       move.peer_group = peer_group;
       move.posterior = finding.posterior;
       move.considered = finding.considered;

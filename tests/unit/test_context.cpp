@@ -91,24 +91,39 @@ std::vector<Bar> stock(int n, double start, double vol, std::uint64_t seed,
   return bars;
 }
 
-// From bar `from` on, every price times `factor` and volume divided by it.
-void split(std::vector<Bar>& bars, std::size_t from, double factor) {
+// From bar `from` on, every price times `factor` and volume divided by it; or,
+// with `raw_volume` false, volume as it was (a feed whose unadjusted volume is
+// already adjusted for the split).
+void split(std::vector<Bar>& bars, std::size_t from, double factor, bool raw_volume = true) {
   for (std::size_t i = from; i < bars.size(); ++i) {
     bars[i].open *= factor;
     bars[i].high *= factor;
     bars[i].low *= factor;
     bars[i].close *= factor;
-    bars[i].volume = std::round(bars[i].volume / factor);
+    if (raw_volume) {
+      bars[i].volume = std::round(bars[i].volume / factor);
+    }
   }
 }
 
-std::string bars_csv(const std::string& id, const std::vector<Bar>& bars, bool header = true) {
+// A distribution of `share` of the price ex at bar `from`: every price from there
+// on lower by that amount, as a share of the close before. Returns the amount, on
+// the close as written (two decimals).
+double distribute(std::vector<Bar>& bars, std::size_t from, double share) {
+  const double amount = std::round(bars[from - 1].close * 100.0) / 100.0 * share;
+  split(bars, from, 1.0 - share, false);
+  return amount;
+}
+
+std::string bars_csv(const std::string& id, const std::vector<Bar>& bars, bool header = true,
+                     int decimals = 2) {
   const auto days = sessions(static_cast<int>(bars.size()));
   std::string csv = header ? "series,date,open,high,low,close,volume\n" : "";
   for (std::size_t i = 0; i < bars.size(); ++i) {
     const Bar& b = bars[i];
-    csv += id + "," + days[i].to_string() + "," + fixed(b.open, 2) + "," + fixed(b.high, 2) + "," +
-           fixed(b.low, 2) + "," + fixed(b.close, 2) + "," + fixed(b.volume, 0) + "\n";
+    csv += id + "," + days[i].to_string() + "," + fixed(b.open, decimals) + "," +
+           fixed(b.high, decimals) + "," + fixed(b.low, decimals) + "," + fixed(b.close, decimals) +
+           "," + fixed(b.volume, 0) + "\n";
   }
   return csv;
 }
@@ -462,6 +477,168 @@ TEST_CASE("DQ701-DQ704: a split on file the bars contradict") {
     CHECK(count_matching(r.out, R"("code":"DQ702")") == 1);
     CHECK(contains(r.out, R"("kind":"check_split")"));
   }
+}
+
+TEST_CASE("a split on file needs no volume to confirm it, and one missing from the file does") {
+  // Share volume unchanged across the split: a feed whose "unadjusted" volume is
+  // adjusted already, or a reverse split's burst of trading.
+  const auto run_with = [](const std::vector<Bar>& bars, int decimals, const std::string& actions) {
+    const std::string csv = bars_csv("A", bars, true, decimals);
+    if (actions.empty()) {
+      return check(csv, {}, {"--isolated", "--select", "DQ2,DQ7", "--format", "jsonl"});
+    }
+    return check(csv, {{"a.csv", std::string{kActionsHeader} + actions}},
+                 {"--isolated", "--select", "DQ2,DQ7", "--format", "jsonl", "--actions", "a.csv"});
+  };
+
+  SUBCASE("a microcap's 1:10 reverse split") {
+    std::vector<Bar> bars = stock(400, 0.15, 0.04, 40);
+    split(bars, 200, 10.0, false);
+    const Result explained = run_with(bars, 4, "A," + day(200) + ",split,1,10,\n");
+    CAPTURE(explained.out);
+    CHECK(explained.out.empty());
+    // The same bars with no split on file: a scale error, as before.
+    const Result alone = run_with(bars, 4, "");
+    CAPTURE(alone.out);
+    CHECK(count_matching(alone.out, R"("code":"DQ202","check":"scale-shift","severity":"error")") ==
+          1);
+  }
+  SUBCASE("a large cap's 10:1 forward split") {
+    std::vector<Bar> bars = stock(400, 2400.0, 0.015, 41);
+    split(bars, 200, 0.1, false);
+    const Result explained = run_with(bars, 2, "A," + day(200) + ",split,10,1,\n");
+    CAPTURE(explained.out);
+    CHECK(explained.out.empty());
+  }
+  SUBCASE("a ratio on file the move does not match is still reported") {
+    std::vector<Bar> bars = stock(400, 0.15, 0.04, 42);
+    split(bars, 200, 100.0, false);
+    const Result r = run_with(bars, 4, "A," + day(200) + ",split,1,10,\n");
+    CAPTURE(r.out);
+    CHECK(count_matching(r.out, R"("code":"DQ703")") == 1);
+    CHECK(count_matching(r.out, R"("code":"DQ20)") == 0);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Dividends on file
+
+TEST_CASE(
+    "a dividend on file explains its ex-date's drop, and one missing from the file does not") {
+  // A fund's year-end distribution of about a third of its price.
+  std::vector<Bar> bars = stock(400, 27.87, 0.006, 43);
+  const double amount = distribute(bars, 200, 0.32);
+  std::string regular = kActionsHeader;
+  for (const int i : {30, 93, 156, 282, 345}) {
+    regular += "A," + day(i) + ",dividend,,,0.12\n";
+  }
+  const std::string csv = bars_csv("A", bars);
+  const auto run_with = [&csv](const std::string& actions) {
+    return check(csv, {{"a.csv", actions}},
+                 {"--isolated", "--select", "DQ2", "--format", "jsonl", "--show-info", "--actions",
+                  "a.csv"});
+  };
+
+  const Result explained =
+      run_with(regular + "A," + day(200) + ",dividend,,," + fixed(amount, 4) + "\n");
+  CAPTURE(explained.out);
+  CHECK(count_matching(explained.out, R"("code":"DQ2)") ==
+        count_matching(explained.out, R"("code":"DQ209")"));
+  CHECK(contains(explained.out, "the " + fixed(amount, 4) + " dividend on file, ex " + day(200)));
+  CHECK(contains(explained.out, R"("explained_dividend":)"));
+
+  // Without it, the drop looks like a 3:2 split, as before.
+  const Result missing = run_with(regular);
+  CAPTURE(missing.out);
+  CHECK(count_matching(missing.out,
+                       R"("code":"DQ203","check":"unreported-split","severity":"error")") == 1);
+
+  // A dividend DQ705 reports at error (here, a negative one) is not credited.
+  const Result negative =
+      run_with(regular + "A," + day(200) + ",dividend,,,-" + fixed(amount, 4) + "\n");
+  CAPTURE(negative.out);
+  CHECK(count_matching(negative.out, R"("code":"DQ203")") == 1);
+}
+
+TEST_CASE("a dividend on file as the newest bar is credited before any bar confirms it") {
+  // A closed-end fund's special dividend of a fifth of its price, ex on the newest
+  // bar (IAE, 2026-10-09).
+  std::vector<Bar> bars = stock(201, 8.85, 0.01, 44);
+  const double amount = distribute(bars, 200, 0.19);
+  const std::string csv = bars_csv("A", bars);
+  const Result alone = check(csv, {}, {"--isolated", "--select", "DQ2", "--format", "jsonl"});
+  CAPTURE(alone.out);
+  CHECK(count_matching(alone.out, R"("provisional":true)") == 1);
+  const Result explained =
+      check(csv,
+            {{"a.csv", std::string{kActionsHeader} + "A," + day(200) + ",dividend,,," +
+                           fixed(amount, 4) + "\n"}},
+            {"--isolated", "--select", "DQ2", "--format", "jsonl", "--actions", "a.csv"});
+  CAPTURE(explained.out);
+  CHECK(explained.out.empty());
+}
+
+TEST_CASE("a dividend on file invents no move where the price did not drop") {
+  // A third of the price on file as a dividend, and no drop: a wrong row. The bar
+  // is not even a candidate, and nothing is reported.
+  const std::vector<Bar> bars = stock(400, 27.87, 0.006, 45);
+  const std::string amount = fixed(std::round(bars[199].close * 100.0) / 100.0 * 0.32, 4);
+  const Result r = check(
+      bars_csv("A", bars),
+      {{"a.csv", std::string{kActionsHeader} + "A," + day(200) + ",dividend,,," + amount + "\n"}},
+      {"--isolated", "--select", "DQ2", "--format", "jsonl", "--show-info", "--actions", "a.csv"});
+  CAPTURE(r.out);
+  CHECK_FALSE(contains(r.out, R"("date":")" + day(200)));
+}
+
+TEST_CASE("a dividend is weighed only when larger than an ordinary move, and hides no error") {
+  std::vector<Bar> bars = stock(400, 50.0, 0.015, 46);
+  bars[200].open *= 3.0;  // a bad print on an ex-date
+  bars[200].high *= 3.0;
+  bars[200].low *= 3.0;
+  bars[200].close *= 3.0;
+  const auto run_with = [&bars](const std::string& amount) {
+    return check(
+        bars_csv("A", bars),
+        {{"a.csv", std::string{kActionsHeader} + "A," + day(200) + ",dividend,,," + amount + "\n"}},
+        {"--isolated", "--select", "DQ2", "--format", "jsonl", "--actions", "a.csv"});
+  };
+  // A regular quarterly dividend, smaller than a day's ordinary move: not weighed,
+  // so it cannot dilute the errors' share of the prior.
+  const Result small = run_with("0.25");
+  CAPTURE(small.out);
+  CHECK(count_matching(small.out, R"("code":"DQ201","check":"bad-print","severity":"error")") == 1);
+  CHECK_FALSE(contains(small.out, "explained_dividend"));
+  // A large one is weighed, and does not explain a move the wrong way.
+  const Result large = run_with("15");
+  CAPTURE(large.out);
+  CHECK(count_matching(large.out, R"("code":"DQ201","check":"bad-print","severity":"error")") == 1);
+  CHECK(contains(large.out, R"("explained_dividend":)"));
+}
+
+TEST_CASE("a fund family's distributions on file are not a family splitting together") {
+  std::string csv;
+  std::string meta = "series,peer_group\n";
+  std::string actions = kActionsHeader;
+  for (int s = 0; s < 4; ++s) {
+    std::vector<Bar> bars = stock(400, 60.0, 0.006, 50 + static_cast<std::uint64_t>(s));
+    const double amount = distribute(bars, 250, 0.2);  // ≈ a 5:4 split
+    const std::string id = "F" + std::to_string(s);
+    csv += bars_csv(id, bars, s == 0);
+    meta += id + ",FAM\n";
+    actions += id + "," + day(250) + ",dividend,,," + fixed(amount, 4) + "\n";
+  }
+  const Result missing =
+      check(csv, {{"meta.csv", meta}},
+            {"--isolated", "--select", "DQ2,DQ6", "--format", "jsonl", "--meta", "meta.csv"});
+  CAPTURE(missing.out);
+  CHECK(count_matching(missing.out, R"("code":"DQ601")") == 1);
+  CHECK(contains(missing.out, R"("members":"F0,F1,F2,F3")"));
+  const Result on_file = check(csv, {{"meta.csv", meta}, {"a.csv", actions}},
+                               {"--isolated", "--select", "DQ2,DQ6", "--format", "jsonl", "--meta",
+                                "meta.csv", "--actions", "a.csv"});
+  CAPTURE(on_file.out);
+  CHECK(on_file.out.empty());
 }
 
 TEST_CASE("DQ705: a dividend above the price, or a hundred times its others") {

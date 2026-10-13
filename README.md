@@ -37,8 +37,8 @@ Lines and JSON arrays, and reports in five formats. It runs:
 - point series (rates, spreads, index levels) on the log or the difference scale,
   with configurable bounds (DQ108);
 - with context files ([doc/context.md](doc/context.md)): corporate actions
-  (`--actions`), which explain splits on file and check them against the bars
-  (DQ7xx); series metadata (`--meta`), which profiles match on and which lets a
+  (`--actions`), which explain the moves at splits and cash dividends on file
+  and check the splits against the bars (DQ7xx); series metadata (`--meta`), which profiles match on and which lets a
   fund family's shared split count as evidence (DQ601); and a market reference
   (`--market`), net of which every move is judged (DQ602).
 

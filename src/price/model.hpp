@@ -12,6 +12,7 @@
 #include "config/config.hpp"
 #include "context/context.hpp"
 #include "dorq/calendar.hpp"
+#include "dorq/date.hpp"
 #include "dorq/series.hpp"
 #include "dorq/violation.hpp"
 #include "price/features.hpp"
@@ -20,22 +21,31 @@ namespace dorq {
 
 // The explanations compared for a suspicious bar (plan section 4.3).
 enum class PriceHypothesis : std::uint8_t {
-  kMarketMove,       // a real move: ordinary, or a jump
-  kTickMove,         // a move of one or two ticks, large only because the price is small
-  kBadPrint,         // one to revert_max_bars bars off the series, which then reverts
-  kBadClose,         // only the close field is wrong: open, high and low held the level
-  kUnreportedSplit,  // the level shifts by a split ratio, and volume shifts inversely
-  kScaleError,       // the level shifts by a power of ten (or to an implausible price)
-  kHistorySegment,   // after a long gap, a different security's history continues
-  kExplainedSplit,   // with --actions: a split on file between the bars explains the move
+  kMarketMove,         // a real move: ordinary, or a jump
+  kTickMove,           // a move of one or two ticks, large only because the price is small
+  kBadPrint,           // one to revert_max_bars bars off the series, which then reverts
+  kBadClose,           // only the close field is wrong: open, high and low held the level
+  kUnreportedSplit,    // the level shifts by a split ratio, and volume shifts inversely
+  kScaleError,         // the level shifts by a power of ten (or to an implausible price)
+  kHistorySegment,     // after a long gap, a different security's history continues
+  kExplainedSplit,     // with --actions: a split on file between the bars explains the move
+  kExplainedDividend,  // with --actions: a cash dividend on file between the bars comes off
 };
-inline constexpr std::size_t kPriceHypotheses = 8;
+inline constexpr std::size_t kPriceHypotheses = 9;
 
 [[nodiscard]] std::string_view to_string(PriceHypothesis hypothesis) noexcept;
 [[nodiscard]] constexpr bool is_error(PriceHypothesis hypothesis) noexcept {
   return hypothesis != PriceHypothesis::kMarketMove && hypothesis != PriceHypothesis::kTickMove &&
-         hypothesis != PriceHypothesis::kExplainedSplit;
+         hypothesis != PriceHypothesis::kExplainedSplit &&
+         hypothesis != PriceHypothesis::kExplainedDividend;
 }
+
+// The cash dividends on file between a bar and the one before, together.
+struct DividendOnFile {
+  double amount = 0.0;  // their sum, per share
+  Date ex_date;         // the latest ex-date
+  int count = 0;
+};
 
 // One evidence term, as the log Bayes factor of the reported hypothesis against
 // market_move.
@@ -66,6 +76,9 @@ struct PriceFinding {
   int power_of_ten = 0;                      // for a scale error: the nearest power of ten
   std::optional<double> volume_ratio;        // median volume after / before
   std::optional<SplitAction> split_on_file;  // a split on file between this bar and the last
+  // Dividends on file between this bar and the last, when explained_dividend was
+  // considered.
+  std::optional<DividendOnFile> dividend_on_file;
   // A DQ7xx finding about a split on file accounts for this move (a misdated or
   // doubled split, the wrong ratio): the DQ2xx checks leave it to that one.
   bool claimed = false;

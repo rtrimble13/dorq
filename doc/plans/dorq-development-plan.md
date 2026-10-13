@@ -929,7 +929,7 @@ at precision 1.0. The real test is M7's fit on fafnir's labels (DR-0704).
 | DR-0704 | dorq | Calibrate on the fafnir labels and ship `priors/fafnir.toml` | S | 🔄 `priors/fafnir.toml` awaiting merge; the fit needs the labelling pass |
 | DR-0705 | fafnir | Recheck by rerun-and-negate for the `dorq_*` checks; tests | M | 🔄 awaiting merge |
 | DR-0706 | fafnir | Skill and playbook updates, tiers, `NEVER_AUTO_RESOLVE`, the test pinning the two | M | 🔄 awaiting merge |
-| DR-0707 | fafnir | Shadow period (≥ 20 sessions), a go/no-go against §8, cutover, retiring the SQL checks | M | 🔄 first shadow night run (as of 2026-10-09); DQ107 on one-lot series fixed in v0.8.1 |
+| DR-0707 | fafnir | Shadow period (≥ 20 sessions), a go/no-go against §8, cutover, retiring the SQL checks | M | 🔄 first shadow night run (as of 2026-10-09); DQ107 on one-lot series fixed in v0.8.1; dividends and splits on file, pinned series in v0.9.0 |
 
 **As built** (fafnir's doc/dorq.md and ADR 0013 are the references; dorq v0.7.0):
 
@@ -1012,6 +1012,51 @@ at precision 1.0. The real test is M7's fit on fafnir's labels (DR-0704).
   keeps about 500 of the 15,632, including repeated bars such as one flat at 0.015 on the same 18,349,172
   shares on four dates. The 640 reports with ranged neighbours are unchanged, and
   so is DQ107 on dorq-synth.
+- **Corporate actions on file, and pinned prices** (v0.9.0; the host's brief of
+  2026-10-13, from shadow nights through 2026-10-12). After v0.8.1, most of what
+  was left was documented corporate actions reported as errors:
+  - *Dividends.* On the 10-09 full-year file, 142 downward DQ2xx reports were
+    explained within 3% by a cash dividend on file for that ex-date, 110 of them
+    mutual funds' December 2025 capital-gain distributions reported as "≈ a 5:4
+    split". `--actions` dividends fed only DQ705. The price model now weighs
+    `explained_dividend`: the move net of the dividends on file is a real move,
+    volume and the bars after included. A dividend smaller than an ordinary move
+    is not weighed, so it cannot dilute the errors' share of the prior on every
+    regular ex-date; one DQ705 reports at error is not credited. DQ601 leaves
+    dividend-explained moves out, as it does split-explained ones, so a fund
+    family's distributions do not become a cohort move.
+  - *Splits on file.* 101 DQ2xx reports a year sat on a split on file whose ratio
+    the move matched within 25% (99 DQ202, 80 at error; 94 reverse splits). On
+    those, share volume after / before had a median of 1.18, not the ÷ratio
+    `explained_split` expected: microcap reverse splits draw a burst of trading,
+    and the vendor's "unadjusted" volume is sometimes split-adjusted (KLAC's
+    10:1 on 2026-06-12). `explained_split` now takes its volume level after as
+    anywhere from unchanged to the ratio, and the bars after as a real move's; the
+    return term, the plausibility gate and DQ701–DQ704 are unchanged. Where a 1:10
+    split meets a ×12.6–14.3 move on a volatile microcap, the residual is judged
+    against the stock's own volatility, so a few of the 23 reports the brief
+    counted as mismatches may become DQ209 too; the clear defects (1:15 on file
+    against ×150.6) stay.
+  - *DQ107.* 30 of the night's 63 reports were SPACs pinned at their trust value
+    ($9.87–10.88, a cent step 0.1% of the price, closes moving a median of 0–1
+    steps). With no ranged bar nearby, a flat bar is no longer reported when a
+    grid step is under `pinned_step_share` of the price and the closes nearby
+    move `flat_bar_steps` steps or fewer. The brief proposed 0.01; the default is
+    0.002, a cent grid from $5, because at 0.01 a quiet $1–3 stock's copied close
+    would pass as pinned. A flat bar on less than `trade_size` is no longer
+    reported (5 of the night's reports). Its detail adds `grid_step`,
+    `ranged_nearby` and `close_steps`, and its message prints the steps nearby to
+    two decimals: reports that printed "a median 3 steps" were above 3 (each
+    nearby range is taken at the flat bar's price), not an off-by-one.
+  - *DQ601* adds `detail.members`, every member's id, so fafnir's `dq compare`
+    can match a cohort row to the series in it.
+
+  On the brief's synthetic fixtures, every expectation in its table holds, and
+  the host's real-data extract shows no DQ2xx report on IAE, TTMIX, VJET, KLAC or
+  INBS and no DQ107 on the SPACs, with QCJL's DQ202 and DQ107 and the DQ304
+  unchanged. The new hypothesis name, detail fields and config key make this a
+  minor release. On dorq-synth, no price check moves; DQ107 loses one false
+  positive (a flat bar on 968 shares).
 
 ### M8: Stretch
 - DQ801 cross-vendor disagreement (FMP vs Sharadar) for the parallel run.

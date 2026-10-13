@@ -198,6 +198,8 @@ IntegrityPatch read_integrity(const toml::table& table, const std::string& where
       patch.precision_min_contrast = read_double(node, where, path, 0.0, 1.0);
     } else if (key == "flat_bar_steps") {
       patch.flat_bar_steps = read_double(node, where, path, 0.0, 1e6);
+    } else if (key == "pinned_step_share") {
+      patch.pinned_step_share = read_double(node, where, path, 0.0, 1.0);
     } else if (key == "bounds") {
       patch.bounds = read_bounds(node, where, path);
     } else {
@@ -341,6 +343,8 @@ void read_priors(const toml::table& table, const std::string& where, const std::
       patch.history_segment = value;
     } else if (key == "explained_split") {
       patch.explained_split = value;
+    } else if (key == "explained_dividend") {
+      patch.explained_dividend = value;
     } else if (key == "split_on_file_error") {
       if (value >= 1.0) {
         fail(where, node, "\"" + path + "\" is a probability: from 0 to below 1");
@@ -652,6 +656,9 @@ void append_integrity_patch(std::string& out, const IntegrityPatch& patch) {
   if (patch.flat_bar_steps) {
     out += "flat_bar_steps = " + format_number(*patch.flat_bar_steps) + "\n";
   }
+  if (patch.pinned_step_share) {
+    out += "pinned_step_share = " + format_number(*patch.pinned_step_share) + "\n";
+  }
   if (patch.bounds) {
     out += "bounds = [" + format_number(patch.bounds->low) + ", " +
            format_number(patch.bounds->high) + "]\n";
@@ -666,6 +673,7 @@ IntegrityPatch full_patch(const IntegritySettings& settings) {
   full.precision_min_segment = settings.precision_min_segment;
   full.precision_min_contrast = settings.precision_min_contrast;
   full.flat_bar_steps = settings.flat_bar_steps;
+  full.pinned_step_share = settings.pinned_step_share;
   full.bounds = settings.bounds;
   return full;
 }
@@ -737,6 +745,7 @@ PricePatch full_patch(const PriceSettings& settings) {
   full.tick_move = settings.priors.tick_move;
   full.history_segment = settings.priors.history_segment;
   full.explained_split = settings.priors.explained_split;
+  full.explained_dividend = settings.priors.explained_dividend;
   full.split_on_file_error = settings.priors.split_on_file_error;
   full.stale_run = settings.priors.stale_run;
   return full;
@@ -799,6 +808,7 @@ void append_priors_patch(std::string& out, const PricePatch& patch) {
   append_number(out, "tick_move", patch.tick_move);
   append_number(out, "history_segment", patch.history_segment);
   append_number(out, "explained_split", patch.explained_split);
+  append_number(out, "explained_dividend", patch.explained_dividend);
   append_number(out, "split_on_file_error", patch.split_on_file_error);
   append_number(out, "stale_run", patch.stale_run);
 }
@@ -875,6 +885,9 @@ void IntegrityPatch::apply_to(IntegritySettings& settings) const {
   if (flat_bar_steps) {
     settings.flat_bar_steps = *flat_bar_steps;
   }
+  if (pinned_step_share) {
+    settings.pinned_step_share = *pinned_step_share;
+  }
   if (bounds) {
     settings.bounds = *bounds;
   }
@@ -939,6 +952,7 @@ void PricePatch::apply_to(PriceSettings& settings) const {
   set(settings.priors.tick_move, tick_move);
   set(settings.priors.history_segment, history_segment);
   set(settings.priors.explained_split, explained_split);
+  set(settings.priors.explained_dividend, explained_dividend);
   set(settings.priors.split_on_file_error, split_on_file_error);
   set(settings.priors.stale_run, stale_run);
 }
@@ -1348,6 +1362,9 @@ precision_min_segment = 20
 precision_min_contrast = 0.8
 # DQ107: a flat bar is expected where nearby bars span this many price-grid steps or fewer.
 flat_bar_steps = 3
+# DQ107: with no ranged bar nearby, a grid step under this share of the price, with closes
+# moving flat_bar_steps or fewer, is a pinned price (a SPAC at its trust value), not a lost range.
+pinned_step_share = 0.002
 # DQ108: the range values must lie in, e.g. bounds = [-5, 25] for a yield; none by default.
 
 [coverage]
@@ -1394,6 +1411,7 @@ scale_error = 0.02
 tick_move = 0.01
 history_segment = 0.05
 explained_split = 0.9         # with --actions: a split on file between the bars explains a move
+explained_dividend = 0.9      # with --actions: a cash dividend on file between the bars comes off
 split_on_file_error = 0.06    # with --actions: a split on file being wrong (DQ701-DQ704)
 stale_run = 0.00003           # DQ501: a run of repeated closes being a stale feed, per bar
 

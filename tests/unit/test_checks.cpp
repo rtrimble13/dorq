@@ -1,7 +1,9 @@
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <sstream>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include <doctest/doctest.h>
@@ -9,6 +11,7 @@
 #include "checks/check.hpp"
 #include "checks/integrity.hpp"
 #include "config/config.hpp"
+#include "dorq/violation.hpp"
 #include "io/reader.hpp"
 #include "test_support.hpp"
 
@@ -169,12 +172,13 @@ TEST_CASE("DQ107: flat_bar_steps sets what a coarse grid is") {
 namespace {
 
 // A small fund that prints one 100-share lot a day, so every bar is flat, with a
-// few days of two or three lots.
+// few days of two or three lots. Its closes move tens of cents a day: it is not
+// pinned.
 dorq::Series one_lot_series() {
   std::vector<std::string> rows;
   rows.reserve(80);
   for (int d = 0; d < 80; ++d) {
-    const double c = 30.0 + 0.01 * ((d * 3) % 8);
+    const double c = 30.0 + 0.01 * ((d * 37) % 50);
     rows.push_back(bar_row(d, c, c, c, c, d % 9 == 4 ? 200 + 100 * (d % 2) : 100));
   }
   return one_series(bars(rows));
@@ -202,6 +206,111 @@ TEST_CASE("DQ107: trade_size sets what one lot is") {
     CHECK(dorq::test::contains(found.front().message, "(median 100)"));
     CHECK(dorq::test::contains(found.front().message, "with no bar nearby that has a range"));
   }
+}
+
+namespace {
+
+// Every bar flat, at `price(d)`, on volume about 5,000 with a block trade every
+// 17 days: no bar has a range to judge by.
+template <typename Price>
+dorq::Series all_flat(Price price, int decimals = 2) {
+  std::vector<std::string> rows;
+  rows.reserve(130);
+  for (int d = 0; d < 130; ++d) {
+    const double c = price(d);
+    const double volume = (d % 17 == 5 ? 200000 : 3000 + 700 * ((d * 5) % 7));
+    rows.push_back(bar_row(d, c, c, c, c, volume, decimals));
+  }
+  return one_series(bars(rows));
+}
+
+// A violation's detail field by key.
+const dorq::DetailValue& detail(const dorq::Violation& v, const std::string& key) {
+  const auto it = std::find_if(v.detail.begin(), v.detail.end(),
+                               [&key](const dorq::DetailField& f) { return f.key == key; });
+  REQUIRE(it != v.detail.end());
+  return it->value;
+}
+
+bool has_detail(const dorq::Violation& v, const std::string& key) {
+  return std::any_of(v.detail.begin(), v.detail.end(),
+                     [&key](const dorq::DetailField& f) { return f.key == key; });
+}
+
+}  // namespace
+
+TEST_CASE("DQ107: a pinned price prints flat bars, a collapsed scale or a copied close does not") {
+  // A SPAC at its trust value: a cent grid at $10 (a step of 0.1% of the price),
+  // closes moving a cent now and then.
+  const auto spac = all_flat([](int d) { return 10.00 + 0.01 * std::floor(d / 11.0); });
+  CHECK(run_check(dorq::ZeroRangeWithVolume{}, spac).empty());
+  // pinned_step_share is what a fine grid is: below a step's share, reported.
+  const auto strict = run_check(dorq::ZeroRangeWithVolume{}, spac, {.pinned_step_share = 0.0005});
+  REQUIRE_FALSE(strict.empty());
+  CHECK(dorq::test::contains(strict.front().message, "with no bar nearby that has a range"));
+
+  // A sub-dime price on a cent grid (a step of 14% of the price): the closes do not
+  // move because the scale rounds them away (price_scale_collapse).
+  const auto collapse = all_flat([](int d) { return d % 5 == 2 ? 0.08 : 0.07; });
+  CHECK(run_check(dorq::ZeroRangeWithVolume{}, collapse).size() >= 60);
+
+  // A liquid price whose close was copied into open, high and low: the closes move
+  // about 25 cents a day.
+  const auto copied = all_flat([](int d) { return 50.0 + 0.25 * (d % 2) + 0.01 * (d % 3); });
+  const auto found = run_check(dorq::ZeroRangeWithVolume{}, copied);
+  REQUIRE(found.size() >= 60);
+  CHECK(std::get<bool>(detail(found.front(), "ranged_nearby")) == false);
+  CHECK(std::get<double>(detail(found.front(), "grid_step")) == doctest::Approx(0.01));
+  CHECK(std::get<double>(detail(found.front(), "close_steps")) > 20.0);
+  CHECK_FALSE(has_detail(found.front(), "nearby_range_steps"));
+}
+
+TEST_CASE("DQ107: under pinned_step_share's default, a $1.50 stock's still closes are reported") {
+  // At $1.50 a cent is 0.67% of the price, and a cent or three a day is an
+  // ordinary move: flat bars there may be a copied close, not a pinned price. A
+  // share of 0.01 would take them as pinned.
+  const auto low = all_flat([](int d) { return 1.50 + 0.01 * ((d * 3) % 4); });
+  CHECK_FALSE(run_check(dorq::ZeroRangeWithVolume{}, low).empty());
+  CHECK(run_check(dorq::ZeroRangeWithVolume{}, low, {.pinned_step_share = 0.01}).empty());
+}
+
+TEST_CASE("DQ107: a flat bar below one trade's volume is one print") {
+  // A thin ETF whose multi-lot days have a range; a one-lot day (100 shares, the
+  // series' median) prints one price.
+  std::vector<std::string> rows;
+  rows.reserve(80);
+  for (int d = 0; d < 80; ++d) {
+    const double c = 47.97 + 0.03 * (d % 5);
+    rows.push_back(d == 40 ? bar_row(d, c, c, c, c, 100)
+                           : bar_row(d, c, c + 0.08, c - 0.08, c, d % 4 == 0 ? 200 : 100));
+  }
+  const dorq::Series series = one_series(bars(rows));
+  CHECK(run_check(dorq::ZeroRangeWithVolume{}, series).empty());
+  // At a trade_size of 50, 100 shares is two trades, and the bar is reported.
+  dorq::CoverageSettings coverage;
+  coverage.trade_size = 50.0;
+  const auto found = run_check(dorq::ZeroRangeWithVolume{}, series, {}, coverage);
+  REQUIRE(found.size() == 1);
+  CHECK(dorq::test::contains(found[0].message, "where the bars nearby span a median 1"));
+  CHECK(std::get<bool>(detail(found[0], "ranged_nearby")) == true);
+  CHECK(std::get<double>(detail(found[0], "nearby_range_steps")) ==
+        doctest::Approx(16.0).epsilon(0.01));
+}
+
+TEST_CASE("DQ107: the steps nearby print to two decimals, so a median above 3 is not shown as 3") {
+  // Bars spanning three cents near $10.01; a flat bar at $10.13 sees them at its
+  // own price, about 3.04 steps: above flat_bar_steps, and reported as such.
+  std::vector<std::string> rows;
+  rows.reserve(60);
+  for (int d = 0; d < 60; ++d) {
+    const double c = 10.00 + 0.01 * (d % 3);
+    rows.push_back(d == 30 ? bar_row(d, 10.13, 10.13, 10.13, 10.13, 900000)
+                           : bar_row(d, c, c + 0.02, c - 0.01, c, 500000 + 100 * d));
+  }
+  const auto found = run_check(dorq::ZeroRangeWithVolume{}, one_series(bars(rows)));
+  REQUIRE(found.size() == 1);
+  CHECK(dorq::test::contains(found[0].message, "span a median 3.04 steps"));
+  CHECK(std::get<double>(detail(found[0], "nearby_range_steps")) > 3.0);
 }
 
 TEST_CASE("selection: the most specific entry wins, as in flake8") {
@@ -313,10 +422,10 @@ TEST_CASE("DQ107: a flat bar on typical volume, not on a thin day") {
   std::vector<std::string> rows;
   for (int d = 1; d <= 25; ++d) {
     rows.push_back("2024-01-" + std::string(d < 10 ? "0" : "") + std::to_string(d) +
-                   ",10,11,9,10.5,100");
+                   ",10,11,9,10.5,100000");
   }
-  rows.emplace_back("2024-02-01,10,10,10,10,150");  // flat on above-median volume
-  rows.emplace_back("2024-02-02,10,10,10,10,3");    // flat on a thin day: normal
+  rows.emplace_back("2024-02-01,10,10,10,10,150000");  // flat on above-median volume
+  rows.emplace_back("2024-02-02,10,10,10,10,3000");    // flat on a thin day: normal
   const auto found = run_check(dorq::ZeroRangeWithVolume{}, one_series(bars(rows)));
   REQUIRE(found.size() == 1);
   CHECK(found[0].date->to_string() == "2024-02-01");

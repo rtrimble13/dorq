@@ -37,8 +37,9 @@ constexpr double kPriorSpread = 1.5;
 constexpr int kSlackDays = 3;
 
 Weights weights_of(const PricePriors& p) {
-  return {p.market_move,      p.tick_move,   p.bad_print,       p.bad_close,
-          p.unreported_split, p.scale_error, p.history_segment, p.explained_split};
+  return {p.market_move,     p.tick_move,        p.bad_print,
+          p.bad_close,       p.unreported_split, p.scale_error,
+          p.history_segment, p.explained_split,  p.explained_dividend};
 }
 
 PricePriors priors_of(const Weights& w, const PricePriors& base) {
@@ -51,6 +52,7 @@ PricePriors priors_of(const Weights& w, const PricePriors& base) {
   p.scale_error = w.at(idx(H::kScaleError));
   p.history_segment = w.at(idx(H::kHistorySegment));
   p.explained_split = w.at(idx(H::kExplainedSplit));
+  p.explained_dividend = w.at(idx(H::kExplainedDividend));
   return p;
 }
 
@@ -66,6 +68,7 @@ std::optional<std::array<bool, kCount>> allowed_for(const Label& label) {
     set(H::kMarketMove);
     set(H::kTickMove);
     set(H::kExplainedSplit);
+    set(H::kExplainedDividend);
     return a;
   }
   const std::string& code = label.expect;
@@ -253,6 +256,7 @@ class Collector {
         o.allowed.at(idx(H::kMarketMove)) = true;
         o.allowed.at(idx(H::kTickMove)) = true;
         o.allowed.at(idx(H::kExplainedSplit)) = true;
+        o.allowed.at(idx(H::kExplainedDividend)) = true;
       } else {
         continue;
       }
@@ -397,11 +401,11 @@ Fit evaluate(const std::vector<Observation>& obs, const Weights& w, const Weight
              const Hyper& hyper, const PricePriors& base) {
   Fit fit;
   // Priors as weights summing to 1 over the seven hypotheses every bar may have;
-  // explained_split on the same scale.
+  // explained_split and explained_dividend on the same scale.
   Weights normalized = w;
   double total = 0.0;
   for (std::size_t h = 0; h < kCount; ++h) {
-    if (h != idx(H::kExplainedSplit) && w.at(h) > kNegInf) {
+    if (h != idx(H::kExplainedSplit) && h != idx(H::kExplainedDividend) && w.at(h) > kNegInf) {
       total += std::exp(w.at(h));
     }
   }
@@ -634,6 +638,7 @@ std::string priors_toml(const CalibrationReport& r) {
   out += "scale_error = " + weight(p.scale_error) + "\n";
   out += "history_segment = " + weight(p.history_segment) + "\n";
   out += "explained_split = " + weight(p.explained_split) + "\n";
+  out += "explained_dividend = " + weight(p.explained_dividend) + "\n";
   out += "\n[calibration]\nversion = \"" + r.version + "\"\np_error_map = [";
   for (std::size_t i = 0; i < r.p_error_map.size(); ++i) {
     out += (i == 0 ? "\n  [" : ",\n  [") + fixed(r.p_error_map[i].first, 6) + ", " +

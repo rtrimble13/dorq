@@ -63,6 +63,8 @@ precision_high_sig_figs = 5
 precision_min_segment = 20
 precision_min_contrast = 0.8
 flat_bar_steps = 3    # DQ107: flat bars are ordinary where bars span this many grid steps
+pinned_step_share = 0.002  # DQ107: with no ranged bar nearby, a step under this share of the
+                           # price, with closes moving flat_bar_steps or fewer, is a pinned price
 # bounds = [-5, 25]   # DQ108: the range values must lie in; none by default
 
 [coverage]            # DQ3xx; see doc/checks/DQ301.md for the model
@@ -108,6 +110,7 @@ scale_error = 0.02
 tick_move = 0.01
 history_segment = 0.05
 explained_split = 0.9 # with --actions: a split on file between the bars explains the move
+explained_dividend = 0.9  # with --actions: a cash dividend on file between the bars came off
 split_on_file_error = 0.06  # with --actions: a split on file being wrong (DQ701-DQ704)
 stale_run = 3e-05     # DQ501: a run of repeated closes being a stale feed, per bar
 

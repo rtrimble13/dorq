@@ -26,6 +26,7 @@ struct PeerMove {
   std::string ratio;  // the nearest split ratio, "2:1"
   double factor = 1.0;
   std::string series;  // its display name
+  std::string id;      // its id (the series column)
   std::string peer_group;
   std::array<double, kPriceHypotheses> posterior{};
   std::array<bool, kPriceHypotheses> considered{};
