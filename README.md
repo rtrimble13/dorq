@@ -187,7 +187,7 @@ archives, plus a `SHA256SUMS` file:
 | `dorq-<version>-macos-arm64.tar.gz` | macOS on Apple silicon |
 
 ```bash
-version=0.8.1
+version=0.9.0
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/dorq-${version}-linux-x86_64.tar.gz"
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
@@ -212,7 +212,7 @@ Clang 18+).
 ```bash
 sudo apt-get install -y build-essential cmake ninja-build git
 git clone https://github.com/rtrimble13/dorq.git && cd dorq
-git checkout v0.8.1                        # or stay on main for the latest
+git checkout v0.9.0                        # or stay on main for the latest
 cmake --workflow --preset release          # configure, build, run the tests
 sudo cmake --install build/release --prefix /opt/dorq
 /opt/dorq/bin/dorq version                 # names the commit it was built from
