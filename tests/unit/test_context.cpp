@@ -133,7 +133,7 @@ const char* const kActionsHeader =
 // ---------------------------------------------------------------------------
 // Readers
 
-TEST_CASE("actions: fafnir's columns or dorq's, sorted; a bad row skipped, a bad file an error") {
+TEST_CASE("actions: fafnir's columns or dorq's, sorted, a bad row skipped, a bad file an error") {
   dorq::Context context;
   std::istringstream fafnir(std::string{kActionsHeader} +
                             "A,2021-06-01,split,2,1,\n"
@@ -385,7 +385,7 @@ TEST_CASE("DQ109: a context row that cannot be used is reported, and the run goe
 // ---------------------------------------------------------------------------
 // Splits on file
 
-TEST_CASE("a split on file explains its move; one missing from the file is DQ203") {
+TEST_CASE("a split on file explains its move, and one missing from the file is DQ203") {
   std::vector<Bar> bars = stock(400, 80.0, 0.015, 2);
   split(bars, 200, 0.5);
   const std::string csv = bars_csv("A", bars);
@@ -400,7 +400,7 @@ TEST_CASE("a split on file explains its move; one missing from the file is DQ203
   CHECK(count_matching(explained.out, R"("code":"DQ203")") == 0);
   CHECK(count_matching(explained.out, R"("code":"DQ70)") == 0);
   CHECK(contains(explained.out, "the 2:1 split on file, ex " + day(200)));
-  CHECK(contains(explained.out, R"("name":"explained_split")"));
+  CHECK(contains(explained.out, R"("explained_split":)"));
 }
 
 TEST_CASE("a split on file between two stored bars explains the move across them") {
