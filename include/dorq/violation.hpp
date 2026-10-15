@@ -88,6 +88,9 @@ struct Violation {
   std::vector<HypothesisProbability> hypotheses;
   std::vector<Evidence> evidence;
   std::optional<SuggestedAction> suggested_action;
+  // Fields of `record_key` beside the date: what tells two rows of one check,
+  // series and date apart (DQ601's ratio). Empty for most checks.
+  std::vector<DetailField> key;
 };
 
 }  // namespace dorq

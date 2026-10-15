@@ -184,6 +184,8 @@ Violation CrossSection::cohort_violation(Date date, const std::string& ratio,
               {"ratio", ratio},
               {"factor", factor},
               {"members", ids}};
+  // Two cohorts on one date (a 2:1 and a 3:2) are two conditions.
+  v.key = {{"ratio", ratio}};
   if (family) {
     v.detail.push_back({"peer_group", first.peer_group});
   }
@@ -331,11 +333,15 @@ std::vector<Violation> CrossSection::finalize(std::vector<SeriesResult>& results
              : std::string{}) +
         ", for a series with a bar on " + percent(t.tail_density) +
         " of recent sessions; P(feed outage) = " + format_probability(p);
+    // The date is the first missing session, whatever the as-of date: the key a
+    // caller deduplicates by stays the same while the feed stays stopped.
     v.detail = {{"last_date", t.last.to_string()},
                 {"as_of", as_of_->to_string()},
                 {"sessions_missing", std::int64_t{k}},
                 {"recent_density", t.tail_density},
-                {"p_outage", p}};
+                {"p_outage", p},
+                {"first_missing", first_missing.to_string()},
+                {"active_through", as_of_->to_string()}};
     if (in_cohort(first_missing)) {
       cohort_note(v, first_missing);
     }

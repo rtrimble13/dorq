@@ -72,6 +72,21 @@ class SplitBuilder {
 
   void no_jump(Violation& v, SuggestedAction& action) const {
     const std::size_t at = finding_.ex_bar;
+    if (finding_.duplicate_of && finding_.other_bar) {
+      // Another row on file at the same ratio has the move: this one repeats it.
+      const std::string other = finding_.duplicate_of->to_string();
+      const std::size_t j = *finding_.other_bar;
+      v.message += ", but the " + field_ + " moves " + times(factor(at)) + " on " +
+                   date(at).to_string() + ": a duplicate of the " + ratio_ + " split on file ex " +
+                   other + ", whose move (" + times(factor(j)) + " on " + date(j).to_string() +
+                   ") the bars show once";
+      v.detail.push_back({"duplicate_of_ex_date", other});
+      action.kind = "delete_split";
+      action.fields = {{"ratio", ratio_}, {"ex_date", ex_}};
+      action.text =
+          "delete the " + ratio_ + " split ex " + ex_ + ", a duplicate of the one ex " + other;
+      return;
+    }
     v.message += ", but the " + field_ + " does not move by its ratio within 5 sessions (" +
                  times(factor(at)) + " on " + date(at).to_string() +
                  "): the split is not real, or the bars already include it";
@@ -167,12 +182,108 @@ std::optional<std::size_t> close_before(const Series& s, Date day) {
   return std::nullopt;
 }
 
+// The row of the first usable close on or after a date.
+std::optional<std::size_t> close_on_or_after(const Series& s, Date day) {
+  const auto begin = std::lower_bound(s.date.begin(), s.date.end(), day);
+  for (auto i = static_cast<std::size_t>(begin - s.date.begin()); i < s.size(); ++i) {
+    if (std::isfinite(s.close[i]) && s.close[i] > 0.0) {
+      return i;
+    }
+  }
+  return std::nullopt;
+}
+
+constexpr std::size_t kMinHistory = 3;  // other positive dividends needed to judge one
+constexpr double kOrder = 10.0;         // ten times off the usual, either way
+// Daily accruals: small dividends on ex-dates at most this many calendar days apart
+// (a weekend and a holiday), each at most usual / kAccrualShare.
+constexpr int kAccrualGapDays = 5;
+constexpr double kAccrualShare = 5.0;
+
+// How a series pays (DQ705): which dividends are daily accruals, and which accrual
+// begins a run of them after regular payments, the change of frequency.
+struct PaymentRegimes {
+  std::vector<bool> accrual;  // per dividend
+  std::vector<bool> start;    // the first accrual after a regular payment
+};
+
+PaymentRegimes payment_regimes(const std::vector<DividendAction>& dividends) {
+  const std::size_t n = dividends.size();
+  PaymentRegimes out{std::vector<bool>(n, false), std::vector<bool>(n, false)};
+  // A positive dividend's neighbours on other ex-dates (two rows on one date, a
+  // dividend and a capital gain, are one payment), within kAccrualGapDays.
+  const auto near = [&](std::size_t d, std::size_t o) {
+    const int gap = std::abs(dividends[o].ex_date.days() - dividends[d].ex_date.days());
+    return o != d && dividends[o].amount > 0.0 && gap > 0 && gap <= kAccrualGapDays;
+  };
+  const auto has_near = [&](std::size_t d, const std::vector<bool>& among) {
+    for (std::size_t o = 0; o < n; ++o) {
+      if (among[o] && near(d, o)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  // The usual amount: the median of the payments with no other within a few days.
+  const std::vector<bool> positive = [&] {
+    std::vector<bool> p(n);
+    for (std::size_t d = 0; d < n; ++d) {
+      p[d] = dividends[d].amount > 0.0;
+    }
+    return p;
+  }();
+  std::vector<double> spaced;
+  for (std::size_t d = 0; d < n; ++d) {
+    if (positive[d] && !has_near(d, positive)) {
+      spaced.push_back(dividends[d].amount);
+    }
+  }
+  if (spaced.size() < kMinHistory) {
+    return out;  // every payment comes close to another: one regime, judged as such
+  }
+  const double usual = stats::median(std::move(spaced));
+  std::vector<bool> small(n);
+  for (std::size_t d = 0; d < n; ++d) {
+    small[d] = positive[d] && dividends[d].amount <= usual / kAccrualShare;
+  }
+  for (std::size_t d = 0; d < n; ++d) {
+    out.accrual[d] = small[d] && has_near(d, small);
+  }
+  // A run of accruals starts where the payment before it on another date is a
+  // regular one; at least kMinHistory regular payments must come before it.
+  std::size_t regular_before = 0;
+  std::optional<std::size_t> previous;  // the last positive dividend on an earlier date
+  for (std::size_t d = 0; d < n; ++d) {
+    if (!positive[d]) {
+      continue;
+    }
+    const bool earlier_payment = previous && dividends[*previous].ex_date < dividends[d].ex_date;
+    if (out.accrual[d] && regular_before >= kMinHistory && earlier_payment &&
+        !out.accrual[*previous]) {
+      out.start[d] = true;
+    }
+    regular_before += out.accrual[d] ? 0U : 1U;
+    if (!previous || dividends[*previous].ex_date < dividends[d].ex_date) {
+      previous = d;
+    }
+  }
+  return out;
+}
+
+// What the close did across a dividend's ex-date: the close before, the first on
+// or after, and the residual of the second from the first less the amount.
+struct ExDateMove {
+  double before = 0.0;
+  double on = 0.0;
+  double residual = 0.0;  // on - (before - amount)
+  bool corroborated = false;
+};
+
 // DQ705 for dividend d of a series, if it is implausible.
 std::optional<Violation> judge_dividend(const Series& s,
                                         const std::vector<DividendAction>& dividends, std::size_t d,
-                                        const CheckInfo& info) {
-  constexpr std::size_t kMinHistory = 3;
-  constexpr double kOrder = 10.0;
+                                        const PaymentRegimes& regimes,
+                                        const PriceSettings& settings, const CheckInfo& info) {
   const DividendAction& dividend = dividends[d];
   const std::string amount = format_number(dividend.amount);
   const std::string ex = dividend.ex_date.to_string();
@@ -186,30 +297,27 @@ std::optional<Violation> judge_dividend(const Series& s,
     return std::nullopt;
   }
   const double prior_close = before ? s.close[*before] : 0.0;
-  if (dividend.amount < 0.0) {
-    v.severity = Severity::kError;
-    v.message = "dividend " + amount + " ex " + ex + " is negative";
-  } else if (dividend.amount == 0.0) {
-    // Harmless to an adjustment (its factor is 1), but no cash dividend pays
-    // nothing: the feed lost the amount, or the event is not cash.
-    v.severity = Severity::kWarn;
-    v.message = "dividend 0 ex " + ex +
-                " pays nothing: an amount missing from the feed, or a distribution that is not "
-                "cash";
-  } else if (dividend.amount >= prior_close) {
-    v.severity = Severity::kError;
-    v.line = s.line[*before];
-    v.message = "dividend " + amount + " ex " + ex + " is at or above the close before it, " +
-                significant(prior_close, 6) + " on " + s.date[*before].to_string();
-    v.detail.push_back({"previous_close", prior_close});
-  } else {
-    // The others' amounts, and their yields on the close before each: a split
-    // changes the one, a price error the other; a slip in the amount changes both.
-    // A zero or negative other is reported on its own and is no measure of these.
-    std::vector<double> amounts;
-    std::vector<double> yields;
+  // The close on the ex-date (or the first bar after it), against the close before
+  // less the amount.
+  std::optional<ExDateMove> moved;
+  if (before && dividend.amount > 0.0) {
+    if (const auto on = close_on_or_after(s, dividend.ex_date)) {
+      moved = ExDateMove{prior_close, s.close[*on], s.close[*on] - (prior_close - dividend.amount),
+                         false};
+    }
+  }
+  const auto add_residual = [&v, &moved] {
+    if (moved) {
+      v.detail.push_back({"ex_date_close", moved->on});
+      v.detail.push_back({"residual", moved->residual});
+      v.detail.push_back({"corroborated", moved->corroborated});
+    }
+  };
+  // Every other positive dividend of the same regime: accruals are judged against
+  // accruals, payments against payments.
+  const auto others = [&](std::vector<double>& amounts, std::vector<double>& yields) {
     for (std::size_t o = 0; o < dividends.size(); ++o) {
-      if (o == d || !(dividends[o].amount > 0.0)) {
+      if (o == d || !(dividends[o].amount > 0.0) || regimes.accrual[o] != regimes.accrual[d]) {
         continue;
       }
       amounts.push_back(dividends[o].amount);
@@ -217,6 +325,72 @@ std::optional<Violation> judge_dividend(const Series& s,
         yields.push_back(dividends[o].amount / s.close[*close]);
       }
     }
+  };
+  if (dividend.amount < 0.0) {
+    v.severity = Severity::kError;
+    v.message = "dividend " + amount + " ex " + ex + " is negative";
+    v.detail.push_back({"kind", std::string{"negative"}});
+  } else if (dividend.amount == 0.0) {
+    // Harmless to an adjustment (its factor is 1), but no cash dividend pays
+    // nothing: the feed lost the amount, or the event is not cash.
+    v.severity = Severity::kWarn;
+    v.message = "dividend 0 ex " + ex +
+                " pays nothing: an amount missing from the feed, or a distribution that is not "
+                "cash";
+    v.detail.push_back({"kind", std::string{"zero"}});
+  } else if (dividend.amount >= prior_close) {
+    v.severity = Severity::kError;
+    v.line = s.line[*before];
+    v.message = "dividend " + amount + " ex " + ex + " is at or above the close before it, " +
+                significant(prior_close, 6) + " on " + s.date[*before].to_string();
+    v.detail.push_back({"previous_close", prior_close});
+    v.detail.push_back({"kind", std::string{"exceeds_price"}});
+    add_residual();
+  } else if (regimes.start[d]) {
+    // Daily accruals after regular payments: one report, at the first of them.
+    std::vector<double> regular;
+    std::size_t accruals = 0;
+    std::vector<double> accrued;
+    for (std::size_t o = 0; o < dividends.size(); ++o) {
+      if (!(dividends[o].amount > 0.0)) {
+        continue;
+      }
+      if (o < d && !regimes.accrual[o]) {
+        regular.push_back(dividends[o].amount);
+      } else if (o >= d && regimes.accrual[o] && (o == d || !regimes.start[o])) {
+        ++accruals;
+        accrued.push_back(dividends[o].amount);
+      } else if (o > d && regimes.start[o]) {
+        break;
+      }
+    }
+    const double usual = stats::median(std::move(regular));
+    const double each = stats::median(std::move(accrued));
+    v.severity = Severity::kWarn;
+    v.message = "dividends from " + ex + " come every few days (" + std::to_string(accruals) +
+                " so far, a median " + format_number(each) + ", " + times(each / usual) +
+                " the usual " + format_number(usual) +
+                "): the fund now pays daily accruals. If the period's total also arrives as "
+                "one dividend, the period is counted twice";
+    v.detail.push_back({"usual_amount", usual});
+    v.detail.push_back({"accrual_amount", each});
+    v.detail.push_back({"ratio", each / usual});
+    v.detail.push_back({"accruals", static_cast<std::int64_t>(accruals)});
+    v.detail.push_back({"kind", std::string{"frequency_change"}});
+    SuggestedAction action;
+    action.kind = "check_dividend_frequency";
+    action.fields = {{"from", ex}};
+    action.text = "check the dividends from " + ex +
+                  ": keep the daily accruals or the period's total, not both";
+    v.suggested_action = std::move(action);
+    return v;
+  } else {
+    // The others' amounts, and their yields on the close before each: a split
+    // changes the one, a price error the other; a slip in the amount changes both.
+    // A zero or negative other is reported on its own and is no measure of these.
+    std::vector<double> amounts;
+    std::vector<double> yields;
+    others(amounts, yields);
     if (amounts.size() < kMinHistory || yields.size() < kMinHistory) {
       return std::nullopt;
     }
@@ -228,14 +402,44 @@ std::optional<Violation> judge_dividend(const Series& s,
     if (!off(ratio) || !off(yield_ratio) || (ratio > 1.0) != (yield_ratio > 1.0)) {
       return std::nullopt;
     }
-    v.severity = Severity::kWarn;
+    // A slip in the amount does not move the price; a real dividend comes off it.
+    // The close on the ex-date corroborates the amount when it is near the close
+    // before less the amount, and not near the close before less the usual one
+    // (a tenth of the usual comes off within a day's noise as well).
+    bool fell_by_it = false;
+    if (moved) {
+      const double tolerance = std::max(settings.dividend_tolerance * prior_close,
+                                        settings.dividend_amount_tolerance * dividend.amount);
+      const double usual_residual = moved->on - (prior_close - usual);
+      moved->corroborated =
+          std::fabs(moved->residual) <= tolerance && std::fabs(usual_residual) > tolerance;
+      fell_by_it = moved->corroborated;
+    }
     v.message = "dividend " + amount + " ex " + ex + " is " + times(ratio) + " the series' usual " +
                 format_number(usual) + " (the median of " + std::to_string(count) +
-                " others), and " + times(yield_ratio) +
-                " its usual yield: a decimal slip, or a special dividend";
+                " others), and " + times(yield_ratio) + " its usual yield";
+    if (fell_by_it) {
+      // Reported at info: a real special dividend, or a fund's distribution.
+      v.severity = Severity::kInfo;
+      v.classification = Classification::kMarketFact;
+      v.p_error = 0.0;
+      v.message += ", but the close fell by it on the ex-date (" + significant(prior_close, 6) +
+                   "→" + significant(moved->on, 6) + ", where " + significant(prior_close, 6) +
+                   " less the dividend is " + significant(prior_close - dividend.amount, 6) +
+                   "): a special dividend or distribution";
+    } else {
+      v.severity = Severity::kWarn;
+      v.message += ": a decimal slip, or a special dividend";
+      if (moved && ratio > 1.0) {
+        v.message += "; the close on the ex-date (" + significant(moved->on, 6) +
+                     ") did not fall by it from " + significant(prior_close, 6);
+      }
+    }
     v.detail.push_back({"usual_amount", usual});
     v.detail.push_back({"ratio", ratio});
     v.detail.push_back({"yield_ratio", yield_ratio});
+    v.detail.push_back({"kind", std::string{fell_by_it ? "special" : "slip"}});
+    add_residual();
   }
   SuggestedAction action;
   action.kind = "fix_dividend";
@@ -278,8 +482,10 @@ void DividendImplausible::run(const SeriesContext& context, std::vector<Violatio
     return;
   }
   const std::vector<DividendAction>& dividends = context.actions->dividends;
+  const PaymentRegimes regimes = payment_regimes(dividends);
   for (std::size_t d = 0; d < dividends.size(); ++d) {
-    if (std::optional<Violation> v = judge_dividend(context.series, dividends, d, info())) {
+    if (std::optional<Violation> v =
+            judge_dividend(context.series, dividends, d, regimes, context.price, info())) {
       out.push_back(std::move(*v));
     }
   }

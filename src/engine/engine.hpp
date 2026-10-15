@@ -56,7 +56,7 @@ class ResultSink {
 struct EngineOptions {
   unsigned threads = 1;
   Severity min_severity = Severity::kWarn;
-  std::optional<Date> since;           // drop violations dated before this
+  std::optional<Date> since;           // drop violations that end before this
   std::optional<Date> as_of;           // DQ304's reference date; default: the latest bar
   const Calendar* calendar = nullptr;  // default: built-in XNYS
   const Context* context = nullptr;    // --actions, --meta, --market; none by default
@@ -113,7 +113,7 @@ class Engine {
   const Settings& settings_for(const Series& series);
   [[nodiscard]] Processed process(Work& work) const;
   void deliver(Processed processed);
-  void drop_unreported(SeriesResult& result) const;  // below --min-severity, before --since
+  void drop_unreported(SeriesResult& result) const;  // below --min-severity, ended before --since
   void filter_and_send(SeriesResult&& result);
   void worker_loop();
   void deliver_ready();  // caller holds no lock

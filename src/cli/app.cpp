@@ -607,7 +607,8 @@ void add_check_options(CLI::App& cmd, CheckOptions& o) {
   cmd.add_option("--fail-on", o.fail_on, "Lowest severity that fails the run")
       ->check(CLI::IsMember({"info", "warn", "error", "never"}));
   cmd.add_flag("--exit-zero", o.exit_zero, "Exit 0 even when violations are found");
-  cmd.add_option("--since", o.since, "Report only violations dated on or after");
+  cmd.add_option("--since", o.since,
+                 "Report only violations active on or after (dated, or ending, then)");
   cmd.add_flag("--statistics", o.statistics, "Print counts per check");
   cmd.add_option("--threads", o.threads, "Worker threads (0: one per core)")
       ->check(CLI::Range(0, 1024));

@@ -34,6 +34,7 @@ const CheckInfo& info_for(H hypothesis) noexcept {
     case H::kTickMove:
     case H::kExplainedSplit:
     case H::kExplainedDividend:
+    case H::kPendingDistribution:
       break;
   }
   return large_move_info();
@@ -154,7 +155,17 @@ class Builder {
     std::size_t first = t;
     std::size_t last = finding_.end_bar;
     double rescale = 1.0 / finding_.factor;
-    if (finding_.end_bar > t) {
+    if (finding_.era_split) {
+      // Sessions before a split on file, stored at its post-split scale: the move
+      // into them is the split's ratio, and the ex-date's move out is ordinary.
+      const SplitAction& split = *finding_.era_split;
+      rescale = 1.0 / split.price_factor();
+      v.message = field() + "s " + date(t).to_string() + ".." + date(last).to_string() + " are " +
+                  times(finding_.factor) + " the " + field() +
+                  " before them: the sessions before the " + split.ratio_text() +
+                  " split on file ex " + split.ex_date.to_string() +
+                  ", stored at its post-split scale; an era at the wrong scale";
+    } else if (finding_.end_bar > t) {
       v.message = field() + "s " + date(t).to_string() + ".." + date(last).to_string() + " are " +
                   times(finding_.factor) + " the level either side" +
                   (near_power ? " (×" + format_number(power) + ")" : std::string{}) +
@@ -188,8 +199,8 @@ class Builder {
     action.kind = "rescale";
     action.fields = {
         {"first", date(first).to_string()}, {"last", date(last).to_string()}, {"factor", rescale}};
-    action.text = "rescale " + date(first).to_string() + ".." + date(last).to_string() + " by " +
-                  times(rescale);
+    action.text = (finding_.era_split ? "re-fetch, or rescale " : "rescale ") +
+                  date(first).to_string() + ".." + date(last).to_string() + " by " + times(rescale);
     v.suggested_action = std::move(action);
   }
 
@@ -204,11 +215,13 @@ class Builder {
     v.suggested_action = std::move(action);
   }
 
-  void market(Violation& v) const {
+  // Returns the explanation the message gives.
+  H market(Violation& v) const {
     const auto p = [this](H h) { return finding_.posterior.at(static_cast<std::size_t>(h)); };
     // The most probable of the explanations that are not errors.
     H best = H::kMarketMove;
-    for (const H h : {H::kTickMove, H::kExplainedSplit, H::kExplainedDividend}) {
+    for (const H h :
+         {H::kTickMove, H::kExplainedSplit, H::kExplainedDividend, H::kPendingDistribution}) {
       best = p(h) > p(best) ? h : best;
     }
     if (best == H::kExplainedSplit && finding_.split_on_file) {
@@ -221,10 +234,20 @@ class Builder {
                                 : std::to_string(d.count) + " dividends on file, " +
                                       price(d.amount) + " in all") +
                   ", ex " + d.ex_date.to_string();
+    } else if (best == H::kPendingDistribution) {
+      v.message =
+          move() + "): likely a distribution not yet on file, a NAV-priced fund's drop that holds";
+      SuggestedAction action;
+      action.kind = "check_distribution";
+      action.fields = {{"ex_date", date(finding_.bar).to_string()}};
+      action.text = "check the fund's distributions ex " + date(finding_.bar).to_string() +
+                    "; re-run when the actions update";
+      v.suggested_action = std::move(action);
     } else {
       v.message = move() + "): probably " +
                   (best == H::kTickMove ? "a move of a tick or two" : "a real move");
     }
+    return best;
   }
 
  private:
@@ -246,10 +269,11 @@ Violation make_violation(const SeriesContext& context, const PriceAnalysis& anal
   v.p_error = finding.p_error;
   v.provisional = finding.provisional;
   const bool market = &info == &large_move_info();
+  std::optional<H> explanation;  // DQ209's: the most probable that is not an error
   if (market) {
     v.severity = Severity::kInfo;
     v.classification = Classification::kMarketFact;
-    b.market(v);
+    explanation = b.market(v);
   } else {
     v.severity = context.thresholds.for_probability(finding.p_error).value_or(Severity::kInfo);
     if (finding.provisional) {
@@ -277,6 +301,7 @@ Violation make_violation(const SeriesContext& context, const PriceAnalysis& anal
       case H::kTickMove:
       case H::kExplainedSplit:
       case H::kExplainedDividend:
+      case H::kPendingDistribution:
         break;
     }
   }
@@ -306,12 +331,28 @@ Violation make_violation(const SeriesContext& context, const PriceAnalysis& anal
   }
   if (finding.volume_ratio) {
     v.detail.push_back({"volume_ratio", *finding.volume_ratio});
+    v.detail.push_back({"volume_ratio_after_before", *finding.volume_ratio});
+  }
+  v.detail.push_back({"base_volume_zero", finding.base_volume_zero});
+  if (finding.range_ratio) {
+    v.detail.push_back({"range_ratio", *finding.range_ratio});
+  }
+  if (finding.range_vs_typical) {
+    v.detail.push_back({"range_vs_typical", *finding.range_vs_typical});
+  }
+  v.detail.push_back({"leading_hypothesis", std::string{to_string(finding.leading)}});
+  if (explanation) {
+    v.detail.push_back({"hypothesis", std::string{to_string(*explanation)}});
   }
   if (finding.hypothesis == H::kBadPrint && !market) {
     v.detail.push_back({"bars", std::int64_t{finding.block}});
   }
   if (finding.hypothesis == H::kUnreportedSplit && finding.split && !market) {
     v.detail.push_back({"split_ratio", finding.split->to_string()});
+  }
+  if (finding.era_split && !market) {
+    v.detail.push_back({"split_on_file", finding.era_split->ratio_text()});
+    v.detail.push_back({"split_ex_date", finding.era_split->ex_date.to_string()});
   }
   return v;
 }

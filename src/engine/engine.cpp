@@ -179,7 +179,9 @@ Engine::Processed Engine::process(Work& work) const {
                             .have_actions = context_.have_actions,
                             .actions = actions,
                             .tick_size = meta != nullptr ? meta->tick_size : std::nullopt,
-                            .market = context_.market ? &*context_.market : nullptr});
+                            .market = context_.market ? &*context_.market : nullptr,
+                            .nav_priced = meta != nullptr && meta->nav_priced.value_or(false),
+                            .trade_size = settings.coverage.trade_size});
   }
   const SeriesContext context{
       .series = series,
@@ -213,7 +215,8 @@ Engine::Processed Engine::process(Work& work) const {
       // whose fate is open.
       const double explained =
           finding.posterior.at(static_cast<std::size_t>(PriceHypothesis::kExplainedSplit)) +
-          finding.posterior.at(static_cast<std::size_t>(PriceHypothesis::kExplainedDividend));
+          finding.posterior.at(static_cast<std::size_t>(PriceHypothesis::kExplainedDividend)) +
+          finding.posterior.at(static_cast<std::size_t>(PriceHypothesis::kPendingDistribution));
       if (finding.claimed || finding.provisional || !finding.split ||
           !finding.considered.at(split) || explained >= 0.5 ||
           std::fabs(std::log(finding.factor / finding.split->price_factor())) > 0.1) {
@@ -267,9 +270,13 @@ void Engine::filter_and_send(SeriesResult&& result) {
 }
 
 void Engine::drop_unreported(SeriesResult& result) const {
+  // --since keeps what is still active in the window: a violation spanning dates
+  // (a stale feed, a gap, an era, a run) counts by its last date, so one that
+  // began before the window and is still open stays reported, under its first
+  // date. A caller deduplicating by that date sees one condition across runs.
   std::erase_if(result.violations, [this](const Violation& v) {
     return v.severity < options_.min_severity ||
-           (options_.since && v.date && *v.date < *options_.since);
+           (options_.since && v.date && v.end_date.value_or(*v.date) < *options_.since);
   });
 }
 

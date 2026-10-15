@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include <vector>
 
 #include "checks/check.hpp"
@@ -51,6 +52,19 @@ class ZeroRangeWithVolume final : public Check {
   [[nodiscard]] const CheckInfo& info() const noexcept override;
   void run(const SeriesContext& context, std::vector<Violation>& out) const override;
 };
+
+// DQ107 and DQ501: a series that trades thinly, below [integrity]
+// flat_bar_min_median_volume shares or flat_bar_min_median_dollar_volume dollars a
+// day (the medians over days with trading). One or two prints make its day, so a
+// flat bar or a repeated close is how its trading looks.
+struct ThinSeries {
+  bool thin = false;
+  double median_dollar_volume = 0.0;
+  std::string why;  // for a message: "a median 844 shares a day"
+};
+
+[[nodiscard]] ThinSeries thin_series(double median_volume, double median_dollar_volume,
+                                     const IntegritySettings& settings);
 
 // DQ108
 class OutOfBounds final : public Check {
