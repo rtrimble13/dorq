@@ -267,7 +267,7 @@ void sort_actions(Context& context) {
 
 void read_actions(std::istream& in, const std::string& source, Context& context) {
   context.have_actions = true;
-  read_action_rows(in, source, context, [&context](ActionRow&& row) {
+  read_action_rows(in, source, context, [&context](const ActionRow& row) {
     SeriesActions& actions = context.actions[row.series];
     if (row.split) {
       actions.splits.push_back(*row.split);
@@ -293,7 +293,7 @@ void restore_actions(std::istream& in, const std::string& source, Context& conte
     if (row.split) {
       std::erase_if(it->second.splits,
                     [&row](const SplitAction& s) { return s.ex_date == row.split->ex_date; });
-    } else {
+    } else if (row.dividend) {
       std::erase_if(it->second.dividends,
                     [&row](const DividendAction& d) { return d.ex_date == row.dividend->ex_date; });
     }
@@ -305,7 +305,7 @@ void restore_actions(std::istream& in, const std::string& source, Context& conte
     SeriesActions& actions = context.actions[row.series];
     if (row.split) {
       actions.splits.push_back(*row.split);
-    } else {
+    } else if (row.dividend) {
       actions.dividends.push_back(*row.dividend);
     }
   }

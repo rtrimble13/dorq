@@ -173,7 +173,7 @@ double CrossSection::base_rate(Date date, const std::string& ratio) const {
   for (const int step : {-1, 1}) {
     int found = 0;
     for (int off = 1; off <= kSpan && found < kNearby; ++off) {
-      const std::int64_t day = static_cast<std::int64_t>(at) + step * off;
+      const std::int64_t day = static_cast<std::int64_t>(at) + std::int64_t{step} * off;
       if (day < 0 || day >= static_cast<std::int64_t>(moved_.size()) ||
           moved_[static_cast<std::size_t>(day)] == 0) {
         continue;

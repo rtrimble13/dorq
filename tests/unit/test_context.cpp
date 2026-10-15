@@ -930,7 +930,7 @@ TEST_CASE("P3: a dividend ten times the usual that the close fell by is corrobor
 }
 
 TEST_CASE("P3: a switch to daily accruals is one report, at the first accrual") {
-  std::vector<Bar> bars = stock(400, 9.2, 0.002, 55);
+  const std::vector<Bar> bars = stock(400, 9.2, 0.002, 55);
   std::string monthly;
   for (int i = 10; i < 390; i += 21) {
     monthly += "A," + day(i) + ",dividend,,,0.041000\n";
@@ -983,6 +983,7 @@ TEST_CASE("N3: DQ601 reports a cohort only beyond the day's base rate") {
     // Forty names, three of which fall about a third on each of twenty days, and
     // four on one of them: the band is busy every day, so four is no cohort.
     std::vector<std::vector<Bar>> all;
+    all.reserve(40);
     for (int s = 0; s < 40; ++s) {
       all.push_back(stock(300, 30.0, 0.01, 300 + static_cast<std::uint64_t>(s)));
     }

@@ -62,9 +62,10 @@ constexpr double kSplitVolumeDrift = 0.3;
 // News can draw ten to ten thousand times the usual volume (a squeeze), which then
 // decays over days: on the day, about e^4 times the usual give or take e^2.5, and
 // the median after about e^2.5 times give or take e^2. Up to this share of real
-// moves do, rising with how surprising the move is; kept small, so that a real
-// move on ordinary volume loses little by it.
-constexpr double kSurgeShare = 0.25;
+// moves do, rising with how surprising the move is. The evidence is in the tail
+// (a surge no error explains), so the share is kept small: a real move on
+// ordinary volume loses little by it.
+constexpr double kSurgeShare = 0.15;
 constexpr double kSurgeDay = 4.0;
 constexpr double kSurgeDaySpread = 2.5;
 constexpr double kSurgeAfter = 2.5;
@@ -73,15 +74,17 @@ constexpr double kSurgeAfterSpread = 2.0;
 // market-like members): five times, and not a split's inverse shift.
 constexpr double kSurgeShift = 1.6094379124341003;  // log 5
 // A violent session (a range violent_range times the usual): P(one | hypothesis).
-// A real move often trades through its range, more often the more surprising it
-// is; a value at the wrong scale is the old bar times a constant, so its range is
-// the usual one; a reverse split often has a wild first session.
+// A real move sometimes trades through its range, more often the more surprising
+// it is; a value at the wrong scale is the old bar times a constant, so its range
+// is the usual one; a reverse split's first session is as often wild as a real
+// move's, so the range does not tell those two apart. Kept small, so that a real
+// move with an ordinary range loses little by it.
 constexpr double kViolentOrdinary = 0.02;
-constexpr double kViolentSurprise = 0.28;
+constexpr double kViolentSurprise = 0.1;
 constexpr double kViolentScale = 0.01;
 constexpr double kViolentBadPrint = 0.05;
-constexpr double kViolentSplit = 0.3;
-constexpr double kViolentSegment = 0.1;
+constexpr double kViolentSplit = 0.1;
+constexpr double kViolentSegment = 0.05;
 // A volume base under this share of [coverage] trade_size is none: a round lot.
 constexpr double kRoundLot = 0.1;
 // A distribution not yet on file (pending_distribution): a drop of 2% to 35%.
@@ -839,6 +842,11 @@ void Scorer::volume_terms(const Candidate& c, PriceFinding& out, std::vector<Ter
   // The share of real moves this surprising that draw a surge of trading. Not
   // after a long gap, where a new history's volume is its own level.
   const double surge = c.elapsed < settings_.segment_gap ? kSurgeShare * surprise(c, c.r) : 0.0;
+  // A surge is one event: the day draws it and the days after carry it. So the
+  // shift after is judged given the day, with the surge as likely as the day's
+  // volume makes it (log weights of no surge, and of one).
+  double log_quiet = surge > 0.0 ? std::log1p(-surge) : 0.0;
+  double log_drawn = surge > 0.0 ? std::log(surge) : -std::numeric_limits<double>::infinity();
   const double v = volume(t);
   if (std::isfinite(v) && v >= 0.0) {
     const double lv = std::log1p(v);
@@ -864,10 +872,16 @@ void Scorer::volume_terms(const Candidate& c, PriceFinding& out, std::vector<Ter
     // one (a tick on a coarse grid), by about e from six standard deviations. News
     // can draw far more, ten to ten thousand times the usual.
     const double market = ll(0.002, lpre + kSurge * surprise(c, c.r), spread);
-    at(term, H::kMarketMove) =
-        surge > 0.0 ? stats::log_add(std::log1p(-surge) + market,
-                                     std::log(surge) + ll(0.002, lpre + kSurgeDay, kSurgeDaySpread))
-                    : market;
+    if (surge > 0.0) {
+      const double quiet = log_quiet + market;
+      const double drawn = log_drawn + ll(0.002, lpre + kSurgeDay, kSurgeDaySpread);
+      const double day = stats::log_add(quiet, drawn);
+      at(term, H::kMarketMove) = day;
+      log_quiet = quiet - day;
+      log_drawn = drawn - day;
+    } else {
+      at(term, H::kMarketMove) = market;
+    }
     at(term, H::kTickMove) = ll(0.002, lpre, spread);
     at(term, H::kBadPrint) = ll(0.05, lpre + kBadPrintVolume * surprise(c, c.r), spread);
     at(term, H::kBadClose) = ll(0.05, lpre + kBadPrintVolume * surprise(c, c.r), spread);
@@ -911,11 +925,10 @@ void Scorer::volume_terms(const Candidate& c, PriceFinding& out, std::vector<Ter
                            log_normal_pdf(dv, 0.0, std::hypot(kVolumeDrift, noise)));
   const double market = log_normal_pdf(dv, -0.5 * c.r, std::hypot(kVolumeDrift, noise));
   at(term, H::kMarketMove) =
-      surge > 0.0
-          ? stats::log_add(std::log1p(-surge) + market,
-                           std::log(surge) + log_normal_pdf(dv, kSurgeAfter,
-                                                            std::hypot(kSurgeAfterSpread, noise)))
-          : market;
+      surge > 0.0 ? stats::log_add(log_quiet + market,
+                                   log_drawn + log_normal_pdf(dv, kSurgeAfter,
+                                                              std::hypot(kSurgeAfterSpread, noise)))
+                  : market;
   at(term, H::kUnreportedSplit) = log_normal_pdf(dv, -c.r, std::hypot(kSplitVolumeDrift, noise));
   at(term, H::kHistorySegment) = log_normal_pdf(dv, 0.0, std::hypot(2.0, noise));
   if (c.on_file) {
@@ -1606,8 +1619,13 @@ bool Scorer::era_before(const SplitFinding& finding) const {
   if (!before || !era || !after) {
     return false;
   }
+  // Only a split whose volume levels clearly differ can tell the two apart: a
+  // 2:1's ×2 is within a few sessions' noise (and a feed's volume is sometimes
+  // adjusted already); ZBAO's 1:50 moved it ×1/6.6.
+  constexpr double kLevelGap = 1.0;
   constexpr double kMargin = 0.5;  // the era must be clearly nearer the level before
-  return std::fabs(*era - *before) + kMargin < std::fabs(*era - *after);
+  return std::fabs(*after - *before) >= kLevelGap &&
+         std::fabs(*era - *before) + kMargin < std::fabs(*era - *after);
 }
 
 PriceAnalysis analyze_prices(const Series& series, const Calendar& calendar,

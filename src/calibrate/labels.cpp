@@ -55,6 +55,32 @@ std::optional<int> digits(std::string_view text, std::size_t pos, std::size_t n)
   return value;
 }
 
+// The items of a comma-separated list, trimmed, with empty ones left out.
+std::vector<std::string> list_items(const std::string& text) {
+  std::vector<std::string> items;
+  std::stringstream in(text);
+  std::string item;
+  while (std::getline(in, item, ',')) {
+    if (const std::string_view trimmed = trim(item); !trimmed.empty()) {
+      items.emplace_back(trimmed);
+    }
+  }
+  return items;
+}
+
+LabelClass class_of(const std::string& text, const std::string& source, std::uint32_t line) {
+  if (text == "data_error") {
+    return LabelClass::kDataError;
+  }
+  if (text == "context_gap") {
+    return LabelClass::kContextGap;
+  }
+  if (text == "market_fact") {
+    return LabelClass::kMarketFact;
+  }
+  fail(source, line, "class \"" + text + "\" is not data_error, context_gap or market_fact");
+}
+
 }  // namespace
 
 std::optional<std::int64_t> parse_timestamp(std::string_view text) {
@@ -165,16 +191,7 @@ std::vector<Label> read_labels(std::istream& in, const std::string& source) {
         have_last = true;
       } else if (m.key == "class") {
         have_class = true;
-        if (m.text == "data_error") {
-          label.label_class = LabelClass::kDataError;
-        } else if (m.text == "context_gap") {
-          label.label_class = LabelClass::kContextGap;
-        } else if (m.text == "market_fact") {
-          label.label_class = LabelClass::kMarketFact;
-        } else {
-          fail(source, line,
-               "class \"" + m.text + "\" is not data_error, context_gap or market_fact");
-        }
+        label.label_class = class_of(m.text, source, line);
       } else if (m.key == "expect") {
         label.expect = m.text;
       } else if (m.key == "codes") {
@@ -186,12 +203,8 @@ std::vector<Label> read_labels(std::istream& in, const std::string& source) {
       } else if (m.key == "note") {
         label.note = m.text;
       } else if (m.key == "remove") {
-        std::stringstream dates(m.text);
-        std::string item;
-        while (std::getline(dates, item, ',')) {
-          if (!trim(item).empty()) {
-            label.remove.push_back(date_of(item, source, line, "remove"));
-          }
+        for (const std::string& item : list_items(m.text)) {
+          label.remove.push_back(date_of(item, source, line, "remove"));
         }
       } else if (m.key == "decided_at") {
         label.decided_at = timestamp_of(m.text, source, line, m.key);
@@ -204,13 +217,7 @@ std::vector<Label> read_labels(std::istream& in, const std::string& source) {
         }
         label.verified = verified;
       } else if (m.key == "members") {
-        std::stringstream ids(m.text);
-        std::string item;
-        while (std::getline(ids, item, ',')) {
-          if (const std::string_view id = trim(item); !id.empty()) {
-            label.members.emplace_back(id);
-          }
-        }
+        label.members = list_items(m.text);
       }
       // Other keys are kept by the exporter for people, and ignored here.
     }

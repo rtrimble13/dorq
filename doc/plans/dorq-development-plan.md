@@ -1092,7 +1092,9 @@ at precision 1.0. The real test is M7's fit on fafnir's labels (DR-0704).
     lands on a same-ratio row's date. A bad print's edges no longer confirm or
     misdate a split (SKYD's phantom 2:1 is DQ702). ZBAO's real 1:50 with the five
     sessions before it served at the post-split scale is a DQ202 era with the
-    split confirmed, told from a misdated split by the era's volume.
+    split confirmed, told from a misdated split by the era's volume (only where
+    the split moves the volume level by a factor of e or more: a 2:1's ×2 is
+    within the noise, and dorq-synth's misdated 2:1s stayed DQ701).
   - *DQ705* (P3). The Fidelity funds' ~3.0 distributions, which the ex-date NAV
     fell by, are corroborated (info). The brief's tolerance alone would also have
     "corroborated" every tiny slip, so the close must also be farther from the

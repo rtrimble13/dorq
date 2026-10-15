@@ -67,18 +67,22 @@ struct Json {
   enum class Kind : std::uint8_t { kNull, kBool, kNumber, kString, kArray, kObject };
   Kind kind = Kind::kNull;
   std::string text;  // a string's value, a number's or a boolean's text
-  std::vector<std::pair<std::string, Json>> members;
+  // An object's members: keys[i] names values[i]. Two vectors, since a vector may
+  // hold the type it is a member of, and a pair may not.
+  std::vector<std::string> keys;
+  std::vector<Json> values;
   std::vector<Json> items;
 
   [[nodiscard]] const Json* get(std::string_view key) const {
-    for (const auto& [name, value] : members) {
-      if (name == key) {
-        return &value;
+    for (std::size_t i = 0; i < keys.size(); ++i) {
+      if (keys[i] == key) {
+        return &values[i];
       }
     }
     return nullptr;
   }
-  [[nodiscard]] std::string string_or(std::string_view key, std::string fallback = {}) const {
+  [[nodiscard]] std::string string_or(std::string_view key,
+                                      const std::string& fallback = {}) const {
     const Json* value = get(key);
     return value != nullptr && value->kind != Kind::kNull ? value->text : fallback;
   }
@@ -156,7 +160,14 @@ class JsonParser {
     expect('"');
     return out;
   }
+  // NOLINTNEXTLINE(misc-no-recursion): nesting is at most kMaxDepth deep
   Json parse_value() {
+    // dorq's rows nest three deep; anything far deeper is not one of them.
+    constexpr int kMaxDepth = 64;
+    if (depth_ >= kMaxDepth) {
+      fail("nested too deep");
+    }
+    const DepthGuard guard(depth_);
     Json value;
     const char ch = peek();
     if (ch == '{') {
@@ -167,9 +178,9 @@ class JsonParser {
         return value;
       }
       while (true) {
-        std::string key = parse_string();
+        value.keys.push_back(parse_string());
         expect(':');
-        value.members.emplace_back(std::move(key), parse_value());
+        value.values.push_back(parse_value());
         if (peek() == ',') {
           ++pos_;
           continue;
@@ -218,9 +229,23 @@ class JsonParser {
     return value;
   }
 
+  class DepthGuard {
+   public:
+    explicit DepthGuard(int& depth) : depth_(depth) { ++depth_; }
+    DepthGuard(const DepthGuard&) = delete;
+    DepthGuard& operator=(const DepthGuard&) = delete;
+    DepthGuard(DepthGuard&&) = delete;
+    DepthGuard& operator=(DepthGuard&&) = delete;
+    ~DepthGuard() { --depth_; }
+
+   private:
+    int& depth_;
+  };
+
   std::string_view text_;
   std::string where_;
   std::size_t pos_ = 0;
+  int depth_ = 0;
 };
 
 std::vector<std::vector<std::string>> read_csv(const std::string& path) {
@@ -297,9 +322,9 @@ std::vector<Result> read_json_results(const std::string& path) {
       result.members = split_ids(detail->string_or("members"));
     }
     if (const Json* key = record.get("record_key"); key != nullptr) {
-      for (const auto& [name, value] : key->members) {
-        if (name != "trade_date") {
-          result.key += (result.key.empty() ? "" : ";") + name + "=" + value.text;
+      for (std::size_t i = 0; i < key->keys.size(); ++i) {
+        if (key->keys[i] != "trade_date") {
+          result.key += (result.key.empty() ? "" : ";") + key->keys[i] + "=" + key->values[i].text;
         }
       }
     }
