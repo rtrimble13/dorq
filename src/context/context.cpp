@@ -143,20 +143,34 @@ const SeriesMeta* Context::meta_for(const Series& series) const {
   return nullptr;
 }
 
-void read_actions(std::istream& in, const std::string& source, Context& context) {
+namespace {
+
+// One usable row of an actions file.
+struct ActionRow {
+  std::string series;
+  std::optional<SplitAction> split;
+  std::optional<DividendAction> dividend;
+  bool added_by_repair = false;  // --restore-actions: a row the repair added
+};
+
+// Reads an actions table, handing each usable row to `on_row`; rows that cannot be
+// used go to `context.issues`.
+void read_action_rows(std::istream& in, const std::string& source, Context& context,
+                      const std::function<void(ActionRow&&)>& on_row) {
   constexpr std::array<std::string_view, 4> kDate = {"exdate", "date", "effectivedate",
                                                      "tradedate"};
   constexpr std::array<std::string_view, 3> kType = {"type", "actiontype", "kind"};
   constexpr std::array<std::string_view, 2> kNumerator = {"numerator", "splitnumerator"};
   constexpr std::array<std::string_view, 2> kDenominator = {"denominator", "splitdenominator"};
   constexpr std::array<std::string_view, 3> kAmount = {"amount", "dividendamount", "dividend"};
+  constexpr std::array<std::string_view, 1> kAdded = {"addedbyrepair"};
   int series_col = -1;
   int date_col = -1;
   int type_col = -1;
   int numerator_col = -1;
   int denominator_col = -1;
   int amount_col = -1;
-  context.have_actions = true;
+  int added_col = -1;
   const std::string name = file_name(source);
   read_table(
       in, source,
@@ -167,6 +181,7 @@ void read_actions(std::istream& in, const std::string& source, Context& context)
         numerator_col = find_column(names, kNumerator);
         denominator_col = find_column(names, kDenominator);
         amount_col = find_column(names, kAmount);
+        added_col = find_column(names, kAdded);
         if (series_col < 0 || date_col < 0 || type_col < 0) {
           fail(source, line,
                "an actions file needs series, ex_date and type columns (or security_id, "
@@ -176,18 +191,19 @@ void read_actions(std::istream& in, const std::string& source, Context& context)
       [&](Row fields, std::uint32_t line) {
         // A row that cannot be used is skipped and reported (DQ109): one bad row
         // must not cost the run every other check.
-        const std::string id{cell(fields, series_col)};
+        ActionRow row;
+        row.series = std::string{cell(fields, series_col)};
         const std::string_view date_text = cell(fields, date_col);
         const auto date = parse_date(date_text);
         const auto skip = [&](const std::string& what) {
-          context.issues.push_back({.series = id,
+          context.issues.push_back({.series = row.series,
                                     .source = name,
                                     .line = line,
                                     .date = date,
                                     .severity = Severity::kError,
                                     .message = what + "; the row is skipped"});
         };
-        if (id.empty()) {
+        if (row.series.empty()) {
           skip("the series is empty");
           return;
         }
@@ -195,18 +211,25 @@ void read_actions(std::istream& in, const std::string& source, Context& context)
           skip("ex_date \"" + std::string{date_text} + "\" is not a date");
           return;
         }
+        if (const std::string_view added = cell(fields, added_col); !added.empty()) {
+          if (!parse_bool(added, row.added_by_repair)) {
+            skip("added_by_repair \"" + std::string{added} + "\" is not true or false");
+            return;
+          }
+        }
         const std::string type = normalize_name(cell(fields, type_col));
         if (type == "split") {
           const Positive numerator = positive(fields, numerator_col, "numerator");
           const Positive denominator = positive(fields, denominator_col, "denominator");
           if (!numerator.problem.empty() || !denominator.problem.empty()) {
             skip(numerator.problem.empty() ? denominator.problem : numerator.problem);
-          } else if (!numerator.value || !denominator.value) {
-            skip("a split needs a numerator and a denominator");
-          } else {
-            context.actions[id].splits.push_back(
-                {*date, *numerator.value, *denominator.value, line});
+            return;
           }
+          if (!numerator.value || !denominator.value) {
+            skip("a split needs a numerator and a denominator");
+            return;
+          }
+          row.split = SplitAction{*date, *numerator.value, *denominator.value, line};
         } else if (type == "dividend") {
           // Any number: a zero or negative amount is DQ705's to report, not an
           // unusable row. fafnir's core.corporate_action allows a zero.
@@ -214,15 +237,22 @@ void read_actions(std::istream& in, const std::string& source, Context& context)
           const ParsedNumber amount = parse_number(text);
           if (amount.status == ParsedNumber::Status::kMissing) {
             skip("a dividend needs an amount");
-          } else if (amount.status != ParsedNumber::Status::kOk) {
-            skip("amount \"" + std::string{text} + "\" is not a number");
-          } else {
-            context.actions[id].dividends.push_back({*date, amount.value, line});
+            return;
           }
+          if (amount.status != ParsedNumber::Status::kOk) {
+            skip("amount \"" + std::string{text} + "\" is not a number");
+            return;
+          }
+          row.dividend = DividendAction{*date, amount.value, line};
         } else {
           skip("type \"" + std::string{cell(fields, type_col)} + "\" is not split or dividend");
+          return;
         }
+        on_row(std::move(row));
       });
+}
+
+void sort_actions(Context& context) {
   for (auto& [id, actions] : context.actions) {
     std::stable_sort(
         actions.splits.begin(), actions.splits.end(),
@@ -231,6 +261,55 @@ void read_actions(std::istream& in, const std::string& source, Context& context)
         actions.dividends.begin(), actions.dividends.end(),
         [](const DividendAction& a, const DividendAction& b) { return a.ex_date < b.ex_date; });
   }
+}
+
+}  // namespace
+
+void read_actions(std::istream& in, const std::string& source, Context& context) {
+  context.have_actions = true;
+  read_action_rows(in, source, context, [&context](ActionRow&& row) {
+    SeriesActions& actions = context.actions[row.series];
+    if (row.split) {
+      actions.splits.push_back(*row.split);
+    } else if (row.dividend) {
+      actions.dividends.push_back(*row.dividend);
+    }
+  });
+  sort_actions(context);
+}
+
+void restore_actions(std::istream& in, const std::string& source, Context& context) {
+  context.have_actions = true;
+  std::vector<ActionRow> rows;
+  read_action_rows(in, source, context,
+                   [&rows](ActionRow&& row) { rows.push_back(std::move(row)); });
+  // Every key the file names (series, ex-date and type) is taken out first, so the
+  // file's rows for a key replace the --actions rows for it, however many of each.
+  for (const ActionRow& row : rows) {
+    const auto it = context.actions.find(row.series);
+    if (it == context.actions.end()) {
+      continue;
+    }
+    if (row.split) {
+      std::erase_if(it->second.splits,
+                    [&row](const SplitAction& s) { return s.ex_date == row.split->ex_date; });
+    } else {
+      std::erase_if(it->second.dividends,
+                    [&row](const DividendAction& d) { return d.ex_date == row.dividend->ex_date; });
+    }
+  }
+  for (const ActionRow& row : rows) {
+    if (row.added_by_repair) {
+      continue;  // not on file before the repair
+    }
+    SeriesActions& actions = context.actions[row.series];
+    if (row.split) {
+      actions.splits.push_back(*row.split);
+    } else {
+      actions.dividends.push_back(*row.dividend);
+    }
+  }
+  sort_actions(context);
 }
 
 void read_meta(std::istream& in, const std::string& source, Context& context) {

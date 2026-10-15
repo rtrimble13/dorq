@@ -101,6 +101,15 @@ struct Context {
 // quote.
 void read_actions(std::istream& in, const std::string& source, Context& context);
 
+// --restore-actions: the actions as they stood before repairs, over those read
+// with read_actions. The file is in the actions format, with an optional
+// added_by_repair column. For each series, ex-date and type it names, its rows
+// replace every row of `context` with that key; a row with added_by_repair true
+// stands for one the repair added, and only takes the key's rows out (a re-dated
+// split's new date, a split or dividend an operator put on file). Rows that cannot
+// be used go to `context.issues`, as for read_actions.
+void restore_actions(std::istream& in, const std::string& source, Context& context);
+
 // Read a CSV or TSV metadata file: series, asset_type, nav_priced, tick_size,
 // peer_group, exchange (or exchange_code). A series listed twice keeps its first
 // row; a nav_priced or tick_size that cannot be read is left unset. Each goes to

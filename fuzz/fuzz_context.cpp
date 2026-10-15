@@ -61,8 +61,8 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   }
   static const dorq::Series kSeries = make_series();
   static const dorq::Calendar kCalendar;
-  const unsigned mode = data[0] % 3U;
-  const bool actions = mode == 1;
+  const unsigned mode = data[0] % 4U;
+  const bool actions = mode == 1 || mode == 3;
   std::istringstream in(std::string(reinterpret_cast<const char*>(data + 1), size - 1));
   if (mode == 2) {
     try {
@@ -76,7 +76,14 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   }
   dorq::Context context;
   try {
-    if (actions) {
+    if (mode == 3) {
+      // --restore-actions over a file with one split and one dividend on the series.
+      std::istringstream on_file(
+          "series,ex_date,type,numerator,denominator,amount\n"
+          "A,2020-01-15,split,2,1,\nA,2020-01-20,dividend,,,0.5\n");
+      dorq::read_actions(on_file, "on_file", context);
+      dorq::restore_actions(in, "fuzz", context);
+    } else if (actions) {
       dorq::read_actions(in, "fuzz", context);
     } else {
       dorq::read_meta(in, "fuzz", context);
@@ -94,7 +101,9 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
       dorq::analyze_prices(kSeries, kCalendar, price,
                            {.have_actions = context.have_actions,
                             .actions = series_actions,
-                            .tick_size = meta != nullptr ? meta->tick_size : std::nullopt});
+                            .tick_size = meta != nullptr ? meta->tick_size : std::nullopt,
+                            .nav_priced = meta != nullptr && meta->nav_priced.value_or(false),
+                            .trade_size = coverage.trade_size});
   const dorq::SeriesContext series_context{.series = kSeries,
                                            .integrity = integrity,
                                            .coverage = coverage,

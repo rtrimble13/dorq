@@ -31,7 +31,91 @@ Date date_of(const std::string& text, const std::string& source, std::uint32_t l
   return *date;
 }
 
+std::int64_t timestamp_of(const std::string& text, const std::string& source, std::uint32_t line,
+                          std::string_view key) {
+  const auto when = parse_timestamp(trim(text));
+  if (!when) {
+    fail(source, line, std::string{key} + " \"" + text + "\" is not an ISO 8601 timestamp");
+  }
+  return *when;
+}
+
+// Digits [pos, pos + n) of `text` as a number; nullopt when any is not a digit.
+std::optional<int> digits(std::string_view text, std::size_t pos, std::size_t n) {
+  if (pos + n > text.size()) {
+    return std::nullopt;
+  }
+  int value = 0;
+  for (std::size_t i = pos; i < pos + n; ++i) {
+    if (text[i] < '0' || text[i] > '9') {
+      return std::nullopt;
+    }
+    value = value * 10 + (text[i] - '0');
+  }
+  return value;
+}
+
 }  // namespace
+
+std::optional<std::int64_t> parse_timestamp(std::string_view text) {
+  constexpr std::int64_t kDay = 86400;
+  const auto date = parse_date(text.substr(0, std::min<std::size_t>(10, text.size())));
+  if (!date) {
+    return std::nullopt;
+  }
+  const Date epoch = Date::from_ymd(1970, 1, 1);
+  std::int64_t seconds = (std::int64_t{date->days()} - epoch.days()) * kDay;
+  std::size_t pos = 10;
+  if (pos == text.size()) {
+    return seconds;
+  }
+  if (text[pos] != 'T' && text[pos] != 't' && text[pos] != ' ') {
+    return std::nullopt;
+  }
+  ++pos;
+  const auto hour = digits(text, pos, 2);
+  const auto minute =
+      pos + 2 < text.size() && text[pos + 2] == ':' ? digits(text, pos + 3, 2) : std::nullopt;
+  if (!hour || !minute || *hour > 23 || *minute > 59) {
+    return std::nullopt;
+  }
+  seconds += *hour * 3600 + *minute * 60;
+  pos += 5;
+  if (pos < text.size() && text[pos] == ':') {
+    const auto second = digits(text, pos + 1, 2);
+    if (!second || *second > 60) {
+      return std::nullopt;
+    }
+    seconds += *second;
+    pos += 3;
+    if (pos < text.size() && (text[pos] == '.' || text[pos] == ',')) {
+      ++pos;  // a fraction of a second: dropped
+      const std::size_t start = pos;
+      while (pos < text.size() && text[pos] >= '0' && text[pos] <= '9') {
+        ++pos;
+      }
+      if (pos == start) {
+        return std::nullopt;
+      }
+    }
+  }
+  if (pos == text.size()) {
+    return seconds;
+  }
+  if ((text[pos] == 'Z' || text[pos] == 'z') && pos + 1 == text.size()) {
+    return seconds;
+  }
+  if ((text[pos] == '+' || text[pos] == '-') && pos + 6 == text.size() && text[pos + 3] == ':') {
+    const auto oh = digits(text, pos + 1, 2);
+    const auto om = digits(text, pos + 4, 2);
+    if (!oh || !om || *oh > 23 || *om > 59) {
+      return std::nullopt;
+    }
+    const std::int64_t offset = *oh * 3600 + *om * 60;
+    return text[pos] == '+' ? seconds - offset : seconds + offset;
+  }
+  return std::nullopt;
+}
 
 std::string_view to_string(LabelClass label) noexcept {
   switch (label) {
@@ -107,6 +191,24 @@ std::vector<Label> read_labels(std::istream& in, const std::string& source) {
         while (std::getline(dates, item, ',')) {
           if (!trim(item).empty()) {
             label.remove.push_back(date_of(item, source, line, "remove"));
+          }
+        }
+      } else if (m.key == "decided_at") {
+        label.decided_at = timestamp_of(m.text, source, line, m.key);
+      } else if (m.key == "applies_until") {
+        label.applies_until = timestamp_of(m.text, source, line, m.key);
+      } else if (m.key == "verified") {
+        bool verified = false;
+        if (!parse_bool(m.text, verified)) {
+          fail(source, line, "verified \"" + m.text + "\" is not true or false");
+        }
+        label.verified = verified;
+      } else if (m.key == "members") {
+        std::stringstream ids(m.text);
+        std::string item;
+        while (std::getline(ids, item, ',')) {
+          if (const std::string_view id = trim(item); !id.empty()) {
+            label.members.emplace_back(id);
           }
         }
       }

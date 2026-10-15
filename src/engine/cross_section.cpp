@@ -13,6 +13,7 @@
 #include "checks/check.hpp"
 #include "checks/coverage.hpp"
 #include "checks/coverage_model.hpp"
+#include "checks/price.hpp"
 #include "core/text.hpp"
 #include "dorq/number.hpp"
 #include "engine/engine.hpp"
@@ -48,7 +49,8 @@ CrossSection::CrossSection(const Calendar& calendar, const CohortSettings& cohor
       as_of_given_(as_of.has_value()),
       expected_(day_count() + 1, 0),
       missing_(day_count() + 1, 0),
-      healthy_misses_(day_count() + 1, 0.0) {
+      healthy_misses_(day_count() + 1, 0.0),
+      moved_(day_count() + 1, 0) {
   if (as_of) {
     as_of_ = calendar.session_on_or_before(*as_of);
   }
@@ -63,6 +65,15 @@ void CrossSection::add(CrossSummary summary) {
     moves_.emplace_back(tails_.size(), std::move(move));
   }
   summary.moves.clear();
+  for (const Date date : summary.moved) {
+    moved_[slot(date)] += 1;
+  }
+  for (BandMove& move : summary.band_moves) {
+    const auto day = static_cast<std::int32_t>(slot(move.date));
+    bands_[{std::move(move.ratio), day}].at(move.in_band ? 0 : 1) += 1;
+  }
+  summary.moved.clear();
+  summary.band_moves.clear();
   CrossSummary tail = summary;
   tail.confident_ranges.clear();
   tail.confident_missing.clear();
@@ -147,6 +158,40 @@ void CrossSection::sibling_evidence(std::size_t i, const std::vector<std::size_t
   results[index].violations.push_back(std::move(v));
 }
 
+double CrossSection::base_rate(Date date, const std::string& ratio) const {
+  // The input's own dates either side, up to kNearby each way within kSpan days:
+  // the band's mean count on them is what chance puts there on a day like these.
+  constexpr int kNearby = 10;
+  constexpr int kSpan = 30;
+  const auto count = [&](std::size_t day, std::size_t which) {
+    const auto it = bands_.find({ratio, static_cast<std::int32_t>(day)});
+    return it == bands_.end() ? 0 : it->second.at(which);
+  };
+  const std::size_t at = slot(date);
+  double total = 0.0;
+  int days = 0;
+  for (const int step : {-1, 1}) {
+    int found = 0;
+    for (int off = 1; off <= kSpan && found < kNearby; ++off) {
+      const std::int64_t day = static_cast<std::int64_t>(at) + step * off;
+      if (day < 0 || day >= static_cast<std::int64_t>(moved_.size()) ||
+          moved_[static_cast<std::size_t>(day)] == 0) {
+        continue;
+      }
+      total += count(static_cast<std::size_t>(day), 0);
+      ++found;
+    }
+    days += found;
+  }
+  const double nearby = days > 0 ? total / days : 0.0;
+  // Beside the band on the day itself: two widths of it each side, so half the
+  // count is the rate one band's width gets. A day the whole market moves fills
+  // these too.
+  const double beside = 0.5 * count(at, 1);
+  constexpr double kFloor = 1e-3;  // no day's rate is zero
+  return std::max({nearby, beside, kFloor});
+}
+
 Violation CrossSection::cohort_violation(Date date, const std::string& ratio,
                                          const std::vector<std::size_t>& members) const {
   constexpr std::size_t kNamesShown = 6;
@@ -198,13 +243,55 @@ std::vector<Violation> CrossSection::cohort_moves(std::vector<SeriesResult>& res
   for (std::size_t i = 0; i < moves_.size(); ++i) {
     groups[{moves_[i].second.date, moves_[i].second.ratio}].push_back(i);
   }
+  const auto min_series = static_cast<std::size_t>(cohort_.min_series);
   for (const auto& [key, members] : groups) {
     for (const std::size_t i : members) {
       sibling_evidence(i, members, results);
     }
-    if (members.size() >= static_cast<std::size_t>(cohort_.min_series)) {
-      out.push_back(cohort_violation(key.first, key.second, members));
+    if (members.size() < min_series) {
+      continue;
     }
+    const std::string& group = moves_[members.front()].second.peer_group;
+    const bool family = !group.empty() && std::all_of(members.begin(), members.end(), [&](auto j) {
+      return moves_[j].second.peer_group == group;
+    });
+    if (family) {
+      // A family splitting together, with nothing on file: as before.
+      out.push_back(cohort_violation(key.first, key.second, members));
+      continue;
+    }
+    // Unrelated series: each member's move within its tolerance of the ratio, and
+    // not a real move by its own evidence; then more of them than chance puts in
+    // the ratio's band that day.
+    const double ratio = std::log(parse_split_ratio(key.second)->price_factor());
+    std::vector<std::size_t> kept;
+    std::string dropped;
+    for (const std::size_t j : members) {
+      const PeerMove& move = moves_[j].second;
+      if (std::fabs(std::log(move.factor) - ratio) > move.tolerance) {
+        continue;
+      }
+      if (move.market_like) {
+        dropped += (dropped.empty() ? "" : ",") + move.id;
+        continue;
+      }
+      kept.push_back(j);
+    }
+    if (kept.size() < min_series) {
+      continue;
+    }
+    const double rate = base_rate(key.first, key.second);
+    const double p = stats::poisson_upper_tail(static_cast<std::int64_t>(kept.size()), rate);
+    if (p > cohort_.move_max_tail) {
+      continue;
+    }
+    Violation v = cohort_violation(key.first, key.second, kept);
+    v.message += "; chance puts about " + format_number(std::round(rate * 100.0) / 100.0) +
+                 " in that band on a day like it (p = " + significant(p, 2) + ")";
+    v.detail.push_back({"base_rate", rate});
+    v.detail.push_back({"p_value", p});
+    v.detail.push_back({"members_dropped_as_market", dropped});
+    out.push_back(std::move(v));
   }
   return out;
 }

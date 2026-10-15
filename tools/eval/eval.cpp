@@ -1,18 +1,22 @@
 // dorq-eval: dorq's output against labels (plan section 8; tools/eval/README.md).
 //
-//   dorq-eval --labels L.jsonl --results R.csv [--complete] [--gates F]
-//             [--markdown report.md] [--html report.html] [--title T]
+//   dorq-eval --labels L.jsonl --results R [--results R2 ...] [--input-time T]
+//             [--complete] [--gates F] [--markdown report.md] [--html report.html]
+//             [--title T]
 //
-// R.csv is `dorq check --format csv --show-info` output. Reports cover precision,
-// recall and F1 per check at warn and above, precision at warn and at error,
-// hard negatives, a reliability diagram of p_error with its expected calibration
-// error, and precision@k.
+// R is `dorq check` output as csv, jsonl or fafnir (with --show-info for the
+// calibration points below warn). Several results files (nightly runs) are judged
+// as their distinct conditions. Reports cover strict and fault precision with
+// coverage, at warn and above and at error, on all labels and on verified ones;
+// precision, recall and F1 per check; hard negatives; a reliability diagram of
+// p_error with its expected calibration error; and precision@k.
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -23,6 +27,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 #include "calibrate/labels.hpp"
@@ -48,6 +54,170 @@ struct Result {
   std::string severity;
   double p_error = 1.0;
   std::string message;
+  std::vector<std::string> members;  // a DQ601 row's, from JSON results
+};
+
+// ---------------------------------------------------------------------------
+// JSON results: a small parser for the nested records dorq writes.
+
+struct Json {
+  enum class Kind : std::uint8_t { kNull, kBool, kNumber, kString, kArray, kObject };
+  Kind kind = Kind::kNull;
+  std::string text;  // a string's value, a number's or a boolean's text
+  std::vector<std::pair<std::string, Json>> members;
+  std::vector<Json> items;
+
+  [[nodiscard]] const Json* get(std::string_view key) const {
+    for (const auto& [name, value] : members) {
+      if (name == key) {
+        return &value;
+      }
+    }
+    return nullptr;
+  }
+  [[nodiscard]] std::string string_or(std::string_view key, std::string fallback = {}) const {
+    const Json* value = get(key);
+    return value != nullptr && value->kind != Kind::kNull ? value->text : fallback;
+  }
+};
+
+class JsonParser {
+ public:
+  JsonParser(std::string_view text, std::string where) : text_(text), where_(std::move(where)) {}
+
+  Json parse() {
+    Json value = parse_value();
+    skip();
+    if (pos_ != text_.size()) {
+      fail("trailing characters");
+    }
+    return value;
+  }
+
+ private:
+  [[noreturn]] void fail(const std::string& what) const {
+    throw std::runtime_error(where_ + ": invalid JSON: " + what);
+  }
+  void skip() {
+    while (pos_ < text_.size() && (text_[pos_] == ' ' || text_[pos_] == '\t' ||
+                                   text_[pos_] == '\r' || text_[pos_] == '\n')) {
+      ++pos_;
+    }
+  }
+  char peek() {
+    skip();
+    if (pos_ >= text_.size()) {
+      fail("unexpected end");
+    }
+    return text_[pos_];
+  }
+  void expect(char ch) {
+    if (peek() != ch) {
+      fail(std::string("expected '") + ch + "'");
+    }
+    ++pos_;
+  }
+  std::string parse_string() {
+    expect('"');
+    std::string out;
+    while (pos_ < text_.size() && text_[pos_] != '"') {
+      char ch = text_[pos_++];
+      if (ch == '\\' && pos_ < text_.size()) {
+        const char esc = text_[pos_++];
+        switch (esc) {
+          case 'n':
+            ch = '\n';
+            break;
+          case 't':
+            ch = '\t';
+            break;
+          case 'r':
+            ch = '\r';
+            break;
+          case 'b':
+            ch = '\b';
+            break;
+          case 'f':
+            ch = '\f';
+            break;
+          case 'u':
+            pos_ += 4;  // ids, dates and codes are ASCII; keep a placeholder
+            ch = '?';
+            break;
+          default:
+            ch = esc;
+        }
+      }
+      out.push_back(ch);
+    }
+    expect('"');
+    return out;
+  }
+  Json parse_value() {
+    Json value;
+    const char ch = peek();
+    if (ch == '{') {
+      ++pos_;
+      value.kind = Json::Kind::kObject;
+      if (peek() == '}') {
+        ++pos_;
+        return value;
+      }
+      while (true) {
+        std::string key = parse_string();
+        expect(':');
+        value.members.emplace_back(std::move(key), parse_value());
+        if (peek() == ',') {
+          ++pos_;
+          continue;
+        }
+        expect('}');
+        return value;
+      }
+    }
+    if (ch == '[') {
+      ++pos_;
+      value.kind = Json::Kind::kArray;
+      if (peek() == ']') {
+        ++pos_;
+        return value;
+      }
+      while (true) {
+        value.items.push_back(parse_value());
+        if (peek() == ',') {
+          ++pos_;
+          continue;
+        }
+        expect(']');
+        return value;
+      }
+    }
+    if (ch == '"') {
+      value.kind = Json::Kind::kString;
+      value.text = parse_string();
+      return value;
+    }
+    const std::size_t start = pos_;
+    while (pos_ < text_.size() &&
+           std::string_view{",}] \t\r\n"}.find(text_[pos_]) == std::string_view::npos) {
+      ++pos_;
+    }
+    value.text = std::string{text_.substr(start, pos_ - start)};
+    if (value.text == "null") {
+      value.kind = Json::Kind::kNull;
+    } else if (value.text == "true" || value.text == "false") {
+      value.kind = Json::Kind::kBool;
+    } else if (!value.text.empty()) {
+      value.kind = Json::Kind::kNumber;
+    } else {
+      fail("expected a value");
+    }
+    return value;
+  }
+
+  std::string_view text_;
+  std::string where_;
+  std::size_t pos_ = 0;
 };
 
 std::vector<std::vector<std::string>> read_csv(const std::string& path) {
@@ -76,7 +246,68 @@ std::size_t column(const std::vector<std::string>& header, std::string_view name
   return static_cast<std::size_t>(it - header.begin());
 }
 
+std::vector<std::string> split_ids(const std::string& text) {
+  std::vector<std::string> ids;
+  std::stringstream in(text);
+  std::string item;
+  while (std::getline(in, item, ',')) {
+    if (const std::string_view id = dorq::trim(item); !id.empty()) {
+      ids.emplace_back(id);
+    }
+  }
+  return ids;
+}
+
+// `dorq --format jsonl` or `--format fafnir` output: one record a line. A fafnir
+// row holds the jsonl record in `detail`, and the series as `security_id`.
+std::vector<Result> read_json_results(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    throw std::runtime_error(path + ": cannot open the file");
+  }
+  std::vector<Result> results;
+  std::string line;
+  std::size_t number = 0;
+  while (std::getline(in, line)) {
+    ++number;
+    if (dorq::trim(line).empty()) {
+      continue;
+    }
+    const Json record = JsonParser(line, path + " line " + std::to_string(number)).parse();
+    const Json* inner = record.get("detail");
+    const bool fafnir = record.get("check_name") != nullptr && inner != nullptr;
+    const Json& r = fafnir ? *inner : record;
+    const auto first = dorq::parse_date(r.string_or("date"));
+    if (!first) {
+      continue;  // a row with no date: not something a label can cover
+    }
+    Result result;
+    result.series = fafnir ? record.string_or("security_id") : r.string_or("series");
+    result.first = *first;
+    result.last = dorq::parse_date(r.string_or("end_date")).value_or(result.first);
+    result.code = r.string_or("code");
+    result.severity = r.string_or("severity");
+    const dorq::ParsedNumber p = dorq::parse_number(r.string_or("p_error"));
+    result.p_error = p.status == dorq::ParsedNumber::Status::kOk ? p.value : 1.0;
+    result.message = r.string_or("message");
+    if (const Json* detail = r.get("detail"); detail != nullptr) {
+      result.members = split_ids(detail->string_or("members"));
+    }
+    results.push_back(std::move(result));
+  }
+  return results;
+}
+
 std::vector<Result> read_results(const std::string& path) {
+  {
+    std::ifstream in(path, std::ios::binary);
+    char ch = 0;
+    while (in.get(ch) && (ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t')) {
+    }
+    if (in && ch == '{') {
+      return read_json_results(path);
+    }
+  }
   std::vector<Result> results;
   const auto rows = read_csv(path);
   if (rows.empty()) {
@@ -116,6 +347,19 @@ bool overlaps(const Result& r, const Label& l, int slack) {
   }
   if (l.series == "*" && l.label_class != LabelClass::kMarketFact && !r.series.empty()) {
     return false;  // a cross-sectional fault wants the cross-sectional row
+  }
+  if (l.series == "*" && !l.members.empty()) {
+    // A cohort label: the cross-sectional row whose members overlap its own. CSV
+    // results carry no members, so there the date alone decides.
+    if (!r.series.empty()) {
+      return false;
+    }
+    if (!r.members.empty() &&
+        std::none_of(r.members.begin(), r.members.end(), [&l](const std::string& id) {
+          return std::find(l.members.begin(), l.members.end(), id) != l.members.end();
+        })) {
+      return false;
+    }
   }
   return r.first.days() <= l.last.days() + slack && l.first.days() <= r.last.days() + slack;
 }
@@ -216,6 +460,7 @@ struct Bin {
 struct Evaluation {
   std::map<std::string, Counts> by_code;
   std::map<std::string, int> hard_hits;  // by hard-negative kind
+  Counts all;                            // warn and above
   std::array<Counts, 2> by_severity{};   // warn, error
   std::vector<Bin> bins;                 // reliability, ten equal-width bins
   double ece = 0.0;
@@ -301,6 +546,7 @@ Evaluation evaluate(const std::vector<Label>& labels, const std::vector<Result>&
     Counts& s = e.by_severity.at(r.severity == "error" ? 1 : 0);
     count(c, outcome);
     count(s, outcome);
+    count(e.all, outcome);
     if (outcome == Outcome::kFalse) {
       bool hard = false;
       for (const Label& l : labels) {
@@ -379,10 +625,43 @@ std::optional<double> metric(Evaluation& e, const Gate& gate) {
 // ---------------------------------------------------------------------------
 // Reports
 
-std::string markdown(const Evaluation& e, const std::string& title, bool complete) {
+// One line of the summary: a set of reports, at warn and above or at error.
+struct SummaryRow {
+  std::string name;
+  Counts counts;
+};
+
+// Strict precision counts only the right code; fault precision any fault the
+// report sits on; coverage is the share of reports the labels judge.
+std::string summary_markdown(const std::vector<SummaryRow>& rows) {
+  std::string out =
+      "## Summary\n\nStrict precision: right / judged. Fault precision: (right + other "
+      "fault) / judged. Coverage: judged / reports.\n\n"
+      "| Set | At | Reports | Judged | Coverage | Right | Other fault | False | Unlabelled | "
+      "Strict | Fault |\n|---|---|---|---|---|---|---|---|---|---|---|\n";
+  for (const SummaryRow& row : rows) {
+    const Counts& c = row.counts;
+    const bool judged = c.judged() > 0;
+    out += "| " + row.name + " | " + std::to_string(c.reported) + " | " +
+           std::to_string(c.judged()) + " | " +
+           shown(ratio(c.judged(), c.reported), c.reported > 0) + " | " +
+           std::to_string(c.correct) + " | " + std::to_string(c.other_fault) + " | " +
+           std::to_string(c.false_positive) + " | " + std::to_string(c.unlabelled) + " | " +
+           shown(c.precision(), judged) + " | " + shown(c.fault_precision(), judged) + " |\n";
+  }
+  return out;
+}
+
+std::vector<SummaryRow> summary_rows(const std::string& name, const Evaluation& e) {
+  return {{name + " | warn and above", e.all}, {name + " | error", e.by_severity.at(1)}};
+}
+
+std::string markdown(const Evaluation& e, const std::string& title, bool complete,
+                     const std::vector<SummaryRow>& summary) {
   std::string out = "# " + title + "\n\n";
   out += complete ? "Every fault is labelled: a report matching no label is a false positive.\n\n"
                   : "Reports matching no label are left out of precision (\"unlabelled\").\n\n";
+  out += summary_markdown(summary) + "\n";
   out += "## Per check, at warn and above\n\n";
   out +=
       "| Check | Reported | Right | Other fault | False | Unlabelled | Precision | "
@@ -507,7 +786,8 @@ std::string reliability_svg(const Evaluation& e) {
   return out;
 }
 
-std::string html(const Evaluation& e, const std::string& title, bool complete) {
+std::string html(const Evaluation& e, const std::string& title, bool complete,
+                 const std::vector<SummaryRow>& summary) {
   std::string out = R"(<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -557,10 +837,11 @@ ul.notes { color: var(--muted); font-size: .9rem; }
     out += R"(<div class="tile"><div class="v">)" + value + "</div><div class=\"k\">" + key +
            "</div></div>";
   };
-  tile(shown(e.by_severity.at(0).precision(), e.by_severity.at(0).judged() > 0),
-       "precision at warn");
+  tile(shown(e.all.precision(), e.all.judged() > 0), "strict precision, warn and above");
+  tile(shown(e.all.fault_precision(), e.all.judged() > 0), "fault precision, warn and above");
   tile(shown(e.by_severity.at(1).precision(), e.by_severity.at(1).judged() > 0),
-       "precision at error");
+       "strict precision at error");
+  tile(shown(ratio(e.all.judged(), e.all.reported), e.all.reported > 0), "coverage");
   tile(fixed(e.ece), "expected calibration error");
   int faults = 0;
   int found = 0;
@@ -570,7 +851,24 @@ ul.notes { color: var(--muted); font-size: .9rem; }
   }
   tile(shown(ratio(found, faults), faults > 0), "recall, all labelled faults");
   out +=
-      "</div>\n<h2>Per check, at warn and above</h2><div class=\"scroll\"><table><tr><th>Check</th>"
+      "</div>\n<h2>Summary</h2><div class=\"scroll\"><table><tr><th>Set</th><th>At</th>"
+      "<th>Reports</th><th>Judged</th><th>Coverage</th><th>Right</th><th>Other fault</th>"
+      "<th>False</th><th>Unlabelled</th><th>Strict</th><th>Fault</th></tr>";
+  for (const SummaryRow& row : summary) {
+    const Counts& c = row.counts;
+    const std::size_t bar = row.name.find(" | ");
+    out += "<tr><td>" + escape(row.name.substr(0, bar)) + "</td><td>" +
+           escape(bar == std::string::npos ? "" : row.name.substr(bar + 3)) + "</td><td>" +
+           std::to_string(c.reported) + "</td><td>" + std::to_string(c.judged()) + "</td><td>" +
+           shown(ratio(c.judged(), c.reported), c.reported > 0) + "</td><td>" +
+           std::to_string(c.correct) + "</td><td>" + std::to_string(c.other_fault) + "</td><td>" +
+           std::to_string(c.false_positive) + "</td><td>" + std::to_string(c.unlabelled) +
+           "</td><td>" + shown(c.precision(), c.judged() > 0) + "</td><td>" +
+           shown(c.fault_precision(), c.judged() > 0) + "</td></tr>";
+  }
+  out += "</table></div>";
+  out +=
+      "\n<h2>Per check, at warn and above</h2><div class=\"scroll\"><table><tr><th>Check</th>"
       "<th>Reported</th><th>Right</th><th>Other fault</th><th>False</th><th>Unlabelled</th>"
       "<th>Precision</th><th>Recall</th><th>F1</th></tr>";
   for (const auto& [code, c] : e.by_code) {
@@ -615,9 +913,29 @@ ul.notes { color: var(--muted); font-size: .9rem; }
 }
 
 int usage() {
-  std::cerr << "usage: dorq-eval --labels L.jsonl --results R.csv [--complete] [--gates F]\n"
+  std::cerr << "usage: dorq-eval --labels L.jsonl --results R [--results R2 ...]\n"
+               "                 [--input-time T] [--complete] [--gates F]\n"
                "                 [--markdown F] [--html F] [--title T]\n";
   return 2;
+}
+
+// Several runs' reports as their distinct conditions: one per code, series and
+// date, the latest run's kept (fafnir's dedupe keeps one flag per condition).
+std::vector<Result> distinct(const std::vector<std::vector<Result>>& runs) {
+  std::vector<Result> out;
+  std::map<std::tuple<std::string, std::string, std::int32_t>, std::size_t> seen;
+  for (const std::vector<Result>& run : runs) {
+    for (const Result& r : run) {
+      const auto key = std::make_tuple(r.code, r.series, r.first.days());
+      if (const auto it = seen.find(key); it != seen.end()) {
+        out[it->second] = r;
+      } else {
+        seen.emplace(key, out.size());
+        out.push_back(r);
+      }
+    }
+  }
+  return out;
 }
 
 }  // namespace
@@ -625,20 +943,25 @@ int usage() {
 int main(int argc, char** argv) {
   const std::span<char*> argument_span(argv, static_cast<std::size_t>(argc));
   const std::vector<std::string> args(argument_span.begin(), argument_span.end());
-  const auto value = [&args](std::string_view flag) -> std::optional<std::string> {
+  const auto values = [&args](std::string_view flag) {
+    std::vector<std::string> found;
     for (std::size_t i = 1; i + 1 < args.size(); ++i) {
       if (args[i] == flag) {
-        return args[i + 1];
+        found.push_back(args[i + 1]);
       }
     }
-    return std::nullopt;
+    return found;
+  };
+  const auto value = [&values](std::string_view flag) -> std::optional<std::string> {
+    const std::vector<std::string> found = values(flag);
+    return found.empty() ? std::nullopt : std::optional<std::string>{found.front()};
   };
   const auto flag = [&args](std::string_view name) {
     return std::find(args.begin(), args.end(), name) != args.end();
   };
   const auto labels_path = value("--labels");
-  const auto results_path = value("--results");
-  if (!labels_path || !results_path) {
+  const std::vector<std::string> results_paths = values("--results");
+  if (!labels_path || results_paths.empty()) {
     return usage();
   }
   try {
@@ -646,17 +969,49 @@ int main(int argc, char** argv) {
     if (!labels_file) {
       throw std::runtime_error(*labels_path + ": cannot open the file");
     }
-    const std::vector<Label> labels = dorq::read_labels(labels_file, *labels_path);
-    const std::vector<Result> results = read_results(*results_path);
+    std::vector<Label> labels = dorq::read_labels(labels_file, *labels_path);
+    // A label with applies_until judges only runs whose input predates it.
+    if (const auto input_time = value("--input-time")) {
+      const auto when = dorq::parse_timestamp(*input_time);
+      if (!when) {
+        throw std::runtime_error("--input-time: \"" + *input_time +
+                                 "\" is not an ISO 8601 date or timestamp");
+      }
+      std::erase_if(
+          labels, [&when](const Label& l) { return l.applies_until && *when >= *l.applies_until; });
+    }
+    std::vector<Label> verified = labels;
+    std::erase_if(verified, [](const Label& l) { return !l.verified.value_or(false); });
     const bool complete = flag("--complete");
+    std::vector<std::vector<Result>> runs;
+    std::vector<SummaryRow> summary;
+    for (const std::string& path : results_paths) {
+      runs.push_back(read_results(path));
+      if (results_paths.size() > 1) {
+        const std::string name = std::filesystem::path(path).filename().string();
+        for (SummaryRow& row : summary_rows(name, evaluate(labels, runs.back(), complete))) {
+          summary.push_back(std::move(row));
+        }
+      }
+    }
+    const std::vector<Result> results = runs.size() == 1 ? runs.front() : distinct(runs);
     Evaluation e = evaluate(labels, results, complete);
+    for (SummaryRow& row :
+         summary_rows(runs.size() == 1 ? "all labels" : "distinct conditions", e)) {
+      summary.push_back(std::move(row));
+    }
+    const std::size_t verified_count = verified.size();
+    for (SummaryRow& row : summary_rows("verified labels (" + std::to_string(verified_count) + ")",
+                                        evaluate(verified, results, complete))) {
+      summary.push_back(std::move(row));
+    }
     const std::string title = value("--title").value_or("dorq evaluation");
-    const std::string report = markdown(e, title, complete);
+    const std::string report = markdown(e, title, complete, summary);
     if (const auto path = value("--markdown")) {
       std::ofstream(*path, std::ios::binary) << report;
     }
     if (const auto path = value("--html")) {
-      std::ofstream(*path, std::ios::binary) << html(e, title, complete);
+      std::ofstream(*path, std::ios::binary) << html(e, title, complete, summary);
     }
     if (!value("--markdown")) {
       std::cout << report;

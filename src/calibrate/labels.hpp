@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <istream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -41,8 +42,23 @@ struct Label {
   // Dates a repair added that were not in the series as it stood (a shifted bar's
   // new date): dropped before checking, with --restore.
   std::vector<Date> remove;
+  // When the label was decided, and until when it applies, in seconds since
+  // 1970-01-01 UTC. A label with applies_until applies only to a run whose input
+  // predates it: a repair's label describes data the repair replaced.
+  std::optional<std::int64_t> decided_at;
+  std::optional<std::int64_t> applies_until;
+  // Checked bar by bar (true), or accepted in bulk (false); unset when not said.
+  std::optional<bool> verified;
+  // A cross-sectional label (series "*") about a cohort: its members' ids. It
+  // matches a DQ601 row whose members overlap them.
+  std::vector<std::string> members;
   std::uint32_t line = 0;  // in the labels file
 };
+
+// An ISO 8601 date or timestamp ("2026-10-14", "2026-10-14T17:15:47Z",
+// "2026-10-14 17:15:47.25+02:00") as seconds since 1970-01-01 UTC; a time without
+// an offset is UTC. nullopt when it is not one.
+[[nodiscard]] std::optional<std::int64_t> parse_timestamp(std::string_view text);
 
 // One JSON object per line:
 //   {"series":"AKR","first":"2020-03-02","last":"2020-03-02","class":"data_error",

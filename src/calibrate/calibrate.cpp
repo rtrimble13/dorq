@@ -73,34 +73,52 @@ std::optional<std::array<bool, kCount>> allowed_for(const Label& label) {
     set(H::kPendingDistribution);
     return a;
   }
-  const std::string& code = label.expect;
-  if (code.empty()) {
-    if (label.label_class == LabelClass::kContextGap) {
-      set(H::kUnreportedSplit);
+  // A context gap is context the data did not record: a split, or a dividend.
+  // Once it is on file (fafnir loads it as the repair), the same move is
+  // explained by it.
+  const bool gap = label.label_class == LabelClass::kContextGap;
+  const auto set_gap = [&] {
+    if (gap) {
       set(H::kExplainedSplit);
+      set(H::kExplainedDividend);
+      set(H::kPendingDistribution);
+    }
+  };
+  if (label.expect.empty()) {
+    if (gap) {
+      set(H::kUnreportedSplit);
+      set_gap();
     } else {
       for (std::size_t h = 0; h < kCount; ++h) {
         a.at(h) = is_error(static_cast<H>(h));
       }
     }
-  } else if (code == "DQ201") {
-    set(H::kBadPrint);
-  } else if (code == "DQ202") {
-    set(H::kScaleError);
-  } else if (code == "DQ203" || code == "DQ601") {
-    set(H::kUnreportedSplit);
-    // A context gap is a split the data did not record. Once the split is on file
-    // (fafnir loads it as the repair), the same move is an explained split.
-    if (label.label_class == LabelClass::kContextGap) {
-      set(H::kExplainedSplit);
+    return a;
+  }
+  // Each code of "DQ202|DQ205" allows its own; a label naming none the price model
+  // judges says nothing to it.
+  bool any = false;
+  std::stringstream codes(label.expect);
+  for (std::string code; std::getline(codes, code, '|');) {
+    if (code == "DQ201") {
+      set(H::kBadPrint);
+    } else if (code == "DQ202") {
+      set(H::kScaleError);
+    } else if (code == "DQ203" || code == "DQ601") {
+      set(H::kUnreportedSplit);
+    } else if (code == "DQ204") {
+      set(H::kBadClose);
+    } else if (code == "DQ205") {
+      set(H::kHistorySegment);
+    } else {
+      continue;
     }
-  } else if (code == "DQ204") {
-    set(H::kBadClose);
-  } else if (code == "DQ205") {
-    set(H::kHistorySegment);
-  } else {
+    any = true;
+  }
+  if (!any) {
     return std::nullopt;
   }
+  set_gap();
   return a;
 }
 
