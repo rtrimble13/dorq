@@ -98,10 +98,17 @@ void append_model(std::string& out, const Violation& v) {
 
 void append_record_key(std::string& out, const Violation& v) {
   if (v.date) {
-    out += R"({"trade_date":")" + v.date->to_string() + "\"}";
+    out += R"({"trade_date":")" + v.date->to_string() + "\"";
   } else {
-    out += R"({"line":)" + std::to_string(v.line) + "}";
+    out += R"({"line":)" + std::to_string(v.line);
   }
+  for (const DetailField& field : v.key) {
+    out += ',';
+    append_json_string(out, field.key);
+    out += ':';
+    append_detail_value(out, field.value);
+  }
+  out += '}';
 }
 
 // One violation as the JSON object jsonl, json and fafnir all use.

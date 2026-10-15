@@ -46,6 +46,14 @@ struct IntegritySettings {
   // when a grid step is under this share of the price and the closes nearby move
   // flat_bar_steps steps or fewer.
   double pinned_step_share = 0.002;
+  // DQ107 and DQ501: a series whose median volume (on days with trading) is below
+  // this many shares, or whose median dollar volume is below the second (0: no
+  // floor), trades thinly enough that a flat bar or a repeated close is how
+  // trading looks: reported at info. A flat bar on flat_bar_volume_multiple times
+  // the median, and on at least the floors itself, stays at warn on any series.
+  double flat_bar_min_median_volume = 5000.0;
+  double flat_bar_min_median_dollar_volume = 0.0;
+  double flat_bar_volume_multiple = 5.0;
   // DQ108: the range a value (a point series' value, a bar's close) must lie in;
   // none by default. A profile sets it, e.g. [-5, 25] for a 10-year yield.
   std::optional<Bounds> bounds = std::nullopt;
@@ -60,6 +68,9 @@ struct IntegrityPatch {
   std::optional<double> precision_min_contrast;
   std::optional<double> flat_bar_steps;
   std::optional<double> pinned_step_share;
+  std::optional<double> flat_bar_min_median_volume;
+  std::optional<double> flat_bar_min_median_dollar_volume;
+  std::optional<double> flat_bar_volume_multiple;
   std::optional<Bounds> bounds;
 
   void apply_to(IntegritySettings& settings) const;
@@ -132,6 +143,10 @@ struct PricePriors {
   // With --actions: a cash dividend on file between the bar and the one before,
   // larger than an ordinary move, came off the price (bars only).
   double explained_dividend = 0.9;
+  // A NAV-priced fund (--meta nav_priced) falling 2-35% with no dividend on file
+  // that explains it, and holding there: a distribution not yet on file. Doubled
+  // from September to December, when funds pay their capital gains.
+  double pending_distribution = 0.05;
   // With --actions: a split on file being wrong (misdated, not in the bars, the
   // wrong ratio, applied twice; DQ701-DQ704), shared among the four. Per split.
   double split_on_file_error = 0.06;
@@ -147,7 +162,11 @@ struct PriceSettings {
   double floor_move = 0.5;            // and every move of 50% or more, either way
   int revert_max_bars = 5;            // the longest bad print: bars before the series reverts
   int volume_window = 40;             // bars either side for volume levels
-  double ratio_tolerance = 0.01;      // slack on a clean ratio, on the log scale
+  // A bar whose log range, log(high / low), is this many times the median of the
+  // bars before it is a violent session: a real move trades through its range;
+  // a value at the wrong scale, or a split, shows the old bar times a constant.
+  double violent_range = 5.0;
+  double ratio_tolerance = 0.01;  // slack on a clean ratio, on the log scale
   std::vector<SplitRatio> split_ratios = {{2, 1},  {3, 1},  {3, 2},  {4, 1},  {5, 1},  {5, 4},
                                           {8, 1},  {10, 1}, {15, 1}, {20, 1}, {1, 2},  {1, 3},
                                           {1, 4},  {1, 5},  {1, 8},  {1, 10}, {1, 15}, {1, 20},
@@ -161,6 +180,11 @@ struct PriceSettings {
   double min_price = 1e-5;            // prices outside [min, max] are implausible
   double max_price = 1e6;
   Transform transform = Transform::kAuto;  // point series only
+  // DQ705: a dividend ten times off the others is corroborated when the close on
+  // its ex-date is within the larger of these of the close before less the
+  // amount: a share of that close, and a share of the amount.
+  double dividend_tolerance = 0.015;
+  double dividend_amount_tolerance = 0.25;
   PricePriors priors;
   // [calibration] p_error_map (from `dorq calibrate`): a monotone map from the
   // model's p_error to a calibrated one, as (raw, calibrated) knots in rising
@@ -174,6 +198,7 @@ struct PricePatch {
   std::optional<double> floor_move;
   std::optional<int> revert_max_bars;
   std::optional<int> volume_window;
+  std::optional<double> violent_range;
   std::optional<double> ratio_tolerance;
   std::optional<std::vector<SplitRatio>> split_ratios;
   std::optional<int> provisional_bars;
@@ -185,6 +210,8 @@ struct PricePatch {
   std::optional<double> min_price;
   std::optional<double> max_price;
   std::optional<Transform> transform;
+  std::optional<double> dividend_tolerance;
+  std::optional<double> dividend_amount_tolerance;
   // [priors]
   std::optional<double> market_move;
   std::optional<double> bad_print;
@@ -195,6 +222,7 @@ struct PricePatch {
   std::optional<double> history_segment;
   std::optional<double> explained_split;
   std::optional<double> explained_dividend;
+  std::optional<double> pending_distribution;
   std::optional<double> split_on_file_error;
   std::optional<double> stale_run;
 
@@ -210,6 +238,9 @@ struct CohortSettings {
   int min_series = 3;               // DQ303: fewest missing series that make a cohort
   double max_tail = 1e-6;           // DQ303: Poisson tail probability at or below which
   double confident_density = 0.95;  // a series is expected on a session above this
+  // DQ601: Poisson tail probability, given the day's rate of moves near the
+  // ratio, at or below which unrelated series moving by it are a cohort.
+  double move_max_tail = 1e-4;
 };
 
 // Probability thresholds that turn p_error into a severity.

@@ -200,6 +200,12 @@ IntegrityPatch read_integrity(const toml::table& table, const std::string& where
       patch.flat_bar_steps = read_double(node, where, path, 0.0, 1e6);
     } else if (key == "pinned_step_share") {
       patch.pinned_step_share = read_double(node, where, path, 0.0, 1.0);
+    } else if (key == "flat_bar_min_median_volume") {
+      patch.flat_bar_min_median_volume = read_double(node, where, path, 0.0, 1e15);
+    } else if (key == "flat_bar_min_median_dollar_volume") {
+      patch.flat_bar_min_median_dollar_volume = read_double(node, where, path, 0.0, 1e18);
+    } else if (key == "flat_bar_volume_multiple") {
+      patch.flat_bar_volume_multiple = read_double(node, where, path, 1.0, 1e6);
     } else if (key == "bounds") {
       patch.bounds = read_bounds(node, where, path);
     } else {
@@ -256,6 +262,8 @@ CoveragePatch read_coverage(const toml::table& table, const std::string& where,
       global->cohort.max_tail = read_double(node, where, path, 0.0, 1.0);
     } else if (global != nullptr && key == "confident_density") {
       global->cohort.confident_density = read_double(node, where, path, 0.0, 1.0);
+    } else if (global != nullptr && key == "cohort_move_max_tail") {
+      global->cohort.move_max_tail = read_double(node, where, path, 0.0, 1.0);
     } else {
       fail(where, node, "unknown key \"" + path + "\"");
     }
@@ -277,6 +285,8 @@ void read_price(const toml::table& table, const std::string& where, const std::s
       patch.revert_max_bars = read_int(node, where, path, 1, 20);
     } else if (key == "volume_window") {
       patch.volume_window = read_int(node, where, path, 5, 1000);
+    } else if (key == "violent_range") {
+      patch.violent_range = read_double(node, where, path, 1.0, 1e6);
     } else if (key == "ratio_tolerance") {
       patch.ratio_tolerance = read_double(node, where, path, 1e-4, 1.0);
     } else if (key == "split_ratios") {
@@ -314,6 +324,10 @@ void read_price(const toml::table& table, const std::string& where, const std::s
         fail(where, node, "\"" + path + R"(" must be "auto", "log" or "diff")");
       }
       patch.transform = transform;
+    } else if (key == "dividend_tolerance") {
+      patch.dividend_tolerance = read_double(node, where, path, 0.0, 1.0);
+    } else if (key == "dividend_amount_tolerance") {
+      patch.dividend_amount_tolerance = read_double(node, where, path, 0.0, 1.0);
     } else {
       fail(where, node, "unknown key \"" + path + "\"");
     }
@@ -345,6 +359,8 @@ void read_priors(const toml::table& table, const std::string& where, const std::
       patch.explained_split = value;
     } else if (key == "explained_dividend") {
       patch.explained_dividend = value;
+    } else if (key == "pending_distribution") {
+      patch.pending_distribution = value;
     } else if (key == "split_on_file_error") {
       if (value >= 1.0) {
         fail(where, node, "\"" + path + "\" is a probability: from 0 to below 1");
@@ -659,6 +675,17 @@ void append_integrity_patch(std::string& out, const IntegrityPatch& patch) {
   if (patch.pinned_step_share) {
     out += "pinned_step_share = " + format_number(*patch.pinned_step_share) + "\n";
   }
+  if (patch.flat_bar_min_median_volume) {
+    out +=
+        "flat_bar_min_median_volume = " + format_number(*patch.flat_bar_min_median_volume) + "\n";
+  }
+  if (patch.flat_bar_min_median_dollar_volume) {
+    out += "flat_bar_min_median_dollar_volume = " +
+           format_number(*patch.flat_bar_min_median_dollar_volume) + "\n";
+  }
+  if (patch.flat_bar_volume_multiple) {
+    out += "flat_bar_volume_multiple = " + format_number(*patch.flat_bar_volume_multiple) + "\n";
+  }
   if (patch.bounds) {
     out += "bounds = [" + format_number(patch.bounds->low) + ", " +
            format_number(patch.bounds->high) + "]\n";
@@ -674,6 +701,9 @@ IntegrityPatch full_patch(const IntegritySettings& settings) {
   full.precision_min_contrast = settings.precision_min_contrast;
   full.flat_bar_steps = settings.flat_bar_steps;
   full.pinned_step_share = settings.pinned_step_share;
+  full.flat_bar_min_median_volume = settings.flat_bar_min_median_volume;
+  full.flat_bar_min_median_dollar_volume = settings.flat_bar_min_median_dollar_volume;
+  full.flat_bar_volume_multiple = settings.flat_bar_volume_multiple;
   full.bounds = settings.bounds;
   return full;
 }
@@ -726,6 +756,7 @@ PricePatch full_patch(const PriceSettings& settings) {
   full.floor_move = settings.floor_move;
   full.revert_max_bars = settings.revert_max_bars;
   full.volume_window = settings.volume_window;
+  full.violent_range = settings.violent_range;
   full.ratio_tolerance = settings.ratio_tolerance;
   full.split_ratios = settings.split_ratios;
   full.provisional_bars = settings.provisional_bars;
@@ -737,6 +768,8 @@ PricePatch full_patch(const PriceSettings& settings) {
   full.min_price = settings.min_price;
   full.max_price = settings.max_price;
   full.transform = settings.transform;
+  full.dividend_tolerance = settings.dividend_tolerance;
+  full.dividend_amount_tolerance = settings.dividend_amount_tolerance;
   full.market_move = settings.priors.market_move;
   full.bad_print = settings.priors.bad_print;
   full.bad_close = settings.priors.bad_close;
@@ -746,6 +779,7 @@ PricePatch full_patch(const PriceSettings& settings) {
   full.history_segment = settings.priors.history_segment;
   full.explained_split = settings.priors.explained_split;
   full.explained_dividend = settings.priors.explained_dividend;
+  full.pending_distribution = settings.priors.pending_distribution;
   full.split_on_file_error = settings.priors.split_on_file_error;
   full.stale_run = settings.priors.stale_run;
   return full;
@@ -774,6 +808,7 @@ void append_price_patch(std::string& out, const PricePatch& patch) {
   append_number(out, "floor_move", patch.floor_move);
   append_integer(out, "revert_max_bars", patch.revert_max_bars);
   append_integer(out, "volume_window", patch.volume_window);
+  append_number(out, "violent_range", patch.violent_range);
   append_number(out, "ratio_tolerance", patch.ratio_tolerance);
   if (patch.split_ratios) {
     std::vector<std::string> ratios;
@@ -797,6 +832,8 @@ void append_price_patch(std::string& out, const PricePatch& patch) {
     out += to_string(*patch.transform);
     out += "\"\n";
   }
+  append_number(out, "dividend_tolerance", patch.dividend_tolerance);
+  append_number(out, "dividend_amount_tolerance", patch.dividend_amount_tolerance);
 }
 
 void append_priors_patch(std::string& out, const PricePatch& patch) {
@@ -809,6 +846,7 @@ void append_priors_patch(std::string& out, const PricePatch& patch) {
   append_number(out, "history_segment", patch.history_segment);
   append_number(out, "explained_split", patch.explained_split);
   append_number(out, "explained_dividend", patch.explained_dividend);
+  append_number(out, "pending_distribution", patch.pending_distribution);
   append_number(out, "split_on_file_error", patch.split_on_file_error);
   append_number(out, "stale_run", patch.stale_run);
 }
@@ -888,6 +926,15 @@ void IntegrityPatch::apply_to(IntegritySettings& settings) const {
   if (pinned_step_share) {
     settings.pinned_step_share = *pinned_step_share;
   }
+  if (flat_bar_min_median_volume) {
+    settings.flat_bar_min_median_volume = *flat_bar_min_median_volume;
+  }
+  if (flat_bar_min_median_dollar_volume) {
+    settings.flat_bar_min_median_dollar_volume = *flat_bar_min_median_dollar_volume;
+  }
+  if (flat_bar_volume_multiple) {
+    settings.flat_bar_volume_multiple = *flat_bar_volume_multiple;
+  }
   if (bounds) {
     settings.bounds = *bounds;
   }
@@ -933,6 +980,7 @@ void PricePatch::apply_to(PriceSettings& settings) const {
   set(settings.floor_move, floor_move);
   set(settings.revert_max_bars, revert_max_bars);
   set(settings.volume_window, volume_window);
+  set(settings.violent_range, violent_range);
   set(settings.ratio_tolerance, ratio_tolerance);
   set(settings.split_ratios, split_ratios);
   set(settings.provisional_bars, provisional_bars);
@@ -944,6 +992,8 @@ void PricePatch::apply_to(PriceSettings& settings) const {
   set(settings.min_price, min_price);
   set(settings.max_price, max_price);
   set(settings.transform, transform);
+  set(settings.dividend_tolerance, dividend_tolerance);
+  set(settings.dividend_amount_tolerance, dividend_amount_tolerance);
   set(settings.priors.market_move, market_move);
   set(settings.priors.bad_print, bad_print);
   set(settings.priors.bad_close, bad_close);
@@ -953,6 +1003,7 @@ void PricePatch::apply_to(PriceSettings& settings) const {
   set(settings.priors.history_segment, history_segment);
   set(settings.priors.explained_split, explained_split);
   set(settings.priors.explained_dividend, explained_dividend);
+  set(settings.priors.pending_distribution, pending_distribution);
   set(settings.priors.split_on_file_error, split_on_file_error);
   set(settings.priors.stale_run, stale_run);
 }
@@ -1200,7 +1251,8 @@ std::string to_toml(const Config& config) {
   out += config.gap_report == GapReport::kRun ? "run" : "session";
   out += "\"\ncohort_min_series = " + std::to_string(config.cohort.min_series);
   out += "\ncohort_max_tail = " + format_number(config.cohort.max_tail);
-  out += "\nconfident_density = " + format_number(config.cohort.confident_density) + "\n";
+  out += "\nconfident_density = " + format_number(config.cohort.confident_density);
+  out += "\ncohort_move_max_tail = " + format_number(config.cohort.move_max_tail) + "\n";
 
   const PricePatch price = full_patch(config.price);
   out += "\n[price]\n";
@@ -1365,6 +1417,12 @@ flat_bar_steps = 3
 # DQ107: with no ranged bar nearby, a grid step under this share of the price, with closes
 # moving flat_bar_steps or fewer, is a pinned price (a SPAC at its trust value), not a lost range.
 pinned_step_share = 0.002
+# DQ107 and DQ501: a series trading a median below this many shares a day (or dollars,
+# 0 for no dollar floor) is thin: its flat bars and repeated closes are reported at info,
+# but a flat bar on flat_bar_volume_multiple times the median stays at warn.
+flat_bar_min_median_volume = 5000
+flat_bar_min_median_dollar_volume = 0
+flat_bar_volume_multiple = 5
 # DQ108: the range values must lie in, e.g. bounds = [-5, 25] for a yield; none by default.
 
 [coverage]
@@ -1382,6 +1440,7 @@ report = "run"                # DQ301: one violation per run, or per "session"
 cohort_min_series = 3         # DQ303: fewest missing series that make a cohort
 cohort_max_tail = 1e-06       # DQ303: Poisson tail probability at or below which
 confident_density = 0.95      # DQ303: a series counts as expected above this density
+cohort_move_max_tail = 0.0001 # DQ601: Poisson tail at or below which a cohort beats chance
 
 [price]
 # DQ2xx: how suspicious bars are found and judged (doc/checks/DQ201.md).
@@ -1389,6 +1448,7 @@ candidate_tail_prob = 0.001   # score a bar whose return is this improbable as o
 floor_move = 0.5              # and every move of 50% or more, either way
 revert_max_bars = 5           # the longest bad print, in bars
 volume_window = 40            # bars either side for volume levels
+violent_range = 5             # a bar's range this many times the usual: a violent session
 ratio_tolerance = 0.01        # slack on a clean ratio, on the log scale
 split_ratios = ["2:1", "3:1", "3:2", "4:1", "5:1", "5:4", "8:1", "10:1", "15:1", "20:1", "1:2", "1:3", "1:4", "1:5", "1:8", "1:10", "1:15", "1:20", "1:25", "1:30", "1:40", "1:50", "1:100"]
 provisional_bars = 3          # fewer bars after a bar than this: provisional, at most warn
@@ -1400,6 +1460,8 @@ jump_scale = 6                # and a jump's size, in ordinary returns
 min_price = 1e-05             # prices outside [min_price, max_price] are implausible
 max_price = 1000000
 transform = "auto"            # point series: "log", "diff" (rates crossing zero) or "auto"
+dividend_tolerance = 0.015    # DQ705: an ex-date close within this share of the close before,
+dividend_amount_tolerance = 0.25  # or of the amount, of (close before - amount) corroborates it
 
 [priors]
 # Each explanation's prior weight for a suspicious bar, normalized over those that apply.
@@ -1412,6 +1474,7 @@ tick_move = 0.01
 history_segment = 0.05
 explained_split = 0.9         # with --actions: a split on file between the bars explains a move
 explained_dividend = 0.9      # with --actions: a cash dividend on file between the bars comes off
+pending_distribution = 0.05   # a NAV fund's drop with no dividend on file (x2 Sep-Dec)
 split_on_file_error = 0.06    # with --actions: a split on file being wrong (DQ701-DQ704)
 stale_run = 0.00003           # DQ501: a run of repeated closes being a stale feed, per bar
 

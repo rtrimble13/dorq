@@ -31,6 +31,14 @@ const Context& no_context() {
   return kNone;
 }
 
+// DQ601: how far from a split ratio a series' move may be and still count as one:
+// the model's slack on a clean ratio, with twice the series' ordinary move, at most
+// 10%.
+double cohort_tolerance(const PriceSettings& settings, double move_sd) {
+  constexpr double kMaxTolerance = 0.1;
+  return std::min(kMaxTolerance, 2.0 * std::hypot(settings.ratio_tolerance, move_sd));
+}
+
 bool enables(const Selection& selection, std::string_view code) {
   const Check* check = find_check(code);
   return check != nullptr && selection.enabled(check->info());
@@ -179,7 +187,9 @@ Engine::Processed Engine::process(Work& work) const {
                             .have_actions = context_.have_actions,
                             .actions = actions,
                             .tick_size = meta != nullptr ? meta->tick_size : std::nullopt,
-                            .market = context_.market ? &*context_.market : nullptr});
+                            .market = context_.market ? &*context_.market : nullptr,
+                            .nav_priced = meta != nullptr && meta->nav_priced.value_or(false),
+                            .trade_size = settings.coverage.trade_size});
   }
   const SeriesContext context{
       .series = series,
@@ -213,7 +223,8 @@ Engine::Processed Engine::process(Work& work) const {
       // whose fate is open.
       const double explained =
           finding.posterior.at(static_cast<std::size_t>(PriceHypothesis::kExplainedSplit)) +
-          finding.posterior.at(static_cast<std::size_t>(PriceHypothesis::kExplainedDividend));
+          finding.posterior.at(static_cast<std::size_t>(PriceHypothesis::kExplainedDividend)) +
+          finding.posterior.at(static_cast<std::size_t>(PriceHypothesis::kPendingDistribution));
       if (finding.claimed || finding.provisional || !finding.split ||
           !finding.considered.at(split) || explained >= 0.5 ||
           std::fabs(std::log(finding.factor / finding.split->price_factor())) > 0.1) {
@@ -229,8 +240,30 @@ Engine::Processed Engine::process(Work& work) const {
       move.posterior = finding.posterior;
       move.considered = finding.considered;
       move.provisional = finding.provisional;
+      move.tolerance = cohort_tolerance(settings.price, price->move_sd[finding.bar]);
+      move.market_like = finding.market_like();
       move.split = unreported_split_base(context, *price, finding);
       summary.moves.push_back(std::move(move));
+    }
+    // DQ601's base rate: each one-session move of a daily series, and those near a
+    // split ratio, by its own tolerance.
+    if (frequency == Frequency::kDaily && price->features.log_scale) {
+      const PriceFeatures& f = price->features;
+      for (std::size_t t = 1; t < f.size(); ++t) {
+        if (f.elapsed[t] != 1) {
+          continue;
+        }
+        const Date date = series.date[f.row[t]];
+        summary.moved.push_back(date);
+        const double r = std::log(series.close[f.row[t]] / series.close[f.row[t - 1]]);
+        const double tolerance = cohort_tolerance(settings.price, price->move_sd[t]);
+        for (const SplitRatio& ratio : settings.price.split_ratios) {
+          const double off = std::fabs(r - std::log(ratio.price_factor()));
+          if (off <= 3.0 * tolerance) {
+            summary.band_moves.push_back({date, ratio.to_string(), off <= tolerance});
+          }
+        }
+      }
     }
   }
   summary.cohort = settings.cohort;
@@ -267,9 +300,13 @@ void Engine::filter_and_send(SeriesResult&& result) {
 }
 
 void Engine::drop_unreported(SeriesResult& result) const {
+  // --since keeps what is still active in the window: a violation spanning dates
+  // (a stale feed, a gap, an era, a run) counts by its last date, so one that
+  // began before the window and is still open stays reported, under its first
+  // date. A caller deduplicating by that date sees one condition across runs.
   std::erase_if(result.violations, [this](const Violation& v) {
     return v.severity < options_.min_severity ||
-           (options_.since && v.date && *v.date < *options_.since);
+           (options_.since && v.date && v.end_date.value_or(*v.date) < *options_.since);
   });
 }
 

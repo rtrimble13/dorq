@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/text.hpp"
 #include "dorq/number.hpp"
 #include "price/tick.hpp"
 
@@ -51,7 +52,7 @@ double median(std::vector<double> values) {
   return values[mid];
 }
 
-std::string percent(double share) {
+std::string whole_percent(double share) {
   return std::to_string(static_cast<int>(std::lround(share * 100.0))) + "%";
 }
 
@@ -336,9 +337,9 @@ void PrecisionShift::run(const SeriesContext& context, std::vector<Violation>& o
   const auto before_rows = std::int64_t{best};
   const auto after_rows = std::int64_t{n - best};
   const std::string threshold = std::to_string(settings.precision_high_decimals) + "+ decimals";
-  std::string message = "close precision changes here: " + percent(before_share) + " of " +
+  std::string message = "close precision changes here: " + whole_percent(before_share) + " of " +
                         std::to_string(before_rows) + " earlier closes need " + threshold + ", " +
-                        percent(after_share) + " of " + std::to_string(after_rows) +
+                        whole_percent(after_share) + " of " + std::to_string(after_rows) +
                         " later ones do; ";
   message += after_share > before_share
                  ? "the later prices look computed (adjusted) rather than quoted"
@@ -425,6 +426,22 @@ FlatBarNeighbours flat_bar_neighbours(const Series& s, const std::vector<double>
 
 }  // namespace
 
+ThinSeries thin_series(double median_volume, double median_dollar_volume,
+                       const IntegritySettings& settings) {
+  ThinSeries out;
+  out.median_dollar_volume = std::isfinite(median_dollar_volume) ? median_dollar_volume : 0.0;
+  if (median_volume < settings.flat_bar_min_median_volume) {
+    out.thin = true;
+    out.why = "a median " + whole_number(median_volume) + " shares a day, under " +
+              whole_number(settings.flat_bar_min_median_volume);
+  } else if (out.median_dollar_volume < settings.flat_bar_min_median_dollar_volume) {
+    out.thin = true;
+    out.why = "a median $" + whole_number(out.median_dollar_volume) + " a day, under $" +
+              whole_number(settings.flat_bar_min_median_dollar_volume);
+  }
+  return out;
+}
+
 const CheckInfo& ZeroRangeWithVolume::info() const noexcept {
   static const CheckInfo kInfo{
       .code = "DQ107",
@@ -449,10 +466,14 @@ void ZeroRangeWithVolume::run(const SeriesContext& context, std::vector<Violatio
   constexpr std::size_t kMinTradedRows = 20;
   constexpr std::size_t kNearby = 20;  // bars either side that judge the usual range
   std::vector<double> traded;
+  std::vector<double> dollars;
   std::vector<std::uint8_t> decimals;
   for (std::size_t i = 0; i < s.size(); ++i) {
     if (std::isfinite(s.volume[i]) && s.volume[i] > 0.0) {
       traded.push_back(s.volume[i]);
+      if (std::isfinite(s.close[i]) && s.close[i] > 0.0) {
+        dollars.push_back(s.volume[i] * s.close[i]);
+      }
     }
     if (std::isfinite(s.close[i])) {
       decimals.push_back(s.close_decimals[i]);
@@ -462,6 +483,8 @@ void ZeroRangeWithVolume::run(const SeriesContext& context, std::vector<Violatio
     return;
   }
   const double typical = median(traded);
+  const IntegritySettings& integrity = context.integrity;
+  const ThinSeries thin = thin_series(typical, median(std::move(dollars)), integrity);
   const double written = written_grid(std::move(decimals));
   // Each traded bar's range, as a share of its close. NaN for a flat or unusable
   // bar.
@@ -521,10 +544,22 @@ void ZeroRangeWithVolume::run(const SeriesContext& context, std::vector<Violatio
                                           format_number(std::round(usual * 100.0) / 100.0) +
                                           " steps of the price grid"
                                     : ", with no bar nearby that has a range";
-    Violation v = make_violation(info(), Severity::kWarn, s, i, std::move(message));
+    // On a thin series one or two prints make a day, and one print has one price:
+    // info, unless this day's own volume is a large one.
+    const bool big_day = volume >= integrity.flat_bar_volume_multiple * typical &&
+                         volume >= integrity.flat_bar_min_median_volume &&
+                         volume * c >= integrity.flat_bar_min_median_dollar_volume;
+    const Severity severity = thin.thin && !big_day ? Severity::kInfo : Severity::kWarn;
+    if (severity == Severity::kInfo) {
+      message += "; a thin series (" + thin.why + "), where a flat bar is how trading looks";
+    }
+    Violation v = make_violation(info(), severity, s, i, std::move(message));
     v.detail = {{"close", c},
                 {"volume", volume},
                 {"median_volume", typical},
+                {"median_dollar_volume", thin.median_dollar_volume},
+                {"volume_multiple", volume / typical},
+                {"thin_series", thin.thin},
                 {"grid_step", grid},
                 {"ranged_nearby", std::isfinite(usual)}};
     if (std::isfinite(usual)) {

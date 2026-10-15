@@ -19,8 +19,8 @@ namespace dorq {
 // each makes some checks possible or sharper. See doc/context.md.
 
 // A split on file: `numerator` new shares for `denominator` old ones (a 2-for-1
-// split is 2 and 1, as fafnir's core.corporate_action stores it). Prices before
-// the ex-date are `denominator / numerator` times those after.
+// split is 2 and 1, as fafnir's core.corporate_action stores it). Prices from
+// the ex-date on are `denominator / numerator` times those before (price_factor).
 struct SplitAction {
   Date ex_date;
   double numerator = 1.0;
@@ -100,6 +100,15 @@ struct Context {
 // be read as a whole: empty, no series, ex_date or type column, or an unterminated
 // quote.
 void read_actions(std::istream& in, const std::string& source, Context& context);
+
+// --restore-actions: the actions as they stood before repairs, over those read
+// with read_actions. The file is in the actions format, with an optional
+// added_by_repair column. For each series, ex-date and type it names, its rows
+// replace every row of `context` with that key; a row with added_by_repair true
+// stands for one the repair added, and only takes the key's rows out (a re-dated
+// split's new date, a split or dividend an operator put on file). Rows that cannot
+// be used go to `context.issues`, as for read_actions.
+void restore_actions(std::istream& in, const std::string& source, Context& context);
 
 // Read a CSV or TSV metadata file: series, asset_type, nav_priced, tick_size,
 // peer_group, exchange (or exchange_code). A series listed twice keeps its first

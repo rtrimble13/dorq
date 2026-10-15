@@ -100,8 +100,9 @@ struct CheckOptions {
   std::string actions;
   std::string meta;
   std::string market;
-  std::string labels;   // --labels: their `remove` dates, with --restore
-  std::string restore;  // --restore: bars as they stood before repairs
+  std::string labels;           // --labels: their `remove` dates, with --restore
+  std::string restore;          // --restore: bars as they stood before repairs
+  std::string restore_actions;  // --restore-actions: actions as they stood before repairs
 };
 
 struct CalibrateCommand {
@@ -274,6 +275,10 @@ Context load_context(const CheckOptions& o, const fs::path& cwd) {
   if (!o.actions.empty()) {
     std::ifstream file = open_context(o.actions, cwd, "actions");
     read_actions(file, o.actions, context);
+  }
+  if (!o.restore_actions.empty()) {
+    std::ifstream file = open_context(o.restore_actions, cwd, "restore-actions");
+    restore_actions(file, o.restore_actions, context);
   }
   if (!o.meta.empty()) {
     std::ifstream file = open_context(o.meta, cwd, "metadata");
@@ -607,7 +612,8 @@ void add_check_options(CLI::App& cmd, CheckOptions& o) {
   cmd.add_option("--fail-on", o.fail_on, "Lowest severity that fails the run")
       ->check(CLI::IsMember({"info", "warn", "error", "never"}));
   cmd.add_flag("--exit-zero", o.exit_zero, "Exit 0 even when violations are found");
-  cmd.add_option("--since", o.since, "Report only violations dated on or after");
+  cmd.add_option("--since", o.since,
+                 "Report only violations active on or after (dated, or ending, then)");
   cmd.add_flag("--statistics", o.statistics, "Print counts per check");
   cmd.add_option("--threads", o.threads, "Worker threads (0: one per core)")
       ->check(CLI::Range(0, 1024));
@@ -635,6 +641,9 @@ void add_check_options(CLI::App& cmd, CheckOptions& o) {
                  "A market reference series (e.g. SPY); moves are judged net of it");
   cmd.add_option("--restore", o.restore,
                  "Bars as they stood before repairs, over the input (doc/labels.md)");
+  cmd.add_option("--restore-actions", o.restore_actions,
+                 "Corporate actions as they stood before repairs, over --actions "
+                 "(doc/labels.md)");
   cmd.add_option("--labels", o.labels,
                  "Labels (JSON Lines) whose `remove` dates are dropped, with --restore");
   cmd.add_option("--color", o.color, "Colour text output")
@@ -667,6 +676,8 @@ int run(std::span<const char* const> args, Io& io) {
   calibrate_cmd->add_option("--labels", co.labels, "Labels (JSON Lines; doc/labels.md)")
       ->required();
   calibrate_cmd->add_option("--restore", co.restore, "Bars as they stood before repairs");
+  calibrate_cmd->add_option("--restore-actions", co.restore_actions,
+                            "Corporate actions as they stood before repairs (over --actions)");
   calibrate_cmd->add_option("--out", calibrate_command.out,
                             "Write the fitted settings here (default: standard output)");
   calibrate_cmd->add_option("--name", calibrate_command.name,
@@ -719,9 +730,9 @@ int run(std::span<const char* const> args, Io& io) {
   CheckOptions show_options;
   add_check_options(*show, show_options);
   // Taken so that a check command line can be passed as it is; they change no setting.
-  for (const char* name :
-       {"files", "--show-evidence", "--exit-zero", "--since", "--statistics", "--buffer", "--as-of",
-        "--actions", "--meta", "--market", "--restore", "--labels", "--color"}) {
+  for (const char* name : {"files", "--show-evidence", "--exit-zero", "--since", "--statistics",
+                           "--buffer", "--as-of", "--actions", "--meta", "--market", "--restore",
+                           "--restore-actions", "--labels", "--color"}) {
     show->get_option(name)->group("Check options that change no setting");
   }
   show->get_option("files")->description("Input files (read by check, not here)");

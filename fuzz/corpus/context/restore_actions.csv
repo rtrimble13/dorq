@@ -1,0 +1,4 @@
+series,ex_date,type,numerator,denominator,amount,added_by_repair
+A,2020-01-15,split,2,1,,true
+A,2020-03-30,split,2,1,,
+A,2020-01-20,dividend,,,0.25,false

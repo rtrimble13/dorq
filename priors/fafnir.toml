@@ -6,11 +6,17 @@
 # nav_priced) and --as-of (the market's latest open session).
 #
 # This is the starting point, not the fit. The priors below are dorq's defaults.
-# DR-0704 replaces them with a calibration on fafnir's own labels:
+# DR-0704 replaces them with a calibration on fafnir's own labels. Give calibrate
+# the context check gets (it has taken these options since 0.6.0), and the bars
+# and actions as they stood before the repairs the labels record:
 #
-#   fafnir dq export-labels --out labels.jsonl --restore before.csv
-#   dorq calibrate bars.csv --labels labels.jsonl --restore before.csv \
-#        --config priors/fafnir.toml --holdout 0.3 --out fafnir-calibration.toml
+#   fafnir dq export-labels --out labels.jsonl --restore before.csv \
+#        --restore-actions before-actions.csv
+#   dorq calibrate bars.csv --labels labels.jsonl --config priors/fafnir.toml \
+#        --calendar-file calendar.csv --calendar-exchange NASDAQ \
+#        --actions actions.csv --meta meta.csv \
+#        --restore before.csv --restore-actions before-actions.csv \
+#        --holdout 0.3 --out fafnir-calibration.toml
 #
 # and then this file includes it (uncomment below). Keep the labels and the fit
 # under version control together; the [calibration] version names the pair.
@@ -22,6 +28,17 @@ name = "XNYS"          # outside the span of the calendar file fafnir passes
 
 [fafnir]
 table_name = "core.daily_price"
+
+# DQ107 and DQ501 on thin series (doc/checks/DQ107.md). fafnir's universe holds
+# thousands of small ETFs that trade a few block prints a day, each one price: a
+# flat bar or a repeated close is how they trade. Below $500,000 a day (the
+# median over days with trading), or dorq's default 5,000 shares, those are
+# reported at info; a flat bar on five times the median, and on at least the
+# floors itself, stays at warn. On the shadow nights' 31 thin ETFs this leaves 7
+# of 29 flat-bar reports at warn, two of them a 2x leveraged ETF trading $1.6M a
+# day flat on 500,000 shares two days running.
+[integrity]
+flat_bar_min_median_dollar_volume = 500000
 
 # A NAV-priced fund (fafnir's own rule: asset_type 'fund', or is_fund on anything
 # that does not trade in sessions) strikes one price a day: a flat bar, on no

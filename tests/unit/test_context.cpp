@@ -747,3 +747,267 @@ TEST_CASE("--market: a crash the market explains, and DQ602") {
   // Judged net of the market, the stock's day is ordinary: not even DQ209.
   CHECK_FALSE(contains(with.out, R"("code":"DQ20)"));
 }
+
+// ---------------------------------------------------------------------------
+// fafnir's labelled shadow nights (0.10.0): split rows, dividends, cohorts.
+
+namespace {
+
+Result check_actions(const std::vector<Bar>& bars, const std::string& actions, int decimals = 2,
+                     bool show_info = false) {
+  const std::string csv = bars_csv("A", bars, true, decimals);
+  if (show_info) {
+    return check(csv, {{"a.csv", std::string{kActionsHeader} + actions}},
+                 {"--isolated", "--select", "DQ2,DQ7", "--format", "jsonl", "--actions", "a.csv",
+                  "--show-info"});
+  }
+  return check(csv, {{"a.csv", std::string{kActionsHeader} + actions}},
+               {"--isolated", "--select", "DQ2,DQ7", "--format", "jsonl", "--actions", "a.csv"});
+}
+
+}  // namespace
+
+TEST_CASE("P2: a duplicate split row is DQ702, deleted, never re-dated onto its twin") {
+  std::vector<Bar> bars = stock(400, 0.4, 0.03, 50);
+  split(bars, 200, 10.0);  // 1:10, in the bars at bar 200
+  SUBCASE("the stray row before the real one") {
+    const Result r =
+        check_actions(bars, "A," + day(199) + ",split,1,10,\nA," + day(200) + ",split,1,10,\n", 4);
+    CAPTURE(r.out);
+    CHECK(count_matching(r.out, R"("code":"DQ702")") == 1);
+    CHECK(count_matching(r.out, R"("code":"DQ701")") == 0);
+    CHECK(count_matching(r.out, R"("code":"DQ20)") == 0);
+    CHECK(contains(r.out, R"("date":")" + day(199) + R"(",)"));
+    CHECK(contains(r.out, R"("duplicate_of_ex_date":")" + day(200) + "\""));
+    CHECK(
+        contains(r.out, R"("suggested_action":{"kind":"delete_split","ratio":"1:10","ex_date":")" +
+                            day(199) + "\"}"));
+    CHECK_FALSE(contains(r.out, "redate_split"));
+  }
+  SUBCASE("the stray row after it") {
+    const Result r =
+        check_actions(bars, "A," + day(200) + ",split,1,10,\nA," + day(201) + ",split,1,10,\n", 4);
+    CAPTURE(r.out);
+    CHECK(count_matching(r.out, R"("code":"DQ702")") == 1);
+    CHECK(contains(r.out, R"("duplicate_of_ex_date":")" + day(200) + "\""));
+  }
+  SUBCASE("one row, a session early, is still misdated") {
+    const Result r = check_actions(bars, "A," + day(199) + ",split,1,10,\n", 4);
+    CAPTURE(r.out);
+    CHECK(count_matching(r.out, R"("code":"DQ701")") == 1);
+    CHECK(contains(r.out, R"("new_ex_date":")" + day(200) + "\""));
+  }
+}
+
+TEST_CASE("P2: sessions before a split stored at its post-split scale are a DQ202 era") {
+  // A real 1:50 at bar 200; the vendor served 195..199 at the post-split scale
+  // with their own volume, the level before the split.
+  std::vector<Bar> bars = stock(400, 0.09, 0.04, 51);
+  split(bars, 200, 50.0);
+  std::vector<Bar> era = bars;
+  for (std::size_t i = 195; i < 200; ++i) {
+    era[i].open *= 50.0;
+    era[i].high *= 50.0;
+    era[i].low *= 50.0;
+    era[i].close *= 50.0;
+  }
+  const std::string actions = "A," + day(200) + ",split,1,50,\n";
+  const Result r = check_actions(era, actions, 4);
+  CAPTURE(r.out);
+  CHECK(count_matching(r.out, R"("code":"DQ701")") == 0);
+  CHECK(count_matching(r.out, R"("code":"DQ202")") == 1);
+  CHECK(contains(r.out, R"("date":")" + day(195) + R"(","end_date":")" + day(199) + "\""));
+  CHECK(contains(r.out, "the sessions before the 1:50 split on file ex " + day(200)));
+  CHECK(contains(r.out, R"("kind":"rescale","first":")" + day(195) + R"(","last":")" + day(199) +
+                            R"(","factor":0.02})"));
+
+  // The same move at 195 with the volume already at the post-split level: the
+  // split took effect there, and the row on file is misdated.
+  std::vector<Bar> early = stock(400, 0.09, 0.04, 51);
+  split(early, 195, 50.0);
+  const Result misdated = check_actions(early, actions, 4);
+  CAPTURE(misdated.out);
+  CHECK(count_matching(misdated.out, R"("code":"DQ701")") == 1);
+  CHECK(count_matching(misdated.out, R"("code":"DQ202")") == 0);
+}
+
+TEST_CASE("P2: a bad print's revert neither confirms nor misdates a split") {
+  // A phantom 2:1 on file, with two bars at twice the price a few sessions
+  // before it: the revert from them is no split.
+  std::vector<Bar> bars = stock(400, 10.0, 0.015, 52);
+  for (const std::size_t i : {196U, 197U}) {
+    bars[i].open *= 2.07;
+    bars[i].high *= 2.07;
+    bars[i].low *= 2.07;
+    bars[i].close *= 2.07;
+  }
+  const Result r = check_actions(bars, "A," + day(199) + ",split,2,1,\n");
+  CAPTURE(r.out);
+  CHECK(count_matching(r.out, R"("code":"DQ201")") == 1);
+  CHECK(count_matching(r.out, R"("code":"DQ702")") == 1);
+  CHECK(count_matching(r.out, R"("code":"DQ701")") == 0);
+}
+
+TEST_CASE("--restore-actions: the actions as they stood, rows replaced or taken out") {
+  std::vector<Bar> bars = stock(400, 0.4, 0.03, 53);
+  split(bars, 200, 10.0);
+  const std::string csv = bars_csv("A", bars, true, 4);
+  const std::string actions = std::string{kActionsHeader} + "A," + day(200) + ",split,1,10,\n";
+  // An operator deleted a duplicate row: as it stood, it was on file.
+  const std::string deleted =
+      "security_id,ex_date,action_type,split_numerator,"
+      "split_denominator,dividend_amount,deleted_at_utc\n"
+      "A," +
+      day(199) + ",split,1.000000,10.000000,,2026-10-14T17:15:47\n";
+  const Result before = check(csv, {{"a.csv", actions}, {"before.csv", deleted}},
+                              {"--isolated", "--select", "DQ2,DQ7", "--format", "jsonl",
+                               "--actions", "a.csv", "--restore-actions", "before.csv"});
+  CAPTURE(before.out);
+  CHECK(count_matching(before.out, R"("code":"DQ702")") == 1);
+  const Result after =
+      check(csv, {{"a.csv", actions}},
+            {"--isolated", "--select", "DQ2,DQ7", "--format", "jsonl", "--actions", "a.csv"});
+  CHECK(after.out.empty());
+
+  // A split the repair added (to fix a DQ203) was not on file before it.
+  const std::string added =
+      std::string{"series,ex_date,type,numerator,denominator,added_by_repair\n"} + "A," + day(200) +
+      ",split,1,10,true\n";
+  const Result missing = check(csv, {{"a.csv", actions}, {"before.csv", added}},
+                               {"--isolated", "--select", "DQ2,DQ7", "--format", "jsonl",
+                                "--actions", "a.csv", "--restore-actions", "before.csv"});
+  CAPTURE(missing.out);
+  CHECK(count_matching(missing.out, R"("code":"DQ203")") == 1);
+
+  // A row the reader cannot use is DQ109, named by its file.
+  const Result bad = check(csv, {{"a.csv", actions}, {"before.csv", added + "A,x,split,1,2,\n"}},
+                           {"--isolated", "--select", "DQ109", "--format", "jsonl", "--actions",
+                            "a.csv", "--restore-actions", "before.csv"});
+  CAPTURE(bad.out);
+  CHECK(count_matching(bad.out, R"("code":"DQ109")") == 1);
+  CHECK(contains(bad.out, "before.csv"));
+}
+
+TEST_CASE("P3: a dividend ten times the usual that the close fell by is corroborated") {
+  // A fund paying 0.11 a quarter, then a 3.0 distribution its price falls by.
+  std::vector<Bar> bars = stock(400, 35.0, 0.004, 54);
+  std::string actions;
+  for (int i = 20; i < 380; i += 63) {
+    actions += "A," + day(i) + ",dividend,,,0.110000\n";
+  }
+  const double amount = distribute(bars, 390, 3.0 / bars[389].close);
+  const std::string paid = actions + "A," + day(390) + ",dividend,,," + fixed(amount, 4) + "\n";
+  const auto run_705 = [](const std::vector<Bar>& b, const std::string& a, bool info) {
+    return check(
+        bars_csv("A", b), {{"a.csv", std::string{kActionsHeader} + a}},
+        info ? std::initializer_list<const char*>{"--isolated", "--select", "DQ705", "--format",
+                                                  "jsonl", "--actions", "a.csv", "--show-info"}
+             : std::initializer_list<const char*>{"--isolated", "--select", "DQ705", "--format",
+                                                  "jsonl", "--actions", "a.csv"});
+  };
+  const Result corroborated = run_705(bars, paid, true);
+  CAPTURE(corroborated.out);
+  CHECK(count_matching(corroborated.out, R"("code":"DQ705")") == 1);
+  CHECK(contains(corroborated.out, R"("severity":"info")"));
+  CHECK(contains(corroborated.out, R"("corroborated":true)"));
+  CHECK(contains(corroborated.out, R"("kind":"special")"));
+  CHECK(run_705(bars, paid, false).out.empty());
+
+  // The same amount where the price did not fall: a slip, at warn.
+  const std::vector<Bar> held = stock(400, 35.0, 0.004, 54);
+  const Result slip = run_705(held, paid, false);
+  CAPTURE(slip.out);
+  CHECK(count_matching(slip.out, R"("severity":"warn")") == 1);
+  CHECK(contains(slip.out, R"("corroborated":false)"));
+  CHECK(contains(slip.out, R"("kind":"slip")"));
+  CHECK(contains(slip.out, "did not fall by it"));
+
+  // A tenth of the usual comes off within a day's noise either way: no close can
+  // corroborate it, so it is reported.
+  const Result small = run_705(held, actions + "A," + day(390) + ",dividend,,,0.003000\n", false);
+  CAPTURE(small.out);
+  CHECK(count_matching(small.out, R"("severity":"warn")") == 1);
+}
+
+TEST_CASE("P3: a switch to daily accruals is one report, at the first accrual") {
+  const std::vector<Bar> bars = stock(400, 9.2, 0.002, 55);
+  std::string monthly;
+  for (int i = 10; i < 390; i += 21) {
+    monthly += "A," + day(i) + ",dividend,,,0.041000\n";
+  }
+  // The first accrual alone looks like a slip, at its own date.
+  const Result first =
+      check(bars_csv("A", bars),
+            {{"a.csv",
+              std::string{kActionsHeader} + monthly + "A," + day(392) + ",dividend,,,0.001447\n"}},
+            {"--isolated", "--select", "DQ705", "--format", "fafnir", "--actions", "a.csv"});
+  CAPTURE(first.out);
+  CHECK(count_matching(first.out, R"("check_name":"dorq_dividend_implausible")") == 1);
+  CHECK(contains(first.out, R"("record_key":{"trade_date":")" + day(392) + "\"}"));
+  CHECK(contains(first.out, R"("kind":"slip")"));
+
+  // With more of them, a weekend's three-day accrual among them: one report, under
+  // the same key.
+  std::string daily = monthly;
+  for (int i = 392; i < 400; ++i) {
+    daily += "A," + day(i) + ",dividend,,," + (i == 395 ? "0.003985" : "0.001340") + "\n";
+  }
+  const Result r =
+      check(bars_csv("A", bars), {{"a.csv", std::string{kActionsHeader} + daily}},
+            {"--isolated", "--select", "DQ705", "--format", "fafnir", "--actions", "a.csv"});
+  CAPTURE(r.out);
+  CHECK(count_matching(r.out, R"("check_name":"dorq_dividend_implausible")") == 1);
+  CHECK(contains(r.out, R"("record_key":{"trade_date":")" + day(392) + "\"}"));
+  CHECK(contains(r.out, R"("kind":"frequency_change")"));
+  CHECK(contains(r.out, R"("severity":"warn")"));
+  CHECK(contains(r.out, "counted twice"));
+}
+
+TEST_CASE("N3: DQ601 reports a cohort only beyond the day's base rate") {
+  SUBCASE("fifty unrelated series split 2:1 on one date") {
+    std::string csv;
+    for (int s = 0; s < 50; ++s) {
+      std::vector<Bar> bars = stock(300, 60.0, 0.012, 100 + static_cast<std::uint64_t>(s));
+      split(bars, 250, 0.5);
+      csv += bars_csv("S" + std::to_string(s), bars, s == 0);
+    }
+    const Result r = check(csv, {}, {"--isolated", "--select", "DQ601", "--format", "fafnir"});
+    CAPTURE(r.out);
+    CHECK(count_matching(r.out, R"("check_name":"dorq_cohort_move")") == 1);
+    CHECK(contains(r.out, R"("record_key":{"trade_date":")" + day(250) + R"(","ratio":"2:1"})"));
+    CHECK(contains(r.out, R"("base_rate":)"));
+    CHECK(contains(r.out, R"("p_value":)"));
+    CHECK(contains(r.out, R"("members_dropped_as_market":"")"));
+  }
+  SUBCASE("as many moves near the ratio as on the days around it are chance") {
+    // Forty names, three of which fall about a third on each of twenty days, and
+    // four on one of them: the band is busy every day, so four is no cohort.
+    std::vector<std::vector<Bar>> all;
+    all.reserve(40);
+    for (int s = 0; s < 40; ++s) {
+      all.push_back(stock(300, 30.0, 0.01, 300 + static_cast<std::uint64_t>(s)));
+    }
+    for (int d = 240; d < 260; ++d) {
+      for (int j = 0; j < (d == 250 ? 4 : 3); ++j) {
+        split(all[static_cast<std::size_t>((d * 3 + j) % 40)], static_cast<std::size_t>(d), 0.65,
+              false);
+      }
+    }
+    std::string csv;
+    for (std::size_t s = 0; s < all.size(); ++s) {
+      csv += bars_csv("B" + std::to_string(s), all[s], s == 0);
+    }
+    const Result r = check(csv, {}, {"--isolated", "--select", "DQ601", "--format", "jsonl"});
+    CAPTURE(r.out);
+    CHECK(count_matching(r.out, R"("code":"DQ601")") == 0);
+    // Only the base rate holds them back: with any tail allowed, the days' trios
+    // are cohorts, each with about one or two such moves a day around it.
+    const Result any = check(csv, {{"dorq.toml", "[coverage]\ncohort_move_max_tail = 1\n"}},
+                             {"--select", "DQ601", "--format", "jsonl"});
+    CAPTURE(any.out);
+    CHECK(count_matching(any.out, R"("code":"DQ601")") >= 3);
+    CHECK(count_matching(any.out, R"("base_rate":0)") +
+              count_matching(any.out, R"("base_rate":1)") >=
+          3);
+  }
+}

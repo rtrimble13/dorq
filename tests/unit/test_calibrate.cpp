@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -403,4 +404,66 @@ TEST_CASE("dorq check --restore: checks the series as it stood before repair") {
   INFO(restored.err);
   CHECK_FALSE(contains(plain.out, day));
   CHECK(contains(restored.out, day));
+}
+
+TEST_CASE("labels: decided_at, applies_until, verified and a cohort's members") {
+  const auto labels = labels_of(
+      R"({"series":"752016","first":"2016-01-04","last":"2026-03-31","class":"data_error",)"
+      R"("expect":"DQ202","decided_at":"2026-10-13T18:50:22Z",)"
+      R"("applies_until":"2026-10-13T18:50:22+00:00","verified":true})"
+      "\n"
+      R"({"series":"*","date":"2026-10-06","class":"market_fact","codes":"DQ601",)"
+      R"("members":"3560, 5286,19195","verified":"false"})"
+      "\n");
+  REQUIRE(labels.size() == 2);
+  REQUIRE(labels[0].decided_at.has_value());
+  CHECK(*labels[0].decided_at == *labels[0].applies_until);
+  CHECK(labels[0].verified == std::optional<bool>{true});
+  CHECK(labels[1].verified == std::optional<bool>{false});
+  CHECK(labels[1].members == std::vector<std::string>{"3560", "5286", "19195"});
+  CHECK_FALSE(labels[1].decided_at.has_value());
+
+  CHECK(contains(label_error(R"({"series":"A","date":"2020-01-02","class":"data_error",)"
+                             R"("applies_until":"yesterday"})"),
+                 "applies_until \"yesterday\" is not an ISO 8601 timestamp"));
+  CHECK(contains(label_error(R"({"series":"A","date":"2020-01-02","class":"data_error",)"
+                             R"("verified":"maybe"})"),
+                 "verified \"maybe\" is not true or false"));
+}
+
+TEST_CASE("parse_timestamp: ISO 8601 dates and times, in seconds since 1970 UTC") {
+  CHECK(dorq::parse_timestamp("1970-01-01") == std::optional<std::int64_t>{0});
+  CHECK(dorq::parse_timestamp("1970-01-02T00:00:01Z") == std::optional<std::int64_t>{86401});
+  CHECK(dorq::parse_timestamp("2026-10-14T17:15:47") ==
+        dorq::parse_timestamp("2026-10-14 19:15:47.123+02:00"));
+  CHECK(dorq::parse_timestamp("2026-10-14T17:15") == dorq::parse_timestamp("2026-10-14T17:15:00Z"));
+  CHECK(*dorq::parse_timestamp("2026-10-14T00:00-05:00") ==
+        *dorq::parse_timestamp("2026-10-14T05:00:00Z"));
+  for (const char* bad : {"", "2026-10-14T", "2026-10-14T25:00", "2026-10-14T10:00Z+", "10/14/2026",
+                          "2026-10-14T10:00:00.Z"}) {
+    CAPTURE(bad);
+    CHECK_FALSE(dorq::parse_timestamp(bad).has_value());
+  }
+}
+
+TEST_CASE("dorq calibrate takes --restore-actions, as check does") {
+  const TempDir dir;
+  const Universe u = universe();
+  const auto path = [&dir](const char* name) { return (dir.path() / name).string(); };
+  const std::string bars = path("bars.csv");
+  const std::string labels = path("labels.jsonl");
+  const std::string actions = path("actions.csv");
+  const std::string before = path("before-actions.csv");
+  write_file(bars, u.bars);
+  write_file(labels, u.labels);
+  write_file(actions, "series,ex_date,type,amount\nZ,2020-01-02,dividend,0.1\n");
+  write_file(before,
+             "series,ex_date,type,amount,added_by_repair\nZ,2020-01-02,dividend,0.1,true\n");
+  const Result fit = run_in(dir.path(), {"calibrate", bars.c_str(), "--labels", labels.c_str(),
+                                         "--actions", actions.c_str(), "--restore-actions",
+                                         before.c_str(), "--isolated", "--threads", "2"});
+  INFO(fit.err);
+  CHECK(fit.status == 0);
+  CHECK(contains(fit.out, "[priors]"));
+  CHECK(contains(fit.out, "pending_distribution = "));
 }

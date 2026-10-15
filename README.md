@@ -109,6 +109,7 @@ dorq config show                             # the effective settings and their 
 dorq config show --calendar-file s.csv       # with check's options: the hash that run reports
 dorq config init                             # write a starter dorq.toml
 dorq calibrate prices.csv --labels labels.jsonl --out priors.toml   # fit priors to labels
+dorq --actions a.csv --restore-actions before.csv prices.csv   # actions as they stood before repairs
 ```
 
 Input is long format, one row per series and date. Columns are found by name,
@@ -129,7 +130,7 @@ including the `fafnir` format that maps onto `ops.data_quality_flag`.
 | [DQ104](doc/checks/DQ104.md) | missing-field | an empty or unparseable value |
 | [DQ105](doc/checks/DQ105.md) | non-session-bar | a bar on a day the calendar has no session |
 | [DQ106](doc/checks/DQ106.md) | precision-shift | computed (e.g. back-adjusted) prices among quoted ones |
-| [DQ107](doc/checks/DQ107.md) | zero-range-with-volume | a flat bar on the series' typical volume |
+| [DQ107](doc/checks/DQ107.md) | zero-range-with-volume | a flat bar on the series' typical volume (info on a thin series) |
 | [DQ108](doc/checks/DQ108.md) | out-of-bounds | a value outside the configured bounds |
 | [DQ109](doc/checks/DQ109.md) | bad-context-row | a row of an `--actions` or `--meta` file that cannot be used: skipped, not fatal |
 | [DQ201](doc/checks/DQ201.md) | bad-print | a wrong bar, or block of up to five, that the series reverts from |
@@ -138,7 +139,7 @@ including the `fafnir` format that maps onto `ops.data_quality_flag`.
 | [DQ204](doc/checks/DQ204.md) | ohlc-close-mismatch | a wrong close in a bar whose open, high and low held the level |
 | [DQ205](doc/checks/DQ205.md) | history-segment | after a long gap, another security's history continuing |
 | [DQ206](doc/checks/DQ206.md) | date-shift | a history dated a day early or late |
-| [DQ209](doc/checks/DQ209.md) | large-move | info: a move that is probably real |
+| [DQ209](doc/checks/DQ209.md) | large-move | info: a move that is probably real, or a NAV fund's pending distribution |
 | [DQ301](doc/checks/DQ301.md) | missing-run | sessions with no bar that look like a feed outage, given how the series trades |
 | [DQ302](doc/checks/DQ302.md) | sparse-series | info: a series that trades on few of its sessions |
 | [DQ303](doc/checks/DQ303.md) | cohort-gap | many series missing the same session: a failed load |
@@ -149,13 +150,13 @@ including the `fafnir` format that maps onto `ops.data_quality_flag`.
 | [DQ403](doc/checks/DQ403.md) | move-on-zero-volume | a price change on a bar with no volume, where the series rarely has one |
 | [DQ501](doc/checks/DQ501.md) | repeated-price | the same close on traded bars running: a stale feed |
 | [DQ502](doc/checks/DQ502.md) | carry-bar | info: untraded bars that carry the last close |
-| [DQ601](doc/checks/DQ601.md) | cohort-move | several series moving by the same split ratio on the same date |
+| [DQ601](doc/checks/DQ601.md) | cohort-move | several series moving by the same split ratio on the same date, beyond the day's base rate |
 | [DQ602](doc/checks/DQ602.md) | market-day | info: a day the market reference moved far beyond its range (`--market`) |
 | [DQ701](doc/checks/DQ701.md) | split-misdated | a split on file the bars show a few sessions away (`--actions`) |
-| [DQ702](doc/checks/DQ702.md) | split-without-jump | a split on file the bars do not show: not real, or already applied |
+| [DQ702](doc/checks/DQ702.md) | split-without-jump | a split on file the bars do not show: not real, already applied, or a duplicate row |
 | [DQ703](doc/checks/DQ703.md) | split-ratio-mismatch | a split on file at the wrong ratio (often inverted) |
 | [DQ704](doc/checks/DQ704.md) | split-double-applied | a split on file the bars apply twice |
-| [DQ705](doc/checks/DQ705.md) | dividend-implausible | a dividend at or above the price, or ten times off the others |
+| [DQ705](doc/checks/DQ705.md) | dividend-implausible | a dividend at or above the price, ten times off the others and not borne out by the price, or a switch to daily accruals |
 
 ### Exit status
 
@@ -187,7 +188,7 @@ archives, plus a `SHA256SUMS` file:
 | `dorq-<version>-macos-arm64.tar.gz` | macOS on Apple silicon |
 
 ```bash
-version=0.9.0
+version=0.10.0
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/dorq-${version}-linux-x86_64.tar.gz"
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
@@ -212,7 +213,7 @@ Clang 18+).
 ```bash
 sudo apt-get install -y build-essential cmake ninja-build git
 git clone https://github.com/rtrimble13/dorq.git && cd dorq
-git checkout v0.9.0                        # or stay on main for the latest
+git checkout v0.10.0                       # or stay on main for the latest
 cmake --workflow --preset release          # configure, build, run the tests
 sudo cmake --install build/release --prefix /opt/dorq
 /opt/dorq/bin/dorq version                 # names the commit it was built from
@@ -258,7 +259,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 - [Output formats](doc/output.md): text, json, jsonl, csv, fafnir
 - [Context inputs](doc/context.md): corporate actions, series metadata, a market reference
 - [Labels](doc/labels.md) and [calibration](doc/calibration.md): fitting the
-  price model to labelled history, and `--restore`
+  price model to labelled history, and `--restore` and `--restore-actions`
 - [Performance](doc/performance.md): throughput, memory, threads and the runtime targets
 - [Checks](doc/checks/): one page per check, also printed by `dorq explain`;
   [DQ201](doc/checks/DQ201.md) describes the price model

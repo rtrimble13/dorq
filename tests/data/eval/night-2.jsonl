@@ -1,0 +1,2 @@
+{"series":"100","label":null,"source":"<stdin>","date":"2026-10-07","line":12,"code":"DQ702","check":"split-without-jump","severity":"error","p_error":0.99,"message":"a duplicate","detail":{},"record_key":{"trade_date":"2026-10-07"}}
+{"series":"200","label":null,"source":"<stdin>","date":"2026-10-05","line":10,"code":"DQ202","check":"scale-shift","severity":"error","p_error":0.99,"message":"a squeeze","detail":{},"record_key":{"trade_date":"2026-10-05"}}

@@ -929,7 +929,8 @@ at precision 1.0. The real test is M7's fit on fafnir's labels (DR-0704).
 | DR-0704 | dorq | Calibrate on the fafnir labels and ship `priors/fafnir.toml` | S | 🔄 `priors/fafnir.toml` awaiting merge; the fit needs the labelling pass |
 | DR-0705 | fafnir | Recheck by rerun-and-negate for the `dorq_*` checks; tests | M | 🔄 awaiting merge |
 | DR-0706 | fafnir | Skill and playbook updates, tiers, `NEVER_AUTO_RESOLVE`, the test pinning the two | M | 🔄 awaiting merge |
-| DR-0707 | fafnir | Shadow period (≥ 20 sessions), a go/no-go against §8, cutover, retiring the SQL checks | M | 🔄 first shadow night run (as of 2026-10-09); DQ107 on one-lot series fixed in v0.8.1; dividends and splits on file, pinned series in v0.9.0 |
+| DR-0707 | fafnir | Shadow period (≥ 20 sessions), a go/no-go against §8, cutover, retiring the SQL checks | M | 🔄 first shadow night run (as of 2026-10-09); DQ107 on one-lot series fixed in v0.8.1; dividends and splits on file, pinned series in v0.9.0; three labelled nights judged (0.378 strict precision at warn), fixed in v0.10.0 (DR-0708); the 20-session clock restarts with it |
+| DR-0708 | dorq | Precision fixes from the labelled shadow nights: real moves, split rows, dividends, thin series, cohorts' base rate, `--since` and keys, `--restore-actions`, label fields and dorq-eval (v0.10.0) | L | 🔄 awaiting merge |
 
 **As built** (fafnir's doc/dorq.md and ADR 0013 are the references; dorq v0.7.0):
 
@@ -1057,6 +1058,75 @@ at precision 1.0. The real test is M7's fit on fafnir's labels (DR-0704).
   unchanged. The new hypothesis name, detail fields and config key make this a
   minor release. On dorq-synth, no price check moves; DQ107 loses one false
   positive (a flat bar on 968 shares).
+- **Precision from the first labelled shadow nights** (v0.10.0, DR-0708; the
+  host's brief of 2026-10-15). fafnir judged three shadow nights (2026-10-12..14,
+  dorq 0.8.1 and 0.9.0) against 77 hand-verified labels: of 238 distinct
+  conditions, 45 were judged, at 0.378 strict precision and 0.667 right-defect
+  precision at warn, against a cutover bar of 0.85. The false reports came from a
+  few patterns:
+  - *Real moves as scale shifts or splits* (P1). MI's ×7.83 squeeze (range
+    2.02–10.42, 167M shares on a median of ~27k), SXTC, BIYA, VCIG and two WORX
+    spikes were DQ202/DQ203/DQ201 errors, mostly on "volume ×178 after": the
+    scale-error hypothesis read the post-squeeze volume as its own level. The model
+    now weighs a *violent session* (`bar_range`: a range `violent_range`, 5, times
+    the usual), lets a real move draw a surge of volume that stays up, judges a
+    scale error's day at the volume before, and drops both volume terms when the
+    base is mostly zero or under a round lot (WORX 2017's "×51300"). The split's
+    signature (a clean ratio with inverse volume) still beats a wild first
+    session. The brief proposed dropping volume under one `trade_size`; on
+    dorq-synth's thin names that discarded a new history's volume and lost a DQ205
+    per universe, so the floor is a tenth of it.
+  - *DQ203 without volume* (P5). OUSL's first print at a fifth of another fund's
+    prices, on its usual volume, was "≈ a 5:1 split". DQ203 now needs share
+    volume to shift inversely by about the ratio (the level after within twice
+    the usual drift; with only the day, more than half way), or no volume to
+    judge by (SEQUX's real 4:1 at NAV stays DQ203); otherwise the next
+    explanation takes the move (DQ201 provisional here, DQ202 for a held one).
+    On dorq-synth this also removes DQ203's false positives.
+  - *Funds' distributions* (P4). With `--meta` `nav_priced`, a fall of 2–35% that
+    holds with no dividend on file is `pending_distribution` (DQ209, doubled
+    September to December, `check_distribution`): HEOMX's 3.69 the night before
+    it reached the file.
+  - *Split rows* (P2). GLE's and NXGL's duplicate rows were "misdated" onto their
+    twins' dates; they are DQ702 with `delete_split`, and no misdated search
+    lands on a same-ratio row's date. A bad print's edges no longer confirm or
+    misdate a split (SKYD's phantom 2:1 is DQ702). ZBAO's real 1:50 with the five
+    sessions before it served at the post-split scale is a DQ202 era with the
+    split confirmed, told from a misdated split by the era's volume (only where
+    the split moves the volume level by a factor of e or more: a 2:1's ×2 is
+    within the noise, and dorq-synth's misdated 2:1s stayed DQ701).
+  - *DQ705* (P3). The Fidelity funds' ~3.0 distributions, which the ex-date NAV
+    fell by, are corroborated (info). The brief's tolerance alone would also have
+    "corroborated" every tiny slip, so the close must also be farther from the
+    close less the usual amount. WCPNX's and WSHNX's switch to daily accruals is
+    one `frequency_change` report at the first accrual, keyed so that the first
+    night's slip report is the same condition; accruals are found by spacing,
+    since a Friday's covers three days.
+  - *Noise* (N1–N3). DQ107 and DQ501 report a thin series (median under
+    `flat_bar_min_median_volume`, 5,000 shares, or a dollar floor fafnir sets at
+    $500,000) at info, but a flat bar on five times the median stays at warn;
+    DQ501 takes DQ107's pinned-price rule. DQ601 counts an unrelated member only
+    when its move is clean and not a real move by its own evidence, and reports
+    the cohort only beyond the day's base rate in the ratio's band (Poisson tail
+    ≤ 1e-4); a family cohort is as before.
+  - *Keys and windows* (K1, K2). `--since` keeps a violation still active in the
+    window (by `end_date`), so XJUL/XAPR/XFEB/FPAS and VAI's DQ304 stay reported
+    under their first missing session; DQ601's `record_key` adds its ratio.
+  - *Tooling* (T1–T3). `--restore-actions` (check and calibrate) puts repaired
+    actions back as they stood; calibrate already took the context options.
+    Labels take `decided_at`, `applies_until`, `verified` and a cohort's
+    `members`; calibrate reads an `expect` of several codes. dorq-eval reads
+    jsonl and fafnir results, judges several runs as distinct conditions, and
+    prints strict and fault precision with coverage, on all and on verified
+    labels; on the three nights it prints exactly what fafnir's `judge.py` does.
+
+  On the brief's repro kit (FMP-derived, not committed), every expectation in its
+  acceptance table holds but one: E_flat_bars leaves 7 flat-bar reports at warn
+  against the brief's ≤ 6, two of them a 2× leveraged ETF trading $1.6M a day
+  flat on 500,000 shares two days running, which look like real lost ranges. The
+  new hypothesis, check behaviour, detail fields, config keys and record key make
+  this a minor release. On dorq-synth seeds 1–6 no recall moves; DQ107 loses one
+  or two false positives on four seeds and DQ203 one on two.
 
 ### M8: Stretch
 - DQ801 cross-vendor disagreement (FMP vs Sharadar) for the parallel run.

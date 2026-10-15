@@ -1,5 +1,6 @@
 #include "checks/stale.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -7,10 +8,12 @@
 #include <vector>
 
 #include "checks/coverage.hpp"
+#include "checks/integrity.hpp"
 #include "checks/price.hpp"
 #include "core/text.hpp"
 #include "dorq/number.hpp"
 #include "price/model.hpp"
+#include "stats/robust.hpp"
 
 namespace dorq {
 namespace {
@@ -43,12 +46,41 @@ void RepeatedPrice::run(const SeriesContext& context, std::vector<Violation>& ou
   }
   const PriceAnalysis& analysis = *context.price_analysis;
   const Series& s = context.series;
+  if (analysis.stale_runs.empty()) {
+    return;
+  }
+  const IntegritySettings& integrity = context.integrity;
+  // How thinly the series trades, as DQ107 judges it: the medians over days with
+  // trading.
+  std::vector<double> traded;
+  std::vector<double> dollars;
+  for (std::size_t i = 0; i < s.size(); ++i) {
+    if (std::isfinite(s.volume[i]) && s.volume[i] > 0.0) {
+      traded.push_back(s.volume[i]);
+      if (std::isfinite(s.close[i]) && s.close[i] > 0.0) {
+        dollars.push_back(s.volume[i] * s.close[i]);
+      }
+    }
+  }
+  const ThinSeries thin =
+      traded.empty() ? ThinSeries{}
+                     : thin_series(stats::median(traded),
+                                   dollars.empty() ? 0.0 : stats::median(dollars), integrity);
   for (const StaleRun& run : analysis.stale_runs) {
     const auto severity = context.thresholds.for_probability(run.p_error);
     if (!severity) {
       continue;
     }
-    const Severity level = *severity;
+    // A pinned price (a SPAC at its trust value), as DQ107 has it: a step of the
+    // grid is a small share of the price, and the closes nearby barely move. The
+    // close repeats because the price is not moving.
+    const double repeated = s.close[analysis.features.row[run.first]];
+    if (run.grid < integrity.pinned_step_share * repeated &&
+        run.close_steps <= integrity.flat_bar_steps) {
+      continue;
+    }
+    // On a thin series, a day is one or two prints: info.
+    const Severity level = thin.thin ? Severity::kInfo : *severity;
     const std::size_t first = analysis.features.row[run.first];
     const std::size_t last = analysis.features.row[run.last];
     const std::size_t before = analysis.features.row[run.first - 1];
@@ -78,10 +110,19 @@ void RepeatedPrice::run(const SeriesContext& context, std::vector<Violation>& ou
       v.message += " (" + std::to_string(run.full_bars) + " whole bar" +
                    (run.full_bars == 1 ? "" : "s") + " repeated)";
     }
+    if (thin.thin) {
+      v.message +=
+          "; a thin series (" + thin.why + "), where a repeated close is how trading looks";
+    }
     v.detail = {{"close", s.close[first]},
                 {"bars", bars},
                 {"whole_bars_repeated", std::int64_t{run.full_bars}},
-                {"log_probability_healthy", run.log_q}};
+                {"log_probability_healthy", run.log_q},
+                {"grid_step", run.grid},
+                {"thin_series", thin.thin}};
+    if (std::isfinite(run.close_steps)) {
+      v.detail.push_back({"close_steps", run.close_steps});
+    }
     SuggestedAction action;
     action.kind = "delete_bars";
     action.fields = {{"first", s.date[first].to_string()},

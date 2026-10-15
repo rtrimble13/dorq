@@ -37,9 +37,9 @@ constexpr double kPriorSpread = 1.5;
 constexpr int kSlackDays = 3;
 
 Weights weights_of(const PricePriors& p) {
-  return {p.market_move,     p.tick_move,        p.bad_print,
-          p.bad_close,       p.unreported_split, p.scale_error,
-          p.history_segment, p.explained_split,  p.explained_dividend};
+  return {p.market_move,        p.tick_move,           p.bad_print,       p.bad_close,
+          p.unreported_split,   p.scale_error,         p.history_segment, p.explained_split,
+          p.explained_dividend, p.pending_distribution};
 }
 
 PricePriors priors_of(const Weights& w, const PricePriors& base) {
@@ -53,6 +53,7 @@ PricePriors priors_of(const Weights& w, const PricePriors& base) {
   p.history_segment = w.at(idx(H::kHistorySegment));
   p.explained_split = w.at(idx(H::kExplainedSplit));
   p.explained_dividend = w.at(idx(H::kExplainedDividend));
+  p.pending_distribution = w.at(idx(H::kPendingDistribution));
   return p;
 }
 
@@ -69,36 +70,55 @@ std::optional<std::array<bool, kCount>> allowed_for(const Label& label) {
     set(H::kTickMove);
     set(H::kExplainedSplit);
     set(H::kExplainedDividend);
+    set(H::kPendingDistribution);
     return a;
   }
-  const std::string& code = label.expect;
-  if (code.empty()) {
-    if (label.label_class == LabelClass::kContextGap) {
-      set(H::kUnreportedSplit);
+  // A context gap is context the data did not record: a split, or a dividend.
+  // Once it is on file (fafnir loads it as the repair), the same move is
+  // explained by it.
+  const bool gap = label.label_class == LabelClass::kContextGap;
+  const auto set_gap = [&] {
+    if (gap) {
       set(H::kExplainedSplit);
+      set(H::kExplainedDividend);
+      set(H::kPendingDistribution);
+    }
+  };
+  if (label.expect.empty()) {
+    if (gap) {
+      set(H::kUnreportedSplit);
+      set_gap();
     } else {
       for (std::size_t h = 0; h < kCount; ++h) {
         a.at(h) = is_error(static_cast<H>(h));
       }
     }
-  } else if (code == "DQ201") {
-    set(H::kBadPrint);
-  } else if (code == "DQ202") {
-    set(H::kScaleError);
-  } else if (code == "DQ203" || code == "DQ601") {
-    set(H::kUnreportedSplit);
-    // A context gap is a split the data did not record. Once the split is on file
-    // (fafnir loads it as the repair), the same move is an explained split.
-    if (label.label_class == LabelClass::kContextGap) {
-      set(H::kExplainedSplit);
+    return a;
+  }
+  // Each code of "DQ202|DQ205" allows its own; a label naming none the price model
+  // judges says nothing to it.
+  bool any = false;
+  std::stringstream codes(label.expect);
+  for (std::string code; std::getline(codes, code, '|');) {
+    if (code == "DQ201") {
+      set(H::kBadPrint);
+    } else if (code == "DQ202") {
+      set(H::kScaleError);
+    } else if (code == "DQ203" || code == "DQ601") {
+      set(H::kUnreportedSplit);
+    } else if (code == "DQ204") {
+      set(H::kBadClose);
+    } else if (code == "DQ205") {
+      set(H::kHistorySegment);
+    } else {
+      continue;
     }
-  } else if (code == "DQ204") {
-    set(H::kBadClose);
-  } else if (code == "DQ205") {
-    set(H::kHistorySegment);
-  } else {
+    any = true;
+  }
+  if (!any) {
     return std::nullopt;
   }
+  set_gap();
   return a;
 }
 
@@ -116,15 +136,19 @@ std::uint64_t fnv(std::string_view text) {
 struct SeriesSettings {
   PriceSettings price;
   std::optional<Bounds> bounds;
+  double trade_size = 0.0;
 };
 
 SeriesSettings settings_for(const Config& config, const Series& series, const SeriesMeta* meta) {
-  SeriesSettings out{config.price, config.integrity.bounds};
+  SeriesSettings out{config.price, config.integrity.bounds, config.coverage.trade_size};
   for (const Profile& profile : config.profiles) {
     if (profile.matches(series, meta)) {
       profile.price.apply_to(out.price);
       if (profile.integrity.bounds) {
         out.bounds = profile.integrity.bounds;
+      }
+      if (profile.coverage.trade_size) {
+        out.trade_size = *profile.coverage.trade_size;
       }
     }
   }
@@ -217,7 +241,9 @@ class Collector {
                         .have_actions = context_.have_actions,
                         .actions = context_.actions_for(s),
                         .tick_size = meta != nullptr ? meta->tick_size : std::nullopt,
-                        .market = context_.market ? &context_.market.value() : nullptr});
+                        .market = context_.market ? &context_.market.value() : nullptr,
+                        .nav_priced = meta != nullptr && meta->nav_priced.value_or(false),
+                        .trade_size = settings.trade_size});
     const bool test =
         options_.holdout > 0.0 && static_cast<double>(fnv(s.id) % 1000) < options_.holdout * 1000.0;
     for (const PriceFinding& finding : analysis.findings) {
@@ -257,6 +283,7 @@ class Collector {
         o.allowed.at(idx(H::kTickMove)) = true;
         o.allowed.at(idx(H::kExplainedSplit)) = true;
         o.allowed.at(idx(H::kExplainedDividend)) = true;
+        o.allowed.at(idx(H::kPendingDistribution)) = true;
       } else {
         continue;
       }
@@ -401,11 +428,13 @@ Fit evaluate(const std::vector<Observation>& obs, const Weights& w, const Weight
              const Hyper& hyper, const PricePriors& base) {
   Fit fit;
   // Priors as weights summing to 1 over the seven hypotheses every bar may have;
-  // explained_split and explained_dividend on the same scale.
+  // explained_split, explained_dividend and pending_distribution, which need
+  // context, on the same scale.
   Weights normalized = w;
   double total = 0.0;
   for (std::size_t h = 0; h < kCount; ++h) {
-    if (h != idx(H::kExplainedSplit) && h != idx(H::kExplainedDividend) && w.at(h) > kNegInf) {
+    if (h != idx(H::kExplainedSplit) && h != idx(H::kExplainedDividend) &&
+        h != idx(H::kPendingDistribution) && w.at(h) > kNegInf) {
       total += std::exp(w.at(h));
     }
   }
@@ -639,6 +668,7 @@ std::string priors_toml(const CalibrationReport& r) {
   out += "history_segment = " + weight(p.history_segment) + "\n";
   out += "explained_split = " + weight(p.explained_split) + "\n";
   out += "explained_dividend = " + weight(p.explained_dividend) + "\n";
+  out += "pending_distribution = " + weight(p.pending_distribution) + "\n";
   out += "\n[calibration]\nversion = \"" + r.version + "\"\np_error_map = [";
   for (std::size_t i = 0; i < r.p_error_map.size(); ++i) {
     out += (i == 0 ? "\n  [" : ",\n  [") + fixed(r.p_error_map[i].first, 6) + ", " +

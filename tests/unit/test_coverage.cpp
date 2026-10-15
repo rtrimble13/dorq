@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <filesystem>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -226,4 +227,36 @@ TEST_CASE("output does not depend on where the calendar file lives") {
   CHECK(contains(a.out, R"("source":"XNYS, with sessions.csv for 2023-01-03..2023-12-29")"));
   CHECK_FALSE(contains(a.out, dir.path().string()));
   CHECK(a.out == b.out);
+}
+
+TEST_CASE("K1: --since keeps a stale feed or a gap still active in the window") {
+  // Every liquid name's last bar is 2023-12-29; as of 2024-01-05 they are stale
+  // from 2024-01-02. A --since after that date keeps them, under the same key.
+  const Result kept = run({"--isolated", "--select", "DQ304", "--as-of", "2024-01-05", "--since",
+                           "2024-01-04", "--format", "fafnir"},
+                          universe());
+  CAPTURE(kept.out);
+  CHECK(count_matching(kept.out, R"("check_name":"dorq_stale_feed")") == 30);
+  CHECK(count_matching(kept.out, R"("record_key":{"trade_date":"2024-01-02"})") == 30);
+  CHECK(contains(kept.out, R"("first_missing":"2024-01-02","active_through":"2024-01-05")"));
+  // A gap counts by its last session: T0's hole, kept by a --since on its last
+  // missing session, dropped by one the day after.
+  const Result all = run({"--isolated", "--select", "DQ301", "--format", "csv"}, universe());
+  const std::size_t row = all.out.find("\nT0,");
+  REQUIRE(row != std::string::npos);
+  // series,label,source,date,end_date,...
+  std::istringstream fields(all.out.substr(row + 1));
+  std::string field;
+  std::vector<std::string> cells;
+  for (int i = 0; i < 5 && std::getline(fields, field, ','); ++i) {
+    cells.push_back(field);
+  }
+  REQUIRE(cells.size() == 5);
+  const std::string last = cells[4];
+  const std::string after = dorq::Date::from_days(dorq::parse_date(last)->days() + 1).to_string();
+  const Result gap = run({"--isolated", "--select", "DQ301", "--since", last.c_str()}, universe());
+  CHECK(count_matching(gap.out, "T0  " + cells[3] + ".." + last + "  DQ301") == 1);
+  const Result gone =
+      run({"--isolated", "--select", "DQ301", "--since", after.c_str()}, universe());
+  CHECK(count_matching(gone.out, "T0 ") == 0);
 }

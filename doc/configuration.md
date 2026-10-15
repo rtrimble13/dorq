@@ -56,15 +56,18 @@ series = "security_id"
 label = "symbol"
 value = "DGS10"        # a point series' value ("close" means the same)
 
-[integrity]            # see doc/checks/DQ102.md, DQ106.md, DQ107.md and DQ108.md
+[integrity]            # see doc/checks/DQ102.md, DQ106.md, DQ107.md, DQ108.md and DQ501.md
 positive_point_series = false
 precision_high_decimals = 5
 precision_high_sig_figs = 5
 precision_min_segment = 20
 precision_min_contrast = 0.8
 flat_bar_steps = 3    # DQ107: flat bars are ordinary where bars span this many grid steps
-pinned_step_share = 0.002  # DQ107: with no ranged bar nearby, a step under this share of the
-                           # price, with closes moving flat_bar_steps or fewer, is a pinned price
+pinned_step_share = 0.002  # DQ107, DQ501: with no ranged bar nearby, a step under this share of
+                           # the price, with closes moving flat_bar_steps or fewer, is pinned
+flat_bar_min_median_volume = 5000   # DQ107, DQ501: a series trading a median below this many
+flat_bar_min_median_dollar_volume = 0  # shares (or dollars; 0: no floor) a day is thin: info,
+flat_bar_volume_multiple = 5        # but a flat bar on this many times the median stays warn
 # bounds = [-5, 25]   # DQ108: the range values must lie in; none by default
 
 [coverage]            # DQ3xx; see doc/checks/DQ301.md for the model
@@ -81,12 +84,14 @@ report = "run"        # DQ301: or "session"           (global only)
 cohort_min_series = 3 # DQ303                          (global only)
 cohort_max_tail = 1e-06                              # (global only)
 confident_density = 0.95                             # (global only)
+cohort_move_max_tail = 0.0001  # DQ601: the Poisson tail a cohort must beat (global only)
 
 [price]               # DQ2xx; see doc/checks/DQ201.md for the model
 candidate_tail_prob = 0.001  # score a bar whose return is this improbable,
 floor_move = 0.5      # and every move of 50% or more either way
 revert_max_bars = 5   # the longest bad print
 volume_window = 40    # bars either side for volume levels
+violent_range = 5     # a bar's log range this many times the usual: a violent session
 ratio_tolerance = 0.01
 split_ratios = ["2:1", "3:1", "3:2", "4:1", "5:1", "5:4", "8:1", "10:1", "15:1", "20:1",
                 "1:2", "1:3", "1:4", "1:5", "1:8", "1:10", "1:15", "1:20", "1:25", "1:30",
@@ -100,6 +105,8 @@ jump_scale = 6
 min_price = 1e-05     # prices outside [min_price, max_price] are implausible
 max_price = 1000000
 transform = "auto"    # point series: "log", "diff" (rates, spreads) or "auto" (log if all > 0)
+dividend_tolerance = 0.015  # DQ705: an ex-date close within this share of the close before,
+dividend_amount_tolerance = 0.25  # or of the amount, of (close before - amount) corroborates
 
 [priors]              # each explanation's prior weight for a scored bar
 market_move = 0.9
@@ -111,6 +118,7 @@ tick_move = 0.01
 history_segment = 0.05
 explained_split = 0.9 # with --actions: a split on file between the bars explains the move
 explained_dividend = 0.9  # with --actions: a cash dividend on file between the bars came off
+pending_distribution = 0.05  # with --meta: a NAV fund's drop with no dividend on file (x2 Sep-Dec)
 split_on_file_error = 0.06  # with --actions: a split on file being wrong (DQ701-DQ704)
 stale_run = 3e-05     # DQ501: a run of repeated closes being a stale feed, per bar
 
@@ -200,8 +208,9 @@ The options with the same meaning as a key above are `--select`, `--extend-selec
 
 `--actions F`, `--meta F` and `--market F` name the context inputs, which have no
 config keys; doc/context.md describes them. `--restore F` checks the series as
-they stood before repairs, and `--labels F` supplies the labels whose `remove`
-dates go with it (doc/labels.md). `--show-info` is `--min-severity info`. `--show-evidence` adds each violation's
+they stood before repairs, `--restore-actions F` the actions as they stood, and
+`--labels F` supplies the labels whose `remove` dates go with them
+(doc/labels.md). `--show-info` is `--min-severity info`. `--show-evidence` adds each violation's
 suggested action, hypotheses and evidence to text output (doc/output.md). `--exit-zero` always exits 0. `--as-of
 DATE` sets the date DQ304 judges staleness against; by default it is the latest
 session with a bar anywhere in the input.
@@ -225,7 +234,7 @@ It does not cover:
 - the keys that change only presentation, speed or the exit status: `format`,
   `threads`, `fail_on` and `input_format`, from the file or the command line;
 - the inputs of a run: the data, `--actions`, `--meta`, `--market`, `--restore`,
-  `--labels`, `--as-of` and `--since`. Other inputs give other reports under the
+  `--restore-actions`, `--labels`, `--as-of` and `--since`. Other inputs give other reports under the
   same hash. fafnir passes a new `--as-of` every night, and its hash stays the same
   for as long as its settings do;
 - the dorq version, which every record carries beside the hash.

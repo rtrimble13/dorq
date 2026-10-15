@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -31,7 +32,20 @@ struct PeerMove {
   std::array<double, kPriceHypotheses> posterior{};
   std::array<bool, kPriceHypotheses> considered{};
   bool provisional = false;
-  Violation split;  // DQ203, without its "; P(error)" ending
+  // How far from the ratio a member's move may be: the model's slack on a clean
+  // ratio and twice the series' ordinary move, at most 10%.
+  double tolerance = 0.1;
+  bool market_like = false;  // a violent session or a volume surge: a real move
+  Violation split;           // DQ203, without its "; P(error)" ending
+};
+
+// A one-session move near a clean split ratio, for DQ601's base rate: within the
+// series' tolerance of the ratio (in its band), or within three times it (beside
+// the band).
+struct BandMove {
+  Date date;
+  std::string ratio;  // "2:1"
+  bool in_band = false;
 };
 
 // What one series contributes to the cross-sectional checks.
@@ -47,6 +61,10 @@ struct CrossSummary {
   std::vector<Date> confident_missing;
   bool cohort_move = false;  // DQ601 is enabled for this series
   std::vector<PeerMove> moves;
+  // DQ601's base rate: the sessions the series moved over one session, and those
+  // moves near a split ratio.
+  std::vector<Date> moved;
+  std::vector<BandMove> band_moves;
 };
 
 // DQ303 cohort-gap and DQ304 stale-feed. Fed every series' summary in input
@@ -85,6 +103,9 @@ class CrossSection {
                         std::vector<SeriesResult>& results) const;
   [[nodiscard]] Violation cohort_violation(Date date, const std::string& ratio,
                                            const std::vector<std::size_t>& members) const;
+  // The moves within the band of `ratio` that chance puts on `date`: the mean count
+  // on the input's nearby dates, or the count beside the band that day, the larger.
+  [[nodiscard]] double base_rate(Date date, const std::string& ratio) const;
 
   std::vector<CrossSummary> tails_;  // per series, in order (ranges dropped)
   // DQ601: every series' moves, with the series' index.
@@ -94,6 +115,10 @@ class CrossSection {
   std::vector<std::int32_t> expected_;
   std::vector<std::int32_t> missing_;
   std::vector<double> healthy_misses_;
+  // DQ601: per day, the series that moved over one session; per ratio and day, the
+  // moves in its band and beside it.
+  std::vector<std::int32_t> moved_;
+  std::map<std::pair<std::string, std::int32_t>, std::array<std::int32_t, 2>> bands_;
 };
 
 }  // namespace dorq

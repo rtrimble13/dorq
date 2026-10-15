@@ -7,21 +7,40 @@ section 6, DR-0602). It writes a TOML file that a config file includes.
 
 ```bash
 dorq calibrate prices.csv --labels labels.jsonl --restore before.csv \
-     --actions actions.csv --meta meta.csv --market spy.csv \
-     --holdout 0.3 --out priors.toml
+     --actions actions.csv --restore-actions before-actions.csv \
+     --meta meta.csv --market spy.csv --holdout 0.3 --out priors.toml
 echo 'include = "priors.toml"' >> dorq.toml
 ```
 
-The input options are the same as for `dorq check`: the files, `--config`,
-`--isolated`, `--columns`, `--kind`, `--input-format`, `--threads`, the calendar
-options, `--actions`, `--meta` and `--market`. Profiles apply as they do for a
-check. A series' price settings and priors are the global ones with its matching
-profiles' patches applied. The output is the same for any `--threads`.
+The input options are the same as for `dorq check`, and every one that changes
+what the model sees is taken: the files, `--config`, `--isolated`, `--columns`,
+`--kind`, `--input-format`, `--threads`, `--calendar`, `--calendar-file`,
+`--calendar-exchange`, `--actions`, `--meta` and `--market` (all since 0.6.0 or
+0.7.0), and `--restore` and `--restore-actions`. Give calibrate the same
+calendar, actions and metadata the checks run with: a split or dividend on file,
+a NAV fund's metadata and the session calendar all change how a move is scored.
+Profiles apply as they do for a check. A series' price settings and priors are
+the global ones with its matching profiles' patches applied. The output is the
+same for any `--threads`.
+
+fafnir exports the labels with the bars and the actions as they stood before
+its repairs, and runs the fit with the context its nightly check passes:
+
+```bash
+fafnir dq export-labels --out labels.jsonl --restore before.csv \
+     --restore-actions before-actions.csv
+dorq calibrate bars.csv --labels labels.jsonl --config priors/fafnir.toml \
+     --calendar-file calendar.csv --calendar-exchange NASDAQ \
+     --actions actions.csv --meta meta.csv \
+     --restore before.csv --restore-actions before-actions.csv \
+     --holdout 0.3 --out fafnir-calibration.toml
+```
 
 | Option | Meaning |
 |---|---|
 | `--labels F` | Required. The labels ([labels.md](labels.md)) |
 | `--restore F` | Bars as they stood before repair ([labels.md](labels.md#series-as-they-stood-before-repair---restore)) |
+| `--restore-actions F` | Corporate actions as they stood before repair, over `--actions` ([labels.md](labels.md#actions-as-they-stood-before-repair---restore-actions)) |
 | `--out F` | Where to write the fitted settings. Without it they go to stdout and the summary goes to stderr |
 | `--name T` | The `[calibration] version`. The default is the labels file's stem |
 | `--holdout X` | Hold out this share of series (0–0.9), chosen by a hash of the series id, and report on them |
@@ -36,7 +55,9 @@ profiles' patches applied. The output is the same for any `--threads`.
    usable label becomes an observation. An observation records the move's
    log-likelihood under each hypothesis and the hypotheses the label allows.
    Labels about checks other than the price model are left out
-   ([labels.md](labels.md#what-the-price-model-learns-from-a-label)).
+   ([labels.md](labels.md#what-the-price-model-learns-from-a-label)). Every
+   label is used, whatever its `applies_until` or `verified`: the fit runs on
+   the series as they stood (`--restore`), which is what the labels describe.
 2. **Priors.** The objective is the sum over observations of
    log P(the label's hypotheses | the evidence). It is the labels' marginal
    likelihood given the priors. A Gaussian penalty keeps each log prior within
@@ -64,7 +85,7 @@ same input, labels and configuration therefore give the same file.
 ## The output
 
 ```toml
-# Written by `dorq calibrate` (dorq 0.9.0). Include it from a
+# Written by `dorq calibrate` (dorq 0.10.0). Include it from a
 # config file: include = "priors.toml". See doc/calibration.md.
 #
 # labels: 499, of which 413 about price moves and 240 matching a scored move

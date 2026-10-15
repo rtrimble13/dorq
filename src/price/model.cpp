@@ -59,6 +59,37 @@ constexpr double kAftershock = 0.25;
 // split, share volume follows the ratio more closely than that.
 constexpr double kVolumeDrift = 0.5;
 constexpr double kSplitVolumeDrift = 0.3;
+// News can draw ten to ten thousand times the usual volume (a squeeze), which then
+// decays over days: on the day, about e^4 times the usual give or take e^2.5, and
+// the median after about e^2.5 times give or take e^2. Up to this share of real
+// moves do, rising with how surprising the move is. The evidence is in the tail
+// (a surge no error explains), so the share is kept small: a real move on
+// ordinary volume loses little by it.
+constexpr double kSurgeShare = 0.15;
+constexpr double kSurgeDay = 4.0;
+constexpr double kSurgeDaySpread = 2.5;
+constexpr double kSurgeAfter = 2.5;
+constexpr double kSurgeAfterSpread = 2.0;
+// The volume level after a move, against before, that counts as a surge (DQ601's
+// market-like members): five times, and not a split's inverse shift.
+constexpr double kSurgeShift = 1.6094379124341003;  // log 5
+// A violent session (a range violent_range times the usual): P(one | hypothesis).
+// A real move sometimes trades through its range, more often the more surprising
+// it is; a value at the wrong scale is the old bar times a constant, so its range
+// is the usual one; a reverse split's first session is as often wild as a real
+// move's, so the range does not tell those two apart. Kept small, so that a real
+// move with an ordinary range loses little by it.
+constexpr double kViolentOrdinary = 0.02;
+constexpr double kViolentSurprise = 0.1;
+constexpr double kViolentScale = 0.01;
+constexpr double kViolentBadPrint = 0.05;
+constexpr double kViolentSplit = 0.1;
+constexpr double kViolentSegment = 0.05;
+// A volume base under this share of [coverage] trade_size is none: a round lot.
+constexpr double kRoundLot = 0.1;
+// A distribution not yet on file (pending_distribution): a drop of 2% to 35%.
+constexpr double kDistributionMin = 0.02;
+constexpr double kDistributionMax = 0.35;
 // A print at the bid or the ask: about 0.7 of the grid step, on the price scale.
 constexpr double kBounce = 0.7;
 // With --market, how far a series' beta on the day may be from the estimate: the
@@ -165,6 +196,20 @@ struct Candidate {
   // price more than an ordinary move does.
   std::optional<DividendOnFile> dividend;
   double net_r = 0.0;  // the return with those dividends added back
+  // The bar's log range, log(high / low), and its ratio to the median of the bars
+  // before; unset when too few of those have a range (a NAV fund, a one-print
+  // series).
+  std::optional<double> log_range;
+  std::optional<double> range_vs_typical;
+};
+
+// What the volume terms saw, for the DQ203 gate and DQ601's market-like moves.
+struct VolumeShift {
+  bool judged = false;           // enough bars before with volume
+  std::optional<double> on_day;  // log(1 + volume) - log(1 + median before)
+  std::optional<double> after;   // log(1 + median after) - log(1 + median before)
+  double noise = 0.0;            // the median's own noise in `after`
+  double day_spread = 1.0;       // the spread of one day's log volume
 };
 
 // The bars after a candidate: the next_bars term, and what describes it.
@@ -193,7 +238,9 @@ class Scorer {
         has_ohlc_(series.kind == SeriesKind::kOhlcv),
         bounds_(context.bounds),
         tick_(context.tick_size),
-        actions_(context.actions) {
+        actions_(context.actions),
+        nav_priced_(context.nav_priced),
+        trade_size_(context.trade_size) {
     const double nu = settings.tail_dof;
     t_scale_ = nu > 2.0 ? std::sqrt((nu - 2.0) / nu) : 1.0;
     double total = 0.0;
@@ -382,7 +429,9 @@ class Scorer {
   }
 
   [[nodiscard]] PriceFinding score(std::size_t t) const;
-  [[nodiscard]] std::vector<SplitFinding> split_findings() const;
+  [[nodiscard]] std::vector<SplitFinding> split_findings(
+      const std::vector<PriceFinding>& findings) const;
+  [[nodiscard]] bool era_before(const SplitFinding& finding) const;
   [[nodiscard]] std::vector<StaleRun> stale_runs() const;
   [[nodiscard]] std::vector<double> move_z() const {
     std::vector<double> z(n_, 0.0);
@@ -425,20 +474,35 @@ class Scorer {
     double best_gain = kNegInf;
   };
   [[nodiscard]] int sessions_from(std::size_t from, std::size_t to) const;
-  [[nodiscard]] double jump_gain(std::size_t j, double ratio) const;
-  [[nodiscard]] Elsewhere jump_elsewhere(std::size_t ex, double rho, int window) const;
+  [[nodiscard]] double jump_gain(std::size_t j, double ratio) const {
+    return jump_gain(j, ratio, f_.ret[j]);
+  }
+  [[nodiscard]] double jump_gain(std::size_t j, double ratio, double ret) const;
+  // `skip`: bars whose move cannot be this split's (a bad print's edges, another
+  // split on file at the same ratio).
+  [[nodiscard]] Elsewhere jump_elsewhere(std::size_t ex, double rho, int window,
+                                         const std::vector<bool>& skip) const;
   [[nodiscard]] double mismatch_gain(std::size_t ex, const SplitAction& split,
                                      std::string& observed) const;
 
   [[nodiscard]] Candidate candidate(std::size_t t) const;
   void applicable(const Candidate& c, std::array<bool, kCount>& on) const;
-  [[nodiscard]] std::optional<Term> prior_term(std::array<bool, kCount>& on) const;
+  [[nodiscard]] std::optional<Term> prior_term(const Candidate& c,
+                                               std::array<bool, kCount>& on) const;
+  // How surprising a move of r is to a candidate: 0 for an ordinary one (2 sd or
+  // less), 1 from about six.
+  [[nodiscard]] static double surprise(const Candidate& c, double r) {
+    return std::clamp((std::fabs(r) / c.base_sd - 2.0) / 4.0, 0.0, 1.0);
+  }
+  [[nodiscard]] std::optional<Term> range_term(const Candidate& c) const;
+  [[nodiscard]] bool split_volume_ok(const PriceFinding& out, const VolumeShift& shift) const;
   [[nodiscard]] Term return_term(const Candidate& c, PriceFinding& out) const;
   [[nodiscard]] double split_ll(const Candidate& c, PriceFinding& out) const;
   [[nodiscard]] double scale_ll(const Candidate& c, PriceFinding& out) const;
   [[nodiscard]] NextBars next_bars(const Candidate& c) const;
   void ohlc_terms(const Candidate& c, std::vector<Term>& terms) const;
-  void volume_terms(const Candidate& c, PriceFinding& out, std::vector<Term>& terms) const;
+  void volume_terms(const Candidate& c, PriceFinding& out, std::vector<Term>& terms,
+                    VolumeShift& shift) const;
   [[nodiscard]] std::optional<Term> plausibility_term(const Candidate& c) const;
   [[nodiscard]] std::optional<Term> precision_term(const Candidate& c) const;
   void segment_terms(const Candidate& c, std::vector<Term>& terms) const;
@@ -451,6 +515,8 @@ class Scorer {
   std::optional<Bounds> bounds_;            // a point series' plausible range
   std::optional<double> tick_;              // the exchange tick from --meta
   const SeriesActions* actions_ = nullptr;  // --actions
+  bool nav_priced_ = false;
+  double trade_size_ = 0.0;
   double t_scale_ = 1.0;
   double written_grid_ = 0.0;  // 10^-d for the decimals most prices are written with
   std::vector<std::pair<SplitRatio, double>> splits_;
@@ -482,6 +548,30 @@ Candidate Scorer::candidate(std::size_t t) const {
   c.bar_ohl = has_ohlc_ && std::isfinite(series_.open[row]) && std::isfinite(series_.high[row]) &&
               std::isfinite(series_.low[row]) && series_.open[row] > 0.0 &&
               series_.high[row] > 0.0 && series_.low[row] > 0.0;
+  // The bar's range against the bars before: on a series where most bars have a
+  // range, a violent session (a squeeze, a crash) shows here, and a value at the
+  // wrong scale does not.
+  if (c.bar_ohl && series_.high[row] >= series_.low[row]) {
+    const auto window = static_cast<std::size_t>(settings_.volume_window);
+    std::vector<double> ranges;
+    std::size_t usable = 0;
+    for (std::size_t i = t >= window ? t - window : 0; i < t; ++i) {
+      const std::size_t r = f_.row[i];
+      const double hi = series_.high[r];
+      const double lo = series_.low[r];
+      if (!std::isfinite(hi) || !std::isfinite(lo) || lo <= 0.0 || hi < lo) {
+        continue;
+      }
+      ++usable;
+      if (hi > lo) {
+        ranges.push_back(std::log(hi / lo));
+      }
+    }
+    if (ranges.size() >= kMinWindow && 2 * ranges.size() >= usable) {
+      c.log_range = std::log(series_.high[row] / series_.low[row]);
+      c.range_vs_typical = *c.log_range / stats::median(std::move(ranges));
+    }
+  }
   return c;
 }
 
@@ -495,15 +585,21 @@ void Scorer::applicable(const Candidate& c, std::array<bool, kCount>& on) const 
   on.at(idx(H::kHistorySegment)) = c.elapsed >= settings_.segment_gap;
   on.at(idx(H::kExplainedSplit)) = c.on_file.has_value();
   on.at(idx(H::kExplainedDividend)) = c.dividend.has_value();
+  // A NAV-priced fund falling 2% to 35% with no dividend on file to explain it.
+  on.at(idx(H::kPendingDistribution)) = has_ohlc_ && nav_priced_ && !c.dividend &&
+                                        c.r <= std::log1p(-kDistributionMin) &&
+                                        c.r >= std::log1p(-kDistributionMax);
 }
 
 // The prior, normalized over the hypotheses that apply; nullopt when every one of
 // them has weight zero.
-std::optional<Term> Scorer::prior_term(std::array<bool, kCount>& on) const {
+std::optional<Term> Scorer::prior_term(const Candidate& c, std::array<bool, kCount>& on) const {
   const PricePriors& p = settings_.priors;
-  const Terms weights = {p.market_move,     p.tick_move,        p.bad_print,
-                         p.bad_close,       p.unreported_split, p.scale_error,
-                         p.history_segment, p.explained_split,  p.explained_dividend};
+  // Funds pay their capital gains in the last months of the year.
+  const double pending = p.pending_distribution * (date(c.t).month() >= 9 ? 2.0 : 1.0);
+  const Terms weights = {p.market_move,        p.tick_move,   p.bad_print,       p.bad_close,
+                         p.unreported_split,   p.scale_error, p.history_segment, p.explained_split,
+                         p.explained_dividend, pending};
   double total = 0.0;
   for (std::size_t h = 0; h < kCount; ++h) {
     total += on.at(h) ? weights.at(h) : 0.0;
@@ -612,6 +708,10 @@ Term Scorer::return_term(const Candidate& c, PriceFinding& out) const {
   // When the price did not fall, the move left is the dividend itself, and a wrong
   // row on file invents no move.
   at(term, H::kExplainedDividend) = c.dividend ? ordinary(c.net_r, c.base_sd) : kNegInf;
+  // A distribution of unknown size, anywhere from 2% to 35% of the price, and an
+  // ordinary move.
+  at(term, H::kPendingDistribution) =
+      log_flat_top(c.r, std::log1p(-kDistributionMax), std::log1p(-kDistributionMin), c.base_sd);
   if (out.split) {
     term.note = "nearest split " + out.split->to_string();
   }
@@ -716,7 +816,8 @@ void Scorer::ohlc_terms(const Candidate& c, std::vector<Term>& terms) const {
 }
 
 // Volume: on the day, and the level before and after.
-void Scorer::volume_terms(const Candidate& c, PriceFinding& out, std::vector<Term>& terms) const {
+void Scorer::volume_terms(const Candidate& c, PriceFinding& out, std::vector<Term>& terms,
+                          VolumeShift& shift) const {
   const std::size_t t = c.t;
   const auto window = static_cast<std::size_t>(settings_.volume_window);
   const VolumeWindow pre = volume_window(t >= window ? t - window : 0, t);
@@ -724,57 +825,110 @@ void Scorer::volume_terms(const Candidate& c, PriceFinding& out, std::vector<Ter
   if (pre.count < kMinWindow) {
     return;
   }
+  // No volume to measure against: most bars before have none (a vendor that had
+  // none, a fund struck at NAV), or the median is under a round lot, a tenth of
+  // [coverage] trade_size. A ratio to it (×51,300 "after") is meaningless, so the
+  // volume says nothing here. A thin series that prints a few hundred shares a
+  // day still has a level to measure against.
+  if (pre.zero_share > 0.5 || pre.median < kRoundLot * trade_size_) {
+    out.base_volume_zero = true;
+    return;
+  }
+  shift.judged = true;
+  const double spread = std::max(1.0, pre.log_spread);
+  const double lpre = std::log1p(pre.median);
+  const bool have_post = post.count >= kMinWindow;
+  const double lpost = have_post ? std::log1p(post.median) : lpre;
+  // The share of real moves this surprising that draw a surge of trading. Not
+  // after a long gap, where a new history's volume is its own level.
+  const double surge = c.elapsed < settings_.segment_gap ? kSurgeShare * surprise(c, c.r) : 0.0;
+  // A surge is one event: the day draws it and the days after carry it. So the
+  // shift after is judged given the day, with the surge as likely as the day's
+  // volume makes it (log weights of no surge, and of one).
+  double log_quiet = surge > 0.0 ? std::log1p(-surge) : 0.0;
+  double log_drawn = surge > 0.0 ? std::log(surge) : -std::numeric_limits<double>::infinity();
   const double v = volume(t);
   if (std::isfinite(v) && v >= 0.0) {
-    const double spread = std::max(1.0, pre.log_spread);
     const double lv = std::log1p(v);
-    const double lpre = std::log1p(pre.median);
-    const double lpost = post.count >= kMinWindow ? std::log1p(post.median) : lpre;
+    shift.on_day = lv - lpre;
     Term term{"volume_on_day", pre.median > 0.0 ? v / pre.median : v, {}, {}};
+    const auto p0 = [&pre](double zero_floor) {
+      return std::min(std::max(pre.zero_share, zero_floor), 0.999);
+    };
     const auto ll = [&](double zero_floor, double mean, double sd) {
-      const double p0 = std::max(pre.zero_share, zero_floor);
       if (v == 0.0) {
-        return std::log(p0);
+        return std::log(p0(zero_floor));
       }
-      return std::log1p(-std::min(p0, 0.999)) + log_normal_pdf(lv, mean, sd);
+      return std::log1p(-p0(zero_floor)) + log_normal_pdf(lv, mean, sd);
+    };
+    // Anywhere from one level to another (a split on file: see volume_shift).
+    const auto ll_between = [&](double zero_floor, double a, double b, double sd) {
+      if (v == 0.0) {
+        return std::log(p0(zero_floor));
+      }
+      return std::log1p(-p0(zero_floor)) + log_flat_top(lv, a, b, sd);
     };
     // Volume rises with how surprising a real move is: not at all for an ordinary
-    // one (a tick on a coarse grid), fully from about six standard deviations.
-    const auto surprise_of = [&c](double r) {
-      return std::clamp((std::fabs(r) / c.base_sd - 2.0) / 4.0, 0.0, 1.0);
-    };
-    const double surprise = surprise_of(c.r);
-    at(term, H::kMarketMove) = ll(0.002, lpre + kSurge * surprise, spread);
+    // one (a tick on a coarse grid), by about e from six standard deviations. News
+    // can draw far more, ten to ten thousand times the usual.
+    const double market = ll(0.002, lpre + kSurge * surprise(c, c.r), spread);
+    if (surge > 0.0) {
+      const double quiet = log_quiet + market;
+      const double drawn = log_drawn + ll(0.002, lpre + kSurgeDay, kSurgeDaySpread);
+      const double day = stats::log_add(quiet, drawn);
+      at(term, H::kMarketMove) = day;
+      log_quiet = quiet - day;
+      log_drawn = drawn - day;
+    } else {
+      at(term, H::kMarketMove) = market;
+    }
     at(term, H::kTickMove) = ll(0.002, lpre, spread);
-    at(term, H::kBadPrint) = ll(0.05, lpre + kBadPrintVolume * surprise, spread);
-    at(term, H::kBadClose) = ll(0.05, lpre + kBadPrintVolume * surprise, spread);
-    at(term, H::kUnreportedSplit) = ll(0.002, lpost, spread);
-    at(term, H::kScaleError) = ll(0.002, lpost, spread);
+    at(term, H::kBadPrint) = ll(0.05, lpre + kBadPrintVolume * surprise(c, c.r), spread);
+    at(term, H::kBadClose) = ll(0.05, lpre + kBadPrintVolume * surprise(c, c.r), spread);
+    // A split's day trades at the new level: the one after, or, with too few bars
+    // after to measure it, the level before shifted inversely by the ratio.
+    const double split_level =
+        have_post || !out.split ? lpost : lpre - std::log(out.split->price_factor());
+    at(term, H::kUnreportedSplit) = ll(0.002, split_level, spread);
+    // A value at the wrong scale leaves the volume as it was.
+    at(term, H::kScaleError) = ll(0.002, lpre, spread);
     at(term, H::kHistorySegment) = ll(0.002, lpost, 2.0 * spread);
-    at(term, H::kExplainedSplit) = at(term, H::kUnreportedSplit);
+    at(term, H::kExplainedSplit) =
+        have_post || !c.on_file
+            ? ll(0.002, lpost, spread)
+            : ll_between(0.002, lpre, lpre - std::log(c.on_file->price_factor()), spread);
     // A distribution moves no volume: only what is left of the move can.
-    at(term, H::kExplainedDividend) = ll(0.002, lpre + kSurge * surprise_of(c.net_r), spread);
+    at(term, H::kExplainedDividend) = ll(0.002, lpre + kSurge * surprise(c, c.net_r), spread);
+    at(term, H::kPendingDistribution) = ll(0.002, lpre, spread);
     term.note = "against the median before";
     terms.push_back(std::move(term));
   }
-  if (post.count < kMinWindow) {
+  if (!have_post) {
     return;
   }
   const double dv = std::log1p(post.median) - std::log1p(pre.median);
   out.volume_ratio = std::exp(dv);
+  shift.after = dv;
   // A median of n values is off by about 1.25 sd / sqrt(n); add that to how much
   // each hypothesis lets the level move.
   const auto median_noise = [](const VolumeWindow& w) {
     return 1.25 * w.log_spread / std::sqrt(static_cast<double>(w.count));
   };
   const double noise = std::hypot(median_noise(pre), median_noise(post));
+  shift.noise = noise;
   // The volume level drifts by about kVolumeDrift over a few months whatever
   // happens; the hypotheses differ in where they centre it. A real move keeps
-  // some dollar volume (shares rise as the price falls); a split moves share
-  // volume by its ratio exactly; an error leaves it alone.
+  // some dollar volume (shares rise as the price falls), or draws a surge of
+  // trading that stays up for days; a split moves share volume by its ratio
+  // exactly; an error leaves it alone.
   Term term = uniform_term("volume_shift", std::exp(dv),
                            log_normal_pdf(dv, 0.0, std::hypot(kVolumeDrift, noise)));
-  at(term, H::kMarketMove) = log_normal_pdf(dv, -0.5 * c.r, std::hypot(kVolumeDrift, noise));
+  const double market = log_normal_pdf(dv, -0.5 * c.r, std::hypot(kVolumeDrift, noise));
+  at(term, H::kMarketMove) =
+      surge > 0.0 ? stats::log_add(log_quiet + market,
+                                   log_drawn + log_normal_pdf(dv, kSurgeAfter,
+                                                              std::hypot(kSurgeAfterSpread, noise)))
+                  : market;
   at(term, H::kUnreportedSplit) = log_normal_pdf(dv, -c.r, std::hypot(kSplitVolumeDrift, noise));
   at(term, H::kHistorySegment) = log_normal_pdf(dv, 0.0, std::hypot(2.0, noise));
   if (c.on_file) {
@@ -790,6 +944,48 @@ void Scorer::volume_terms(const Candidate& c, PriceFinding& out, std::vector<Ter
       log_normal_pdf(dv, -0.5 * c.net_r, std::hypot(kVolumeDrift, noise));
   term.note = "median after / before";
   terms.push_back(std::move(term));
+}
+
+// The bar's own range: a violent session (violent_range times the usual or more),
+// or not.
+std::optional<Term> Scorer::range_term(const Candidate& c) const {
+  if (!c.range_vs_typical) {
+    return std::nullopt;
+  }
+  const bool violent = *c.range_vs_typical >= settings_.violent_range;
+  const auto ll = [violent](double p) { return violent ? std::log(p) : std::log1p(-p); };
+  Term term = uniform_term("bar_range", *c.range_vs_typical, ll(kViolentOrdinary));
+  at(term, H::kMarketMove) = ll(kViolentOrdinary + kViolentSurprise * surprise(c, c.r));
+  at(term, H::kBadPrint) = ll(kViolentBadPrint);
+  at(term, H::kBadClose) = ll(kViolentScale);
+  at(term, H::kUnreportedSplit) = ll(kViolentSplit);
+  at(term, H::kScaleError) = ll(kViolentScale);
+  at(term, H::kHistorySegment) = ll(kViolentSegment);
+  at(term, H::kExplainedSplit) = ll(kViolentSplit);
+  at(term, H::kExplainedDividend) = ll(kViolentOrdinary + kViolentSurprise * surprise(c, c.net_r));
+  term.note = "log range against the median before";
+  return term;
+}
+
+// DQ203 needs the volume to shift inversely by about the split's ratio: a split
+// gives each holder more shares (or fewer), so share volume follows. A series with
+// no volume to judge by (a NAV fund, a vendor with none) passes.
+bool Scorer::split_volume_ok(const PriceFinding& out, const VolumeShift& shift) const {
+  if (!series_.has_volume || out.base_volume_zero || !shift.judged || !out.split) {
+    return true;
+  }
+  const double expected = -std::log(out.split->price_factor());
+  if (shift.after) {
+    // The level after, within twice the drift any volume level shows over a few
+    // months: a 3:2 split's ×1.5 can drift to ×0.8, a 5:1's ×5 cannot stay at ×1.
+    return std::fabs(*shift.after - expected) <= 2.0 * std::hypot(kVolumeDrift, shift.noise);
+  }
+  if (shift.on_day) {
+    // Only the day itself so far: its volume must sit nearer the split's level
+    // than the old one, more than half the way there.
+    return *shift.on_day / expected > 0.5;
+  }
+  return true;
 }
 
 // Plausible price levels either side.
@@ -847,10 +1043,16 @@ void Scorer::segment_terms(const Candidate& c, std::vector<Term>& terms) const {
   terms.push_back(std::move(vol));
 }
 
-// The posterior over the hypotheses considered, p_error, and the most probable
-// error. Returns that error's index.
-std::size_t conclude(const std::vector<Term>& terms, PriceFinding& out) {
-  const std::array<bool, kCount>& on = out.considered;
+// The posterior over the hypotheses considered, p_error, the most probable error
+// and the most probable hypothesis. `excluded` is considered (its evidence stays in
+// log_likelihood, for calibrate) but takes no posterior: a rule rules it out here.
+// Returns the most probable error's index.
+std::size_t conclude(const std::vector<Term>& terms, PriceFinding& out,
+                     std::optional<H> excluded = std::nullopt) {
+  std::array<bool, kCount> on = out.considered;
+  if (excluded) {
+    on.at(idx(*excluded)) = false;
+  }
   Terms total{};
   for (std::size_t h = 0; h < kCount; ++h) {
     total.at(h) = on.at(h) ? 0.0 : kNegInf;
@@ -863,8 +1065,13 @@ std::size_t conclude(const std::vector<Term>& terms, PriceFinding& out) {
     norm = stats::log_add(norm, value);
   }
   std::size_t best = idx(H::kBadPrint);
+  std::size_t leading = idx(H::kMarketMove);
+  out.p_error = 0.0;
   for (std::size_t h = 0; h < kCount; ++h) {
     out.posterior.at(h) = on.at(h) ? std::exp(total.at(h) - norm) : 0.0;
+    if (on.at(h) && (total.at(h) > total.at(leading) || !on.at(leading))) {
+      leading = h;
+    }
     if (!is_error(static_cast<H>(h))) {
       continue;
     }
@@ -875,6 +1082,7 @@ std::size_t conclude(const std::vector<Term>& terms, PriceFinding& out) {
   }
   out.p_error = std::min(out.p_error, 1.0);
   out.hypothesis = static_cast<H>(best);
+  out.leading = static_cast<H>(leading);
   return best;
 }
 
@@ -888,8 +1096,14 @@ PriceFinding Scorer::score(std::size_t t) const {
   out.provisional = n_ - 1 - t < static_cast<std::size_t>(settings_.provisional_bars);
   applicable(c, out.considered);
 
+  out.move_sd = c.base_sd;
+  out.range_vs_typical = c.range_vs_typical;
+  if (c.log_range) {
+    out.range_ratio = std::exp(*c.log_range);
+  }
+  out.violent = c.range_vs_typical && *c.range_vs_typical >= settings_.violent_range;
   std::vector<Term> terms;
-  std::optional<Term> prior = prior_term(out.considered);
+  std::optional<Term> prior = prior_term(c, out.considered);
   if (!prior) {  // every applicable prior set to zero: nothing to compare
     out.considered.fill(false);
     return out;
@@ -902,7 +1116,11 @@ PriceFinding Scorer::score(std::size_t t) const {
   if (c.bar_ohl) {
     ohlc_terms(c, terms);
   }
-  volume_terms(c, out, terms);
+  if (std::optional<Term> range = range_term(c)) {
+    terms.push_back(std::move(*range));
+  }
+  VolumeShift shift;
+  volume_terms(c, out, terms, shift);
   if (std::optional<Term> plausible_level = plausibility_term(c)) {
     terms.push_back(std::move(*plausible_level));
   }
@@ -918,7 +1136,23 @@ PriceFinding Scorer::score(std::size_t t) const {
   out.split_on_file = c.on_file;
   out.dividend_on_file = c.dividend;
 
-  const std::size_t best = conclude(terms, out);
+  std::size_t best = conclude(terms, out);
+  // DQ203 only when the volume shifts inversely by about the ratio, or there is
+  // no volume to judge by: a traded series whose volume held, or surged, did not
+  // split. The next explanation takes the move.
+  out.split_volume_ok = split_volume_ok(out, shift);
+  if (out.hypothesis == H::kUnreportedSplit && !out.split_volume_ok) {
+    best = conclude(terms, out, H::kUnreportedSplit);
+  }
+  // A surge: the volume level after five times the one before, or more, and not
+  // the inverse shift a split would make.
+  if (shift.after && *shift.after >= kSurgeShift) {
+    const bool split_like = out.split && out.split_volume_ok &&
+                            -std::log(out.split->price_factor()) * *shift.after > 0.0 &&
+                            std::fabs(*shift.after + std::log(out.split->price_factor())) <=
+                                2.0 * std::hypot(kSplitVolumeDrift, shift.noise);
+    out.volume_surge = !split_like;
+  }
   for (std::size_t h = 0; h < kCount; ++h) {
     double ll = 0.0;
     for (std::size_t i = 1; i < terms.size(); ++i) {
@@ -1016,6 +1250,8 @@ std::string_view to_string(PriceHypothesis hypothesis) noexcept {
       return "explained_split";
     case H::kExplainedDividend:
       return "explained_dividend";
+    case H::kPendingDistribution:
+      return "pending_distribution";
   }
   return "market_move";
 }
@@ -1082,6 +1318,7 @@ std::vector<StaleRun> Scorer::stale_runs() const {
     double repeat_after_move = 0.0;
     double after_repeat = 0.0;
     double repeat_after_repeat = 0.0;
+    std::vector<double> close_moves;  // |close - close before|, traded bars nearby
     for (std::size_t j = std::max<std::size_t>(from, 2); j < to; ++j) {
       if ((j >= run.first && j <= run.last + 1) || !traded(j)) {
         continue;
@@ -1090,6 +1327,7 @@ std::vector<StaleRun> Scorer::stale_runs() const {
       const bool is = close(j) == close(j - 1);
       (was ? after_repeat : after_move) += 1.0;
       (was ? repeat_after_repeat : repeat_after_move) += is ? 1.0 : 0.0;
+      close_moves.push_back(std::fabs(close(j) - close(j - 1)));
     }
     // The grid, with the lattice the prices nearby sit on. A price only a few steps
     // of it wide (a sub-dime stock in cents, an eighth-dollar stock in sixteenths)
@@ -1106,6 +1344,15 @@ std::vector<StaleRun> Scorer::stale_runs() const {
     if (close(run.first) <= kCoarseSteps * grid) {
       i = run.last + 1;
       continue;
+    }
+    run.grid = grid;
+    constexpr std::size_t kMinMoves = 5;
+    if (close_moves.size() >= kMinMoves) {
+      // In steps, rounded as DQ107 rounds them: 0.05 - 0.03 is not two cents exactly.
+      for (double& move : close_moves) {
+        move = std::round(move / grid * 1e6) / 1e6;
+      }
+      run.close_steps = stats::median(std::move(close_moves));
     }
     // Volatility from either side of the run, the run's own zeros left out.
     const double sig =
@@ -1154,21 +1401,21 @@ int Scorer::sessions_from(std::size_t from, std::size_t to) const {
 
 // log [p(move | a jump of log ratio `ratio`) / p(move | ordinary)] at bar j: the
 // jump is the ratio exactly, plus an ordinary move with ratio_tolerance of slack.
-double Scorer::jump_gain(std::size_t j, double ratio) const {
+double Scorer::jump_gain(std::size_t j, double ratio, double ret) const {
   const double sd =
       move_sd(sigma(j, static_cast<std::size_t>(settings_.revert_max_bars)), j - 1, j);
-  return ordinary(f_.ret[j] - ratio, std::hypot(sd, settings_.ratio_tolerance)) -
-         ordinary(f_.ret[j], sd);
+  return ordinary(ret - ratio, std::hypot(sd, settings_.ratio_tolerance)) - ordinary(ret, sd);
 }
 
 // A jump of log ratio rho at one bar within `window` sessions of bar ex (not ex
 // itself), each equally likely: the log mean gain, and the best bar.
-Scorer::Elsewhere Scorer::jump_elsewhere(std::size_t ex, double rho, int window) const {
+Scorer::Elsewhere Scorer::jump_elsewhere(std::size_t ex, double rho, int window,
+                                         const std::vector<bool>& skip) const {
   Elsewhere w;
   std::size_t count = 0;
   for (std::size_t j = 1; j < n_; ++j) {
     const int off = sessions_from(ex, j);
-    if (j == ex || off < -window || off > window) {
+    if (j == ex || off < -window || off > window || skip[j]) {
       continue;
     }
     const double gain = jump_gain(j, rho);
@@ -1216,28 +1463,65 @@ double Scorer::mismatch_gain(std::size_t ex, const SplitAction& split,
   return mismatch;
 }
 
-std::vector<SplitFinding> Scorer::split_findings() const {
+std::vector<SplitFinding> Scorer::split_findings(const std::vector<PriceFinding>& findings) const {
   constexpr int kMisdatedWindow = 5;
   constexpr int kDoubleWindow = 20;
   std::vector<SplitFinding> out;
   if (actions_ == nullptr || !has_ohlc_ || n_ < 3) {
     return out;
   }
-  const double e = settings_.priors.split_on_file_error;
-  for (const SplitAction& split : actions_->splits) {
-    // The first bar on or after the ex-date; a split outside the bars' span cannot
-    // be judged.
+  // A bad print's edges: the move into the block and the revert out of it. Neither
+  // is a split's move (a phantom split's bars at twice the price revert, and the
+  // revert is no split), so neither confirms nor misdates one. Where an edge falls
+  // on an ex-date, the move across the whole block is what a split there would show.
+  std::vector<bool> edge(n_, false);
+  std::vector<std::optional<double>> across(n_);
+  for (const PriceFinding& f : findings) {
+    if (f.hypothesis != H::kBadPrint || f.posterior.at(idx(H::kBadPrint)) < 0.5 ||
+        f.end_bar + 1 >= n_) {
+      continue;
+    }
+    const double move = f_.y[f.end_bar + 1] - f_.y[f.bar - 1];
+    for (const std::size_t j : {f.bar, f.end_bar + 1}) {
+      edge[j] = true;
+      across[j] = move;
+    }
+  }
+  // Each split's bar: the first on or after its ex-date; nullopt for a split
+  // outside the bars' span, which cannot be judged.
+  const std::vector<SplitAction>& splits = actions_->splits;
+  std::vector<std::optional<std::size_t>> ex_bars;
+  for (const SplitAction& split : splits) {
     std::size_t ex = 1;
     while (ex < n_ && date(ex) < split.ex_date) {
       ++ex;
     }
-    if (ex >= n_ || date(0) >= split.ex_date) {
+    ex_bars.push_back(ex >= n_ || date(0) >= split.ex_date ? std::nullopt
+                                                           : std::optional<std::size_t>{ex});
+  }
+  const auto same_ratio = [this](const SplitAction& a, const SplitAction& b) {
+    return std::fabs(std::log(a.price_factor() / b.price_factor())) <= settings_.ratio_tolerance;
+  };
+  const double e = settings_.priors.split_on_file_error;
+  for (std::size_t s = 0; s < splits.size(); ++s) {
+    if (!ex_bars[s]) {
       continue;
     }
+    const SplitAction& split = splits[s];
+    const std::size_t ex = *ex_bars[s];
+    // Moves this split cannot have made: a bad print's edges, and the ex-date of
+    // another split on file at the same ratio (a duplicate row must not be
+    // "misdated" onto the date that holds the real one).
+    std::vector<bool> skip = edge;
+    for (std::size_t o = 0; o < splits.size(); ++o) {
+      if (o != s && ex_bars[o] && *ex_bars[o] != ex && same_ratio(split, splits[o])) {
+        skip[*ex_bars[o]] = true;
+      }
+    }
     const double rho = std::log(split.price_factor());
-    const double at_ex = jump_gain(ex, rho);
-    const Elsewhere near = jump_elsewhere(ex, rho, kMisdatedWindow);
-    const Elsewhere wide = jump_elsewhere(ex, rho, kDoubleWindow);
+    const double at_ex = jump_gain(ex, rho, across[ex].value_or(f_.ret[ex]));
+    const Elsewhere near = jump_elsewhere(ex, rho, kMisdatedWindow, skip);
+    const Elsewhere wide = jump_elsewhere(ex, rho, kDoubleWindow, skip);
     std::string observed;
     std::array<double, kSplitVerdicts> ll{};
     ll.at(0) = std::log1p(-e) + at_ex;
@@ -1273,7 +1557,75 @@ std::vector<SplitFinding> Scorer::split_findings() const {
         n_ - 1 - std::max(ex, other) < static_cast<std::size_t>(settings_.provisional_bars);
     out.push_back(finding);
   }
+  // A split the bars do not show, next to another on file at the same ratio that
+  // they confirm (its error improbable), is a duplicate of it: the feed applies the
+  // ratio once.
+  for (SplitFinding& finding : out) {
+    if (finding.verdict != SplitVerdict::kNoJump || finding.p_error < 0.5) {
+      continue;
+    }
+    for (const SplitFinding& other : out) {
+      const int off = sessions_from(finding.ex_bar, other.ex_bar);
+      if (&other == &finding || other.p_error >= 0.5 || other.ex_bar == finding.ex_bar ||
+          !same_ratio(finding.split, other.split) || std::abs(off) > kMisdatedWindow) {
+        continue;
+      }
+      finding.duplicate_of = other.split.ex_date;
+      finding.other_bar = other.ex_bar;
+      finding.sessions_off = off;
+      finding.provisional = n_ - 1 - std::max(finding.ex_bar, other.ex_bar) <
+                            static_cast<std::size_t>(settings_.provisional_bars);
+      break;
+    }
+  }
   return out;
+}
+
+// A misdated split whose move comes before its ex-date may instead be right, with
+// the sessions between stored at the post-split scale: a vendor that derives its
+// "unadjusted" bars from adjusted ones for dates before a split it knows of. The
+// prices cannot tell the two apart (a move of the ratio, then an ordinary move at
+// the ex-date); the volume can. Sessions after a split trade at its new level;
+// sessions stored at the wrong scale are pre-split sessions, and trade at the
+// level before. True when the era's volume is nearer the level before its move
+// than the level from the ex-date on.
+bool Scorer::era_before(const SplitFinding& finding) const {
+  if (finding.verdict != SplitVerdict::kMisdated || !finding.other_bar ||
+      *finding.other_bar >= finding.ex_bar || !series_.has_volume) {
+    return false;
+  }
+  const std::size_t start = *finding.other_bar;
+  const std::size_t ex = finding.ex_bar;
+  // The move out of the era, at the ex-date, is ordinary: the era already sits at
+  // the post-split level.
+  if (tail(f_.ret[ex], move_sd(sigma(ex, 0), ex - 1, ex)) < settings_.candidate_tail_prob) {
+    return false;
+  }
+  const auto window = static_cast<std::size_t>(settings_.volume_window);
+  const auto level = [this](std::size_t from, std::size_t to) -> std::optional<double> {
+    const VolumeWindow w = volume_window(from, to);
+    if (w.count == 0 || w.zero_share > 0.5) {
+      return std::nullopt;
+    }
+    return std::log1p(w.median);
+  };
+  const std::optional<double> before = level(start >= window ? start - window : 0, start);
+  const std::optional<double> era = level(start, ex);
+  // From the ex-date on, or, with no bars yet, the level before shifted by the ratio.
+  std::optional<double> after = level(ex, ex + window);
+  if (!after && before) {
+    after = *before - std::log(finding.split.price_factor());
+  }
+  if (!before || !era || !after) {
+    return false;
+  }
+  // Only a split whose volume levels clearly differ can tell the two apart: a
+  // 2:1's ×2 is within a few sessions' noise (and a feed's volume is sometimes
+  // adjusted already); ZBAO's 1:50 moved it ×1/6.6.
+  constexpr double kLevelGap = 1.0;
+  constexpr double kMargin = 0.5;  // the era must be clearly nearer the level before
+  return std::fabs(*after - *before) >= kLevelGap &&
+         std::fabs(*era - *before) + kMargin < std::fabs(*era - *after);
 }
 
 PriceAnalysis analyze_prices(const Series& series, const Calendar& calendar,
@@ -1302,11 +1654,48 @@ PriceAnalysis analyze_prices(const Series& series, const Calendar& calendar,
     out.findings.push_back(std::move(finding));
   }
   pair_scale_eras(out.findings, settings);
-  out.split_findings = scorer.split_findings();
+  out.split_findings = scorer.split_findings(out.findings);
+  // A misdated split whose bars moved before its ex-date may be right, and the
+  // sessions between it and the move stored at its post-split scale: a DQ202 era,
+  // the split confirmed (Scorer::era_before).
+  for (SplitFinding& split : out.split_findings) {
+    if (split.p_error < 0.5 || !scorer.era_before(split)) {
+      continue;
+    }
+    const std::size_t start = *split.other_bar;
+    const auto at = std::find_if(out.findings.begin(), out.findings.end(),
+                                 [start](const PriceFinding& f) { return f.bar == start; });
+    PriceFinding era = at != out.findings.end() ? *at : PriceFinding{};
+    era.bar = start;
+    era.end_bar = split.ex_bar - 1;
+    era.hypothesis = H::kScaleError;
+    era.factor = series.close[out.features.row[start]] / series.close[out.features.row[start - 1]];
+    era.p_error = split.posterior.at(static_cast<std::size_t>(SplitVerdict::kMisdated));
+    era.raw_p_error = era.p_error;
+    era.provisional = split.provisional;
+    era.claimed = false;
+    era.era_split = split.split;
+    if (at != out.findings.end()) {
+      *at = std::move(era);
+    } else {
+      out.findings.insert(
+          std::upper_bound(out.findings.begin(), out.findings.end(), start,
+                           [](std::size_t bar, const PriceFinding& f) { return bar < f.bar; }),
+          std::move(era));
+    }
+    // The move out of the era, at the ex-date, is the split's.
+    for (PriceFinding& finding : out.findings) {
+      finding.claimed = finding.claimed || finding.bar == split.ex_bar;
+    }
+    split.era_before = true;
+    split.verdict = SplitVerdict::kConfirmed;
+    split.other_bar.reset();
+    split.sessions_off = 0;
+  }
   // A split on file judged wrong accounts for the move it blames: the DQ2xx checks
-  // leave that bar to it.
+  // leave that bar to it. A duplicate's move is the confirmed split's.
   for (const SplitFinding& split : out.split_findings) {
-    if (split.p_error < 0.5) {
+    if (split.p_error < 0.5 || split.verdict == SplitVerdict::kConfirmed || split.duplicate_of) {
       continue;
     }
     const std::size_t bar =
@@ -1319,6 +1708,10 @@ PriceAnalysis analyze_prices(const Series& series, const Calendar& calendar,
   }
   out.stale_runs = scorer.stale_runs();
   out.move_z = scorer.move_z();
+  out.move_sd.assign(n, 0.0);
+  for (std::size_t t = 1; t < n; ++t) {
+    out.move_sd[t] = scorer.move_sd(scorer.sigma(t, 0), t - 1, t);
+  }
   return out;
 }
 
