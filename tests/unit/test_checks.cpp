@@ -433,3 +433,49 @@ TEST_CASE("DQ107: a flat bar on typical volume, not on a thin day") {
   const auto short_series = one_series(bars({"2024-01-02,10,10,10,10,150"}));
   CHECK(run_check(dorq::ZeroRangeWithVolume{}, short_series).empty());
 }
+
+TEST_CASE("N1: DQ107 on a thin series is info, unless the day itself is a large one") {
+  // A $40 name whose bars span a dollar; flat bars on days 30 (typical volume)
+  // and 50 (six times it).
+  const auto series_with_median = [](double median) {
+    std::vector<std::string> rows;
+    rows.reserve(80);
+    for (int d = 0; d < 80; ++d) {
+      const double c = 40.0 + 0.07 * (d % 9);
+      const double v = median * (1.0 + 0.001 * (d % 7));
+      if (d == 30) {
+        rows.push_back(bar_row(d, c, c, c, c, v * 1.2));
+      } else if (d == 50) {
+        rows.push_back(bar_row(d, c, c, c, c, v * 6.0));
+      } else {
+        rows.push_back(bar_row(d, c - 0.31, c + 0.53, c - 0.48, c, v));
+      }
+    }
+    return one_series(bars(rows));
+  };
+  const auto severities = [](const std::vector<dorq::Violation>& found) {
+    std::string out;
+    for (const dorq::Violation& v : found) {
+      out += std::string{dorq::to_string(v.severity)} + " ";
+    }
+    return out;
+  };
+  // 2,000 shares a day is under the 5,000 floor: the typical day is info, the
+  // large one (12,000 shares) warn.
+  const auto thin = run_check(dorq::ZeroRangeWithVolume{}, series_with_median(2000.0));
+  CHECK(severities(thin) == "info warn ");
+  CHECK(dorq::test::contains(thin.front().message, "a thin series (a median 2,0"));
+  // 50,000 shares a day: both at warn, as before.
+  CHECK(severities(run_check(dorq::ZeroRangeWithVolume{}, series_with_median(50000.0))) ==
+        "warn warn ");
+  // A dollar floor above its $2M a day makes it thin too.
+  dorq::IntegritySettings dollars;
+  dollars.flat_bar_min_median_dollar_volume = 5e6;
+  CHECK(severities(run_check(dorq::ZeroRangeWithVolume{}, series_with_median(50000.0), dollars)) ==
+        "info warn ");
+  // The multiple is a setting.
+  dorq::IntegritySettings multiple;
+  multiple.flat_bar_volume_multiple = 8.0;
+  CHECK(severities(run_check(dorq::ZeroRangeWithVolume{}, series_with_median(2000.0), multiple)) ==
+        "info info ");
+}

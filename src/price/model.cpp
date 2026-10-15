@@ -833,7 +833,6 @@ void Scorer::volume_terms(const Candidate& c, PriceFinding& out, std::vector<Ter
   }
   shift.judged = true;
   const double spread = std::max(1.0, pre.log_spread);
-  shift.day_spread = spread;
   const double lpre = std::log1p(pre.median);
   const bool have_post = post.count >= kMinWindow;
   const double lpost = have_post ? std::log1p(post.median) : lpre;
@@ -969,9 +968,9 @@ bool Scorer::split_volume_ok(const PriceFinding& out, const VolumeShift& shift) 
     return std::fabs(*shift.after - expected) <= 2.0 * std::hypot(kVolumeDrift, shift.noise);
   }
   if (shift.on_day) {
-    // Only the day itself so far: a noisier measure, held to its direction.
-    return *shift.on_day * expected > 0.0 &&
-           std::fabs(*shift.on_day - expected) <= 2.0 * shift.day_spread;
+    // Only the day itself so far: its volume must sit nearer the split's level
+    // than the old one, more than half the way there.
+    return *shift.on_day / expected > 0.5;
   }
   return true;
 }

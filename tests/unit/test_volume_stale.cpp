@@ -336,3 +336,36 @@ TEST_CASE("DQ502: untraded bars carrying the close are info, and a market fact")
   CHECK(contains(result.out, "3 bars with no trade carry the close"));
   CHECK(contains(result.out, R"("classification":"market_fact")"));
 }
+
+TEST_CASE("N2: DQ501 leaves a pinned price alone, and a thin series' runs at info") {
+  // A SPAC at its trust value: a cent grid at $10, closes moving a cent or none.
+  std::vector<Bar> spac = stock(400, 10.06, 0.0004, 5e4, 12);
+  for (std::size_t i = 201; i <= 208; ++i) {
+    spac[i].close = spac[200].close;
+    spac[i].open = spac[i].high = spac[i].low = spac[i].close;
+  }
+  CHECK(run({"--isolated", "--select", "DQ501", "--show-info"}, bars_csv("G", spac)).out.empty());
+
+  // A liquid name's stale run is still reported (EQC's three days on millions of
+  // shares), and on a thin series the same run is info.
+  std::vector<Bar> bars = stock(400, 40.0, 0.02, 2e6, 9);
+  for (std::size_t i = 201; i <= 204; ++i) {
+    bars[i].close = bars[200].close;
+    bars[i].open = bars[i].close;
+    bars[i].high = std::max(bars[i].high, bars[i].close);
+    bars[i].low = std::min(bars[i].low, bars[i].close);
+  }
+  const Result liquid =
+      run({"--isolated", "--select", "DQ501", "--format", "jsonl"}, bars_csv("R", bars));
+  CHECK(count_matching(liquid.out,
+                       R"("code":"DQ501","check":"repeated-price","severity":"error")") == 1);
+  for (Bar& bar : bars) {
+    bar.volume = std::round(bar.volume / 1000.0);  // about 2,000 shares a day
+  }
+  const Result thin = run({"--isolated", "--select", "DQ501", "--format", "jsonl", "--show-info"},
+                          bars_csv("R", bars));
+  CAPTURE(thin.out);
+  CHECK(count_matching(thin.out, R"("code":"DQ501","check":"repeated-price","severity":"info")") ==
+        1);
+  CHECK(contains(thin.out, R"("thin_series":true)"));
+}

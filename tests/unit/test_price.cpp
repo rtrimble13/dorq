@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -460,4 +461,203 @@ TEST_CASE("price findings do not depend on the thread count") {
       run({"--isolated", "--show-info", "--format", "jsonl", "--threads", "8"}, csv);
   CHECK(count_matching(one.out, R"("code":"DQ201")") == 12);
   CHECK(one.out == many.out);
+}
+
+// ---------------------------------------------------------------------------
+// fafnir's labelled shadow nights (0.10.0): real moves, funds' distributions, and
+// splits that volume does not bear out.
+
+namespace {
+
+// dorq on `csv` with a --meta file holding `meta`, the price checks only.
+Result check_prices_with_meta(const std::string& csv, const std::string& meta,
+                              bool show_info = false) {
+  const dorq::test::TempDir dir;
+  dorq::test::write_file(dir.path() / "meta.csv", meta);
+  if (show_info) {
+    return dorq::test::run_in(dir.path(),
+                              {"--isolated", "--select", "DQ2", "--ignore", "DQ206", "--format",
+                               "jsonl", "--meta", "meta.csv", "--show-info"},
+                              csv);
+  }
+  return dorq::test::run_in(dir.path(),
+                            {"--isolated", "--select", "DQ2", "--ignore", "DQ206", "--format",
+                             "jsonl", "--meta", "meta.csv"},
+                            csv);
+}
+
+// A microcap's news squeeze at bar `at`: the close ×`factor` on a session that
+// trades through a range five times the price before, on thousands of times its
+// volume, which stays heavy for days and then decays; the price fades after, and
+// the walk goes on from where it fades to.
+void squeeze(std::vector<Row>& rows, std::size_t at, double factor) {
+  const double usual = rows[at - 1].volume;
+  const double prev = rows[at - 1].close;
+  Row& bar = rows[at];
+  bar.close = prev * factor;
+  bar.open = prev * factor * 0.4;
+  bar.low = prev * factor * 0.29;
+  bar.high = prev * factor * 1.49;
+  bar.volume = usual * 6000.0;
+  // The closes after, as shares of the squeeze's, and the volume, times the usual.
+  const std::array<double, 7> fade = {0.18, 0.22, 0.13, 0.13, 0.13, 0.11, 0.11};
+  const std::array<double, 7> heavy = {700, 1300, 170, 1500, 125, 105, 75};
+  const std::size_t end = std::min(rows.size(), at + 1 + fade.size());
+  const double rest = rows[end - 1].close;  // the walk's close where the fade ends
+  for (std::size_t j = 0; at + 1 + j < end; ++j) {
+    Row& after = rows[at + 1 + j];
+    const double c = bar.close * fade.at(j);
+    after.close = c;
+    after.open = c * 1.05;
+    after.high = c * 1.15;
+    after.low = c * 0.9;
+    after.volume = usual * heavy.at(j);
+  }
+  const double level = rows[end - 1].close / rest;
+  for (std::size_t i = end; i < rows.size(); ++i) {
+    scale_bar(rows[i], level);
+  }
+}
+
+}  // namespace
+
+TEST_CASE("P1: a squeeze that trades through its range on a surge of volume is a real move") {
+  std::vector<Row> rows = walk(300, 0.9, 0.05, 3e4, 21);
+  squeeze(rows, 280, 7.8);
+  const Result shown = check_prices(to_csv("MI", rows, 4), true);
+  CAPTURE(shown.out);
+  const std::string day = rows[280].date.to_string();
+  // Not a scale shift, a split or a bad print, at warn or above.
+  CHECK_FALSE(contains(shown.out, R"("date":")" + day + R"(","line":282,"code":"DQ202")"));
+  CHECK(count_matching(shown.out, R"("severity":"error")") == 0);
+  CHECK(count_matching(shown.out, R"("severity":"warn")") == 0);
+  // DQ209 at info, with the evidence that decided it.
+  CHECK(contains(shown.out, R"("date":")" + day + R"(","line":282,"code":"DQ209")"));
+  CHECK(contains(shown.out, R"("leading_hypothesis":"market_move")"));
+  CHECK(contains(shown.out, R"("feature":"bar_range")"));
+  CHECK(contains(shown.out, R"("range_vs_typical":)"));
+}
+
+TEST_CASE("P1: a volume base that is mostly zero says nothing") {
+  // A vendor with no volume for most of the history before the move, then a
+  // real move on millions of shares that trades through its range.
+  std::vector<Row> rows = walk(300, 1.2, 0.03, 3e4, 22);
+  for (std::size_t i = 0; i < 250; ++i) {
+    rows[i].volume = i % 4 == 0 ? 51300.0 : 0.0;
+  }
+  const double prev = rows[249].close;
+  rows[250].close = prev * 1.875;
+  rows[250].open = prev * 1.05;
+  rows[250].low = prev * 1.05;
+  rows[250].high = prev * 2.4;
+  rows[250].volume = 9.1e6;
+  for (std::size_t i = 251; i < rows.size(); ++i) {
+    scale_bar(rows[i], 1.8);
+    rows[i].volume = 3e5;
+  }
+  const Result shown = check_prices(to_csv("W", rows, 4), true);
+  CAPTURE(shown.out);
+  CHECK(count_matching(shown.out, R"("code":"DQ202")") == 0);
+  CHECK(contains(shown.out, R"("base_volume_zero":true)"));
+  CHECK_FALSE(contains(shown.out, "×51300"));
+}
+
+TEST_CASE("P1: a reverse split with a wild first session is still a split") {
+  // The split signature beats the violent session: the level moves by a clean
+  // ratio and share volume by its inverse.
+  std::vector<Row> rows = walk(300, 0.4, 0.03, 2e5, 23);
+  for (std::size_t i = 150; i < rows.size(); ++i) {
+    scale_bar(rows[i], 10.0);
+    rows[i].volume /= 10.0;
+  }
+  rows[150].high = rows[150].close * 1.8;
+  rows[150].low = rows[150].close * 0.7;
+  const Result result = check_prices(to_csv("P", rows, 4));
+  CAPTURE(result.out);
+  CHECK(count_matching(result.out, R"("code":"DQ203")") == 1);
+  CHECK(contains(result.out, R"("ratio":"1:10")"));
+}
+
+TEST_CASE("P1: an era at a power of ten on unchanged volume stays a scale shift") {
+  for (const double factor : {10.0, 100.0}) {
+    std::vector<Row> rows = walk(300, 30.0, 0.015, 1e6, 24);
+    for (std::size_t i = 100; i < 160; ++i) {
+      scale_bar(rows[i], factor);
+    }
+    const Result result = check_prices(to_csv("A", rows));
+    CAPTURE(result.out);
+    CHECK(count_matching(result.out,
+                         R"("code":"DQ202","check":"scale-shift","severity":"error")") == 1);
+  }
+}
+
+TEST_CASE("P5: DQ203 needs share volume to shift inversely, or no volume to judge by") {
+  // A traded fund whose history carried another instrument's prices, and whose
+  // newest bar is its own first print, a fifth of them, on its usual volume.
+  std::vector<Row> rows = walk(200, 57.0, 0.01, 5.3e4, 25);
+  scale_bar(rows.back(), 0.2013);
+  const Result flat = check_prices(to_csv("O", rows));
+  CAPTURE(flat.out);
+  CHECK(count_matching(flat.out, R"("code":"DQ203")") == 0);
+  CHECK(count_matching(flat.out, R"("code":"DQ201")") == 1);
+  CHECK(contains(flat.out, R"("provisional":true)"));
+
+  // The same level change with the volume five times over is a 5:1 split.
+  std::vector<Row> split = walk(200, 57.0, 0.01, 5.3e4, 25);
+  for (std::size_t i = 150; i < split.size(); ++i) {
+    scale_bar(split[i], 0.2);
+    split[i].volume *= 5.0;
+  }
+  const Result inverse = check_prices(to_csv("O", split));
+  CAPTURE(inverse.out);
+  CHECK(count_matching(inverse.out, R"("code":"DQ203")") == 1);
+
+  // A fund struck at NAV has no volume to judge by: its real 4:1 is DQ203.
+  std::vector<Row> nav = walk(200, 204.0, 0.006, 0.0, 26);
+  for (Row& row : nav) {
+    row.open = row.high = row.low = row.close;
+  }
+  for (std::size_t i = 150; i < nav.size(); ++i) {
+    scale_bar(nav[i], 0.25);
+  }
+  const Result fund = check_prices_with_meta(to_csv("1907", nav), "series,nav_priced\n1907,true\n");
+  CAPTURE(fund.out);
+  CHECK(count_matching(fund.out, R"("code":"DQ203")") == 1);
+}
+
+TEST_CASE("P4: a NAV fund's drop that holds, with no dividend on file, is a pending distribution") {
+  std::vector<Row> nav = walk(260, 19.8, 0.004, 0.0, 27);
+  for (Row& row : nav) {
+    row.open = row.high = row.low = row.close;
+  }
+  // 18% off from bar 258, holding to the end: a capital-gain distribution the
+  // actions file does not have yet.
+  for (std::size_t i = 258; i < nav.size(); ++i) {
+    scale_bar(nav[i], 0.8163);
+  }
+  const std::string csv = to_csv("7150", nav);
+  const Result fund = check_prices_with_meta(csv, "series,nav_priced\n7150,true\n", true);
+  CAPTURE(fund.out);
+  CHECK(count_matching(fund.out, R"("severity":"warn")") == 0);
+  CHECK(count_matching(fund.out, R"("severity":"error")") == 0);
+  CHECK(contains(fund.out, R"("code":"DQ209")"));
+  CHECK(contains(fund.out, R"("hypothesis":"pending_distribution")"));
+  CHECK(contains(fund.out, "likely a distribution not yet on file"));
+  CHECK(contains(fund.out, R"("suggested_action":{"kind":"check_distribution")"));
+
+  // Not NAV-priced (no metadata): the same drop is an error to report.
+  const Result plain = check_prices(csv);
+  CAPTURE(plain.out);
+  CHECK(count_matching(plain.out, R"("code":"DQ20)") == 1);
+
+  // A NAV fund's bad print that reverts is still a bad print.
+  std::vector<Row> spike = walk(260, 24.35, 0.004, 0.0, 28);
+  for (Row& row : spike) {
+    row.open = row.high = row.low = row.close;
+  }
+  scale_bar(spike[200], 0.85);
+  const Result back =
+      check_prices_with_meta(to_csv("7150", spike), "series,nav_priced\n7150,true\n");
+  CAPTURE(back.out);
+  CHECK(count_matching(back.out, R"("code":"DQ201")") == 1);
 }

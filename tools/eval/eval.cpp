@@ -55,6 +55,9 @@ struct Result {
   double p_error = 1.0;
   std::string message;
   std::vector<std::string> members;  // a DQ601 row's, from JSON results
+  // What the record_key adds to the date ("ratio=2:1"), from JSON results: two
+  // DQ601 rows on one date are two conditions.
+  std::string key;
 };
 
 // ---------------------------------------------------------------------------
@@ -292,6 +295,13 @@ std::vector<Result> read_json_results(const std::string& path) {
     result.message = r.string_or("message");
     if (const Json* detail = r.get("detail"); detail != nullptr) {
       result.members = split_ids(detail->string_or("members"));
+    }
+    if (const Json* key = record.get("record_key"); key != nullptr) {
+      for (const auto& [name, value] : key->members) {
+        if (name != "trade_date") {
+          result.key += (result.key.empty() ? "" : ";") + name + "=" + value.text;
+        }
+      }
     }
     results.push_back(std::move(result));
   }
@@ -923,10 +933,10 @@ int usage() {
 // date, the latest run's kept (fafnir's dedupe keeps one flag per condition).
 std::vector<Result> distinct(const std::vector<std::vector<Result>>& runs) {
   std::vector<Result> out;
-  std::map<std::tuple<std::string, std::string, std::int32_t>, std::size_t> seen;
+  std::map<std::tuple<std::string, std::string, std::int32_t, std::string>, std::size_t> seen;
   for (const std::vector<Result>& run : runs) {
     for (const Result& r : run) {
-      const auto key = std::make_tuple(r.code, r.series, r.first.days());
+      const auto key = std::make_tuple(r.code, r.series, r.first.days(), r.key);
       if (const auto it = seen.find(key); it != seen.end()) {
         out[it->second] = r;
       } else {

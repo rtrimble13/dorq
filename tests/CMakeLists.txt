@@ -46,7 +46,7 @@ dorq_cli_exit_test(fafnir-config 0 config show --config
 dorq_cli_exit_test(
   config-show-check-options 0 config show --config "${PROJECT_SOURCE_DIR}/priors/fafnir.toml" -
   --format fafnir --exit-zero --calendar-exchange NASDAQ --actions actions.csv --meta meta.csv
-  --as-of 2026-10-09)
+  --restore-actions before-actions.csv --as-of 2026-10-09 --since 2026-10-02)
 dorq_cli_exit_test(version-json 0 version --format json)
 dorq_cli_exit_test(list-checks 0 list-checks)
 dorq_cli_exit_test(explain 0 explain DQ101)
@@ -59,6 +59,26 @@ dorq_cli_exit_test(exit-zero 0 --isolated --exit-zero ${DATA}/bad_bars.csv)
 foreach(format text json jsonl csv fafnir)
   dorq_cli_exit_test(violations-${format} 1 --isolated --format ${format} ${DATA}/bad_bars.csv)
 endforeach()
+
+# dorq-eval on fafnir-format and jsonl results of two nights: distinct conditions
+# (DQ601's record_key ratio keeps two cohorts apart), a cohort label matched by its
+# members, applies_until against --input-time, and verified labels. Within an
+# expected line, "/" stands for the table's "|".
+function(dorq_eval_test name args expect)
+  add_test(NAME cli.${name}
+           COMMAND "${CMAKE_COMMAND}" "-DEVAL=$<TARGET_FILE:dorq-eval>" "-DARGS=${args}"
+                   "-DEXPECT=${expect}" -P "${CMAKE_CURRENT_SOURCE_DIR}/eval_test.cmake")
+endfunction()
+set(EVAL_ARGS
+    "--labels|${DATA}/eval/labels.jsonl|--results|${DATA}/eval/night-1.jsonl|--results|${DATA}/eval/night-2.jsonl"
+)
+dorq_eval_test(
+  eval-nights "${EVAL_ARGS}"
+  "night-1.jsonl / warn and above / 5 / 4 / 0.800 / 1 / 1 / 2 / 1 / 0.250 / 0.500|distinct conditions / warn and above / 6 / 5 / 0.833 / 2 / 1 / 2 / 1 / 0.400 / 0.600|distinct conditions / error / 4 / 4 / 1.000 / 2 / 1 / 1 / 0 / 0.500 / 0.750|verified labels (3) / warn and above / 6 / 4 / 0.667 / 1 / 1 / 2 / 2 / 0.250 / 0.500"
+)
+dorq_eval_test(
+  eval-input-time "${EVAL_ARGS}|--input-time|2026-10-14"
+  "distinct conditions / warn and above / 6 / 4 / 0.667 / 1 / 1 / 2 / 2 / 0.250 / 0.500")
 
 # The synthetic-data gate (DR-0308): precision and recall per check on dorq-synth
 # universes, against tools/synth/gates.txt.
