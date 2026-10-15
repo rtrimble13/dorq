@@ -59,7 +59,10 @@ With `--actions`:
   sometimes adjusted for the split already, and a reverse split draws a burst of
   trading, so the volume after may be anywhere from unchanged to the ratio. The
   move must still match the ratio within an ordinary move.
-- **Every split on file is judged against the bars** (DQ701–DQ704).
+- **Every split on file is judged against the bars** (DQ701–DQ704). Two rows at
+  the same ratio a few sessions apart, the bars moving once, are a duplicate
+  (DQ702, `delete_split`), and a misdated split is never re-dated onto a date that
+  holds its twin.
 - **A cash dividend on file explains the drop at its ex-date.** When dividends
   on file have ex-dates after one bar and on or before the next, the price model
   weighs `explained_dividend`: the move net of them, `close / (previous close −
@@ -71,7 +74,13 @@ With `--actions`:
   distributions on file is not DQ601.
 - **Dividends are checked** against the price and the series' other dividends
   (DQ705). A zero or negative amount is read and reported there, not refused:
-  fafnir's `core.corporate_action` allows a zero.
+  fafnir's `core.corporate_action` allows a zero. A dividend ten times the others
+  that the ex-date close fell by is corroborated (info), and a switch to daily
+  accruals is reported once.
+- **`--restore-actions F`** puts the actions back as they stood before repairs,
+  over `--actions`: for each series, ex-date and type the file names, its rows
+  replace the `--actions` rows, and a row marked `added_by_repair` only takes them
+  out (doc/labels.md).
 - A split the bars show but the file does not have is still DQ203.
 
 ## Metadata: `--meta`
@@ -95,6 +104,11 @@ Every column but `series` is optional, and a series may appear only once.
   decimals the prices are written to.
 - **`peer_group`**: siblings in a group that move by the same split ratio on the
   same day are evidence that each split (DQ601).
+- **`nav_priced`**: a fund struck once a day at NAV. Its fall of 2% to 35% that
+  holds, with no dividend on file to explain it, is likely a distribution the
+  actions file does not have yet (DQ209, `pending_distribution`;
+  doc/checks/DQ201.md). Its bars have no range or volume to judge by, so DQ203
+  needs none from it.
 
 ## Market reference: `--market`
 

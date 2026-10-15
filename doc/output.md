@@ -84,7 +84,7 @@ One JSON object per line. This is the record every machine format is built from:
  "detail":{"open":10,"high":9.5,"low":9,"close":10},
  "hypotheses":{},"evidence":[],"suggested_action":null,"provisional":false,
  "record_key":{"trade_date":"2024-01-03"},
- "dorq":{"version":"0.9.0","config_hash":"cc11cd4c3955a657"}}
+ "dorq":{"version":"0.10.0","config_hash":"803c581d98ba409a"}}
 ```
 
 A price check's record carries its model (wrapped the same way):
@@ -121,7 +121,7 @@ A price check's record carries its model (wrapped the same way):
 | `detail` | The check's own fields; see `doc/checks/` |
 | `hypotheses` | For a check that compares explanations: each one considered, with its posterior probability. `{}` otherwise |
 | `evidence` | The evidence terms: `feature`, `value`, `log_bf` (the log Bayes factor for the reported explanation against a real market move) and an optional `note`. `[]` otherwise |
-| `suggested_action` | What would fix it: `kind` (`delete_bars`, `refetch_bar`, `add_split`, `rescale`, `rescale_volume`, `split_history`, `redate_split`, `check_split`, `fix_split_ratio`, `fix_dividend`) and its fields, or `null`. dorq never changes data |
+| `suggested_action` | What would fix it: `kind` (`delete_bars`, `refetch_bar`, `add_split`, `rescale`, `rescale_volume`, `split_history`, `redate_split`, `check_split`, `delete_split`, `fix_split_ratio`, `fix_dividend`, `check_dividend_frequency`, `check_distribution`) and its fields, or `null`. dorq never changes data |
 | `provisional` | `true` when the violation was judged with fewer bars after it than the model needs; a later run may change it. Its severity is at most `warn` |
 | `record_key` | `{"trade_date": "..."}`, or `{"line": N}` when there is no date. A check that can report two rows for one series and date adds what tells them apart: DQ601 adds `"ratio"` (`{"trade_date": "2026-10-06", "ratio": "2:1"}`), since one date can hold a 2:1 cohort and a 3:2 one |
 | `dorq` | The version, and the hash of the settings that can change what is reported. `dorq config show`, given the run's options, prints it; [configuration.md](configuration.md#what-config_hash-covers) lists what it covers. A reference calendar counts by its content, not its path |
@@ -139,7 +139,7 @@ One object: the same records in a `violations` array, followed by a `summary`.
 {...}
 ],"summary":{"inputs":1,"series":2,"rows":6,"violations":6,
  "by_severity":{"error":5,"warn":1,"info":0},"by_code":{"DQ101":2,"DQ102":1,"DQ104":3},
- "dorq":{"version":"0.9.0","config_hash":"cc11cd4c3955a657"}}}
+ "dorq":{"version":"0.10.0","config_hash":"803c581d98ba409a"}}}
 ```
 
 `rows` counts every data row read, including rows skipped for an unusable date.

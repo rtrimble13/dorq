@@ -19,8 +19,8 @@ namespace dorq {
 // each makes some checks possible or sharper. See doc/context.md.
 
 // A split on file: `numerator` new shares for `denominator` old ones (a 2-for-1
-// split is 2 and 1, as fafnir's core.corporate_action stores it). Prices before
-// the ex-date are `denominator / numerator` times those after.
+// split is 2 and 1, as fafnir's core.corporate_action stores it). Prices from
+// the ex-date on are `denominator / numerator` times those before (price_factor).
 struct SplitAction {
   Date ex_date;
   double numerator = 1.0;
