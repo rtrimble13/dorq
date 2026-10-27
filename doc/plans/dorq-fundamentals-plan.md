@@ -1,8 +1,8 @@
 # Plan: fundamentals in dorq (milestone M9)
 
-- Status: **proposed** (2026-10-27). The questions in §11 need answers before work starts; each
-  has a recommended default. The work items in §9 are drafted as issues in
-  [dorq-fundamentals-issues.md](dorq-fundamentals-issues.md).
+- Status: **accepted** (2026-10-27). The questions in §11 are answered with their recommended
+  defaults. The work items in §9 are tracked as issues under
+  [DR-0900](https://github.com/rtrimble13/dorq/issues/14).
 - Scope: this repository, plus three items of integration work in `rtrimble13/fafnir`
   (DR-0912 to DR-0914), as M7 had.
 - Builds on: the [development plan](dorq-development-plan.md), whose principles (§1.3), engine
@@ -511,21 +511,21 @@ Sizes as in the development plan: S ≈ ½ day, M ≈ 1 to 2 days, L ≈ 3 to 5 
 
 | ID | Repo | Item | Size | Depends on | Status |
 |---|---|---|---|---|---|
-| DR-0900 | dorq | Tracking issue for M9 | | | ⬜ |
-| DR-0901 | dorq | ADR 0005; the statements input kind: reader, data model, `--items`, `[statements]` config, engine path, `--since` and `--as-of` | L | | ⬜ |
-| DR-0902 | dorq | Statement findings in every output format: keys, `record_key`, per-finding `table_name`, text lines | M | 0901 | ⬜ |
-| DR-0903 | dorq | dorq-synth statements: companies, faults, hard negatives, gate | L | 0901 | ⬜ |
-| DR-0904 | dorq | DQ901 statement-key, DQ902 impossible-value | M | 0902 | ⬜ |
-| DR-0905 | dorq | DQ903 identity-break, DQ904 period-tie; SF1's identities in `priors/fafnir-statements.toml`; v0.11.0 | L | 0903, 0904 | ⬜ |
-| DR-0906 | dorq | The statement value model: DQ911 bad-value, DQ912 unit-error, DQ913 sign-error, DQ919 large-change | L | 0905 | ⬜ |
-| DR-0907 | dorq | Quarterly structure: DQ914 copied-period, DQ915 absent-as-zero, DQ916 cumulative-quarters | M | 0906 | ⬜ |
-| DR-0908 | dorq | Share terms: DQ921 share-terms-step, DQ922 share-count-mismatch; v0.12.0 | M | 0906 | ⬜ |
-| DR-0909 | dorq | The knowledge timeline and revisions: DQ931, DQ932, DQ951 | L | 0906 | ⬜ |
-| DR-0910 | dorq | Coverage and freshness: DQ941 to DQ944, the new `--meta` fields, series known only from the meta; v0.13.0 | L | 0902 | ⬜ |
-| DR-0911 | dorq | Labels, calibration and dorq-eval for statements; fit on fafnir's labels; v0.14.0 | M | 0906 to 0910, 0913 | ⬜ |
-| DR-0912 | fafnir | Export, run and ingest statements; shadow; `dq compare`; recheck | L | 0902 (v0.11.0) | ⬜ |
-| DR-0913 | fafnir | Fundamentals labels (corrections, closures, stated); playbooks, tiers, `NEVER_AUTO_RESOLVE` | M | 0912 | ⬜ |
-| DR-0914 | fafnir | Statements shadow period, go/no-go, cutover; the SQL checks retire | M | 0911, 0912, 0913 | ⬜ |
+| [DR-0900](https://github.com/rtrimble13/dorq/issues/14) | dorq | Tracking issue for M9 | | | ⬜ |
+| [DR-0901](https://github.com/rtrimble13/dorq/issues/15) | dorq | ADR 0005; the statements input kind: reader, data model, `--items`, `[statements]` config, engine path, `--since` and `--as-of` | L | | ⬜ |
+| [DR-0902](https://github.com/rtrimble13/dorq/issues/16) | dorq | Statement findings in every output format: keys, `record_key`, per-finding `table_name`, text lines | M | 0901 | ⬜ |
+| [DR-0903](https://github.com/rtrimble13/dorq/issues/17) | dorq | dorq-synth statements: companies, faults, hard negatives, gate | L | 0901 | ⬜ |
+| [DR-0904](https://github.com/rtrimble13/dorq/issues/18) | dorq | DQ901 statement-key, DQ902 impossible-value | M | 0902 | ⬜ |
+| [DR-0905](https://github.com/rtrimble13/dorq/issues/19) | dorq | DQ903 identity-break, DQ904 period-tie; SF1's identities in `priors/fafnir-statements.toml`; v0.11.0 | L | 0903, 0904 | ⬜ |
+| [DR-0906](https://github.com/rtrimble13/dorq/issues/20) | dorq | The statement value model: DQ911 bad-value, DQ912 unit-error, DQ913 sign-error, DQ919 large-change | L | 0905 | ⬜ |
+| [DR-0907](https://github.com/rtrimble13/dorq/issues/21) | dorq | Quarterly structure: DQ914 copied-period, DQ915 absent-as-zero, DQ916 cumulative-quarters | M | 0906 | ⬜ |
+| [DR-0908](https://github.com/rtrimble13/dorq/issues/22) | dorq | Share terms: DQ921 share-terms-step, DQ922 share-count-mismatch; v0.12.0 | M | 0906 | ⬜ |
+| [DR-0909](https://github.com/rtrimble13/dorq/issues/23) | dorq | The knowledge timeline and revisions: DQ931, DQ932, DQ951 | L | 0906 | ⬜ |
+| [DR-0910](https://github.com/rtrimble13/dorq/issues/24) | dorq | Coverage and freshness: DQ941 to DQ944, the new `--meta` fields, series known only from the meta; v0.13.0 | L | 0902 | ⬜ |
+| [DR-0911](https://github.com/rtrimble13/dorq/issues/25) | dorq | Labels, calibration and dorq-eval for statements; fit on fafnir's labels; v0.14.0 | M | 0906 to 0910, 0913 | ⬜ |
+| [DR-0912](https://github.com/rtrimble13/fafnir/issues/219) | fafnir | Export, run and ingest statements; shadow; `dq compare`; recheck | L | 0902 (v0.11.0) | ⬜ |
+| [DR-0913](https://github.com/rtrimble13/fafnir/issues/220) | fafnir | Fundamentals labels (corrections, closures, stated); playbooks, tiers, `NEVER_AUTO_RESOLVE` | M | 0912 | ⬜ |
+| [DR-0914](https://github.com/rtrimble13/fafnir/issues/221) | fafnir | Statements shadow period, go/no-go, cutover; the SQL checks retire | M | 0911, 0912, 0913 | ⬜ |
 
 ## 10. Deferred, not planned
 
@@ -539,14 +539,16 @@ Sizes as in the development plan: S ≈ ½ day, M ≈ 1 to 2 days, L ≈ 3 to 5 
 - **Cross-vendor statements** (DQ801 for statements). No second vendor writes statements.
 - Segments, and SF2 and SF3 (insiders, holdings).
 
-## 11. Questions for sign-off
+## 11. Questions (answered 2026-10-27)
 
-| # | Question | Recommended default |
+Each question was answered with its recommended default.
+
+| # | Question | Decision |
 |---|---|---|
-| F1 | Give DQ9xx to statements, with sub-families by the tens digit (ADR 0005)? | Yes |
-| F2 | Judge the first-reported view as well as the in-force view (§2.2)? | Yes: the first-reported view is what a backtest reads |
-| F3 | Take the taxonomy from fafnir's table as a context file (`--items`), and keep the identities in dorq's config? | Yes |
-| F4 | Run the full statements history every night, if it takes under 2 minutes? | Yes; otherwise the securities with a row loaded since the previous run |
-| F5 | Judge the cutover on an EDGAR-verified sample of a full run, rather than on 20 nightly sessions' labels alone (§6)? | Yes: SF1's delta is about 1,100 rows over four days, too few to judge by |
-| F6 | At cutover, move `fundamentals_unmapped_fields` into the loader, and drop the nightly `fundamentals_restatement` flag to info? | Yes |
-| F7 | Run M9 alongside the price cutover (DR-0707) rather than after it? | Yes: §2.6 keeps the bars runs unchanged |
+| F1 | Give DQ9xx to statements, with sub-families by the tens digit (ADR 0005)? | **Yes** |
+| F2 | Judge the first-reported view as well as the in-force view (§2.2)? | **Yes.** The first-reported view is what a backtest reads |
+| F3 | Take the taxonomy from fafnir's table as a context file (`--items`), and keep the identities in dorq's config? | **Yes.** An identity that names an item the items file lacks is a configuration error (exit 2), not a skipped identity: fafnir cannot rename a column without a migration, so the failure is never a surprise |
+| F4 | Run the full statements history every night, if it takes under 2 minutes? | **Yes.** Otherwise, the whole history of each security with a row loaded since the previous run |
+| F5 | Judge the cutover on an EDGAR-verified sample of a full run, rather than on 20 nightly sessions' labels alone (§6)? | **Yes.** SF1's delta is about 1,100 rows over four days, too few to judge by. The 20 nightly sessions remain, as a stability check |
+| F6 | At cutover, move `fundamentals_unmapped_fields` into the loader, and drop the nightly `fundamentals_restatement` flag to info? | **Yes** |
+| F7 | Run M9 alongside the price cutover (DR-0707) rather than after it? | **Yes.** §2.6 keeps the bars runs unchanged. A release whose bars output is unchanged, version fields aside, does not restart the price shadow period |
