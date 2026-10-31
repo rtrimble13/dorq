@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "dorq/calendar.hpp"
+#include "dorq/date.hpp"
 #include "dorq/frequency.hpp"
 #include "dorq/series.hpp"
 #include "dorq/violation.hpp"
@@ -253,6 +254,63 @@ struct SeverityThresholds {
   [[nodiscard]] std::optional<Severity> for_probability(double p) const noexcept;
 };
 
+// A term of an identity: a line item, added or subtracted.
+struct IdentityTerm {
+  std::string item;
+  bool negative = false;
+  bool operator==(const IdentityTerm&) const = default;
+};
+
+// A named accounting identity over line items (doc/statements.md): the left side's
+// terms sum to the right side's, as "total_assets = total_liabilities +
+// total_equity_parent".
+struct Identity {
+  std::string name;
+  std::vector<IdentityTerm> left;
+  std::vector<IdentityTerm> right;
+
+  // The equation, written with single spaces: "a = b + c - d".
+  [[nodiscard]] std::string to_string() const;
+  bool operator==(const Identity&) const = default;
+};
+
+// Parses an identity's equation: item names joined by + and -, with one '='
+// between the two sides. Returns an error message, or empty.
+[[nodiscard]] std::string parse_identity(std::string_view text, Identity& out);
+
+// One line item at most another, as "total_current_assets <= total_assets".
+struct ItemBound {
+  std::string lesser;
+  std::string greater;
+
+  [[nodiscard]] std::string to_string() const;  // "a <= b"
+  bool operator==(const ItemBound&) const = default;
+};
+
+// Parses "a <= b". Returns an error message, or empty.
+[[nodiscard]] std::string parse_item_bound(std::string_view text, ItemBound& out);
+
+// [statements]: the judgements the statement checks make (doc/statements.md). What
+// an item is comes from --items; these are the settings a check applies to them.
+// Global, not per profile.
+struct StatementSettings {
+  std::vector<Identity> identities;       // sorted by name
+  std::vector<std::string> nonnegative;   // items that cannot be negative
+  std::vector<std::string> never_absent;  // items a reporting company always carries
+  std::vector<ItemBound> bounds;          // items at most others
+  double identity_share = 0.005;          // an identity holds within this share of its scale
+  double tie_floor = 1e6;                 // or within this much of the reporting currency
+  double cash_tie_share = 0.02;           // the change in cash, within this share of the balance
+  std::pair<int, int> quarter_spacing = {56, 126};   // days between consecutive quarter ends
+  std::pair<int, int> year_spacing = {300, 430};     // and year ends
+  Date coverage_floor = Date::from_ymd(1998, 1, 1);  // no period is expected before this
+
+  // Each line item the settings name, with where: ("identities.balance_sheet",
+  // "total_assets"), for checking them against --items.
+  [[nodiscard]] std::vector<std::pair<std::string, std::string>> named_items() const;
+  bool operator==(const StatementSettings&) const = default;
+};
+
 struct SeriesMeta;
 
 // Settings that apply to the series a profile matches. Profiles are applied in
@@ -307,6 +365,10 @@ struct Config {
   std::string calendar_exchange;
   std::vector<Profile> profiles;  // sorted by name
   std::string fafnir_table = "core.daily_price";
+  StatementSettings statements;
+  // A digest of the --items file's content, when one is given: config_hash covers
+  // it, as it covers a reference calendar's (ADR 0005).
+  std::string items_digest;
   // [calibration] version: names the calibration in use (`dorq calibrate`).
   std::string calibration_version;
 

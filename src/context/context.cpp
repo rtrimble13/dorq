@@ -143,6 +143,22 @@ const SeriesMeta* Context::meta_for(const Series& series) const {
   return nullptr;
 }
 
+const LineItem* Context::item(std::string_view column) const {
+  const auto it = std::find_if(items.begin(), items.end(), [column](const LineItem& item) {
+    return iequals(item.column, column);
+  });
+  return it != items.end() ? &*it : nullptr;
+}
+
+std::vector<std::string> Context::item_names() const {
+  std::vector<std::string> names;
+  names.reserve(items.size());
+  for (const LineItem& item : items) {
+    names.push_back(item.column);
+  }
+  return names;
+}
+
 namespace {
 
 // One usable row of an actions file.
@@ -379,6 +395,92 @@ void read_meta(std::istream& in, const std::string& source, Context& context) {
         meta.peer_group = std::string{cell(fields, peer_col)};
         meta.exchange = std::string{cell(fields, exchange_col)};
         context.meta.emplace(id, std::move(meta));
+      });
+}
+
+void read_items(std::istream& in, const std::string& source, Context& context) {
+  constexpr std::array<std::string_view, 4> kColumn = {"column", "columnname", "item", "itemname"};
+  constexpr std::array<std::string_view, 1> kStatement = {"statement"};
+  constexpr std::array<std::string_view, 2> kClass = {"itemclass", "class"};
+  constexpr std::array<std::string_view, 2> kSign = {"signconvention", "sign"};
+  constexpr std::array<std::string_view, 2> kSubtotal = {"issubtotal", "subtotal"};
+  int column_col = -1;
+  int statement_col = -1;
+  int class_col = -1;
+  int sign_col = -1;
+  int subtotal_col = -1;
+  context.have_items = true;
+  const std::string name = file_name(source);
+  read_table(
+      in, source,
+      [&](const std::vector<std::string>& names, std::uint32_t line) {
+        column_col = find_column(names, kColumn);
+        statement_col = find_column(names, kStatement);
+        class_col = find_column(names, kClass);
+        sign_col = find_column(names, kSign);
+        subtotal_col = find_column(names, kSubtotal);
+        if (column_col < 0 || statement_col < 0 || class_col < 0 || sign_col < 0) {
+          fail(source, line,
+               "an items file needs column, statement, item_class and sign_convention columns "
+               "(as ref.statement_line_item has them)");
+        }
+      },
+      [&](Row fields, std::uint32_t line) {
+        // An item left out is a column the statements' checks do not read: at
+        // error, as for a split on file.
+        const std::string column{cell(fields, column_col)};
+        const auto skip = [&](const std::string& what, Severity severity) {
+          context.issues.push_back({.series = {},
+                                    .source = name,
+                                    .line = line,
+                                    .date = std::nullopt,
+                                    .severity = severity,
+                                    .message = what});
+        };
+        if (column.empty()) {
+          skip("the item's column is empty; the row is skipped", Severity::kError);
+          return;
+        }
+        if (context.item(column) != nullptr) {
+          skip("item \"" + column + "\" appears twice; the row is skipped, and the first kept",
+               Severity::kWarn);
+          return;
+        }
+        const std::string_view statement_text = cell(fields, statement_col);
+        const std::string_view class_text = cell(fields, class_col);
+        const std::string_view sign_text = cell(fields, sign_col);
+        const auto statement = parse_statement(statement_text);
+        const auto item_class = parse_item_class(class_text);
+        const auto sign = parse_sign_convention(sign_text);
+        std::string problem;
+        if (!statement) {
+          problem = "statement \"" + std::string{statement_text} +
+                    "\" is not income, balance_sheet or cash_flow";
+        } else if (!item_class) {
+          problem = "item_class \"" + std::string{class_text} +
+                    "\" is not flow, stock, share_count, per_share or memo";
+        } else if (!sign) {
+          problem = "sign_convention \"" + std::string{sign_text} +
+                    "\" is not positive_is_inflow, positive_is_outflow or signed";
+        }
+        if (!problem.empty()) {
+          skip("item \"" + column + "\": " + problem + "; the row is skipped", Severity::kError);
+          return;
+        }
+        LineItem item{.column = column,
+                      .statement = *statement,
+                      .item_class = *item_class,
+                      .sign = *sign,
+                      .is_subtotal = false,
+                      .line = line};
+        if (const std::string_view subtotal = cell(fields, subtotal_col); !subtotal.empty()) {
+          if (!parse_bool(subtotal, item.is_subtotal)) {
+            skip("item \"" + column + "\": is_subtotal \"" + std::string{subtotal} +
+                     "\" is not true or false; it is left false",
+                 Severity::kWarn);
+          }
+        }
+        context.items.push_back(std::move(item));
       });
 }
 

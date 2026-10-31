@@ -40,7 +40,12 @@ Lines and JSON arrays, and reports in five formats. It runs:
   (`--actions`), which explain the moves at splits and cash dividends on file
   and check the splits against the bars (DQ7xx); series metadata (`--meta`), which profiles match on and which lets a
   fund family's shared split count as evidence (DQ601); and a market reference
-  (`--market`), net of which every move is judged (DQ602).
+  (`--market`), net of which every move is judged (DQ602);
+- financial statements, the third input kind, for milestone M9 (fundamentals):
+  every version of each period on its knowledge timeline, with `--items` naming
+  the line items ([doc/statements.md](doc/statements.md)). The statement checks
+  (DQ9xx) arrive item by item ([the plan](doc/plans/dorq-fundamentals-plan.md));
+  so far DQ104 reports the rows and values that cannot be used.
 
 `dorq calibrate` fits the price model's priors and its `p_error` map to labelled
 history: fafnir's own repair decisions ([doc/calibration.md](doc/calibration.md),
@@ -110,13 +115,16 @@ dorq config show --calendar-file s.csv       # with check's options: the hash th
 dorq config init                             # write a starter dorq.toml
 dorq calibrate prices.csv --labels labels.jsonl --out priors.toml   # fit priors to labels
 dorq --actions a.csv --restore-actions before.csv prices.csv   # actions as they stood before repairs
+dorq --items items.csv statements.csv        # financial statements (doc/statements.md)
 ```
 
 Input is long format, one row per series and date. Columns are found by name,
 ignoring case and punctuation: `date`/`trade_date`, `open`, `high`, `low`,
 `close`, `volume`, `series`/`security_id`, `symbol`, `value`, and so on. Bars
 need open, high, low and close; a series with only a value column is a point
-series. When the names don't match, use `--columns date=asof,value=DGS10`.
+series. A file with `statement`, `period_type` and `fiscal_date` columns is
+statements, one row per version of each period ([doc/statements.md](doc/statements.md)).
+When the names don't match, use `--columns date=asof,value=DGS10`.
 [doc/configuration.md](doc/configuration.md) covers columns, the config file and
 profiles. [doc/calendar.md](doc/calendar.md) covers the built-in calendars and
 reference files. [doc/context.md](doc/context.md) covers the actions, metadata and market files. [doc/output.md](doc/output.md) covers each output format,

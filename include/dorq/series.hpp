@@ -2,23 +2,28 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "dorq/date.hpp"
+#include "dorq/statement.hpp"
 
 namespace dorq {
 
 enum class SeriesKind : std::uint8_t {
-  kOhlcv,  // bars: open, high, low, close, and usually volume
-  kPoint,  // one value per date: a rate, a NAV, an index level
+  kOhlcv,       // bars: open, high, low, close, and usually volume
+  kPoint,       // one value per date: a rate, a NAV, an index level
+  kStatements,  // financial statements: versions of periods (doc/statements.md)
 };
 
 [[nodiscard]] std::string_view to_string(SeriesKind kind) noexcept;
 
 // The fields a row can carry. A point series stores its value in `close`, and
-// names it `value` in everything it reports.
+// names it `value` in everything it reports. A statements row's date is its
+// fiscal date; the fields after kVwap are statements' only, and kItem stands for
+// any line item (FieldIssue::column names which).
 enum class Field : std::uint8_t {
   kSeries,
   kLabel,
@@ -28,7 +33,19 @@ enum class Field : std::uint8_t {
   kLow,
   kClose,
   kVolume,
-  kVwap
+  kVwap,
+  kStatement,
+  kPeriodType,
+  kFiscalYear,
+  kFiscalPeriod,
+  kVersion,
+  kKnownFrom,
+  kKnownTo,
+  kKnowledgeSource,
+  kFilingDate,
+  kLoadedOn,
+  kCurrency,
+  kItem,
 };
 
 [[nodiscard]] std::string_view field_name(Field field, SeriesKind kind) noexcept;
@@ -45,6 +62,11 @@ struct FieldIssue {
   // series at all, and is known only by its line.
   bool has_date = false;
   Date date;
+  std::string column;      // the line item's column, when field is kItem
+  bool skips_row = false;  // the row could not be used, and is not in the series
+  // Statements: the newest of the row's known_from and loaded_on, when it has
+  // them (what --since judges a statement finding by).
+  std::optional<Date> known;
 };
 
 // One series, as columns. Rows are sorted by date (ties keep input order) by the
@@ -68,8 +90,11 @@ struct Series {
   std::vector<std::uint8_t> close_decimals;
   std::vector<std::uint8_t> close_sig_figs;
   std::vector<std::uint32_t> line;
+  // A statements series' own columns; empty for the other kinds.
+  StatementRows statements;
 
   std::vector<FieldIssue> issues;
+  std::size_t skipped_rows = 0;  // rows read but not used: each has an issue that skips it
 
   [[nodiscard]] std::size_t size() const noexcept { return date.size(); }
   // The name to show people: the label when there is one.
@@ -78,7 +103,8 @@ struct Series {
   }
 };
 
-// Sorts rows by date, keeping input order among equal dates.
+// Sorts rows by date, keeping input order among equal dates. A statements series
+// is sorted by fiscal date, then statement, period type and version.
 void sort_by_date(Series& series);
 
 }  // namespace dorq

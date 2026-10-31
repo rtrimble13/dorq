@@ -116,7 +116,7 @@ const CheckInfo& NonPositive::info() const noexcept {
       .name = "non-positive",
       .summary = "a price at or below zero, or a negative volume",
       .default_severity = Severity::kError,
-      .applies = Applies::kAny,
+      .applies = Applies::kTimeSeries,
   };
   return kInfo;
 }
@@ -169,7 +169,7 @@ const CheckInfo& DuplicateDate::info() const noexcept {
       .name = "duplicate-date",
       .summary = "more than one row for a date (error when they disagree)",
       .default_severity = Severity::kError,
-      .applies = Applies::kAny,
+      .applies = Applies::kTimeSeries,
   };
   return kInfo;
 }
@@ -222,21 +222,62 @@ const CheckInfo& MissingField::info() const noexcept {
   static const CheckInfo kInfo{
       .code = "DQ104",
       .name = "missing-field",
-      .summary = "an empty or unparseable value (a row with no usable date is skipped)",
+      .summary =
+          "an empty or unparseable value (a row with no usable date, or statement key, is "
+          "skipped)",
       .default_severity = Severity::kError,
-      .applies = Applies::kAny,
+      .applies = Applies::kEveryKind,
   };
   return kInfo;
 }
 
+namespace {
+
+// What a field that does not parse should have been.
+std::string_view expected_value(Field field) {
+  switch (field) {
+    case Field::kDate:
+    case Field::kKnownFrom:
+    case Field::kKnownTo:
+    case Field::kFilingDate:
+    case Field::kLoadedOn:
+      return "a date";
+    case Field::kVersion:
+      return "a version number (1 or more)";
+    case Field::kFiscalYear:
+      return "a year";
+    case Field::kStatement:
+      return "income, balance_sheet or cash_flow";
+    case Field::kPeriodType:
+      return "quarter or annual";
+    case Field::kFiscalPeriod:
+      return "FY or Q1 to Q4";
+    case Field::kKnowledgeSource:
+      return "filed, observed or estimated";
+    default:
+      return "a number";
+  }
+}
+
+}  // namespace
+
 void MissingField::run(const SeriesContext& context, std::vector<Violation>& out) const {
   const Series& s = context.series;
+  const bool statements = s.kind == SeriesKind::kStatements;
   const auto required = [&s](Field field) {
     if (field == Field::kClose || field == Field::kDate) {
       return true;
     }
     return s.kind == SeriesKind::kOhlcv &&
            (field == Field::kOpen || field == Field::kHigh || field == Field::kLow);
+  };
+  // Statements: a row without its key or known_from is skipped (error), and so is
+  // a line item that is not a number; the other fields are left unset (warn).
+  const auto statement_severity = [](const FieldIssue& issue) {
+    return issue.skips_row ||
+                   (issue.field == Field::kItem && issue.kind == FieldIssue::Kind::kInvalid)
+               ? Severity::kError
+               : Severity::kWarn;
   };
   std::size_t i = 0;
   while (i < s.issues.size()) {
@@ -251,21 +292,30 @@ void MissingField::run(const SeriesContext& context, std::vector<Violation>& out
     if (s.issues[i].has_date) {
       v.date = s.issues[i].date;
     }
+    v.known = s.issues[i].known;
     std::string fields;
     for (std::size_t j = i; j < end; ++j) {
       const FieldIssue& issue = s.issues[j];
-      const std::string name{field_name(issue.field, s.kind)};
+      const std::string name =
+          issue.field == Field::kItem ? issue.column : std::string{field_name(issue.field, s.kind)};
       fields += (j == i ? "" : ",") + name;
       Severity severity = Severity::kError;
       std::string part;
       if (issue.kind == FieldIssue::Kind::kInvalid) {
-        part = name + " \"" + issue.text + "\" is not " +
-               (issue.field == Field::kDate ? "a date" : "a number");
+        part = name + " \"" + issue.text + "\" is not " + std::string{expected_value(issue.field)};
       } else {
         part = name + (issue.text.empty() ? " is empty" : " is \"" + issue.text + "\"");
         severity = required(issue.field) ? Severity::kError : Severity::kWarn;
       }
-      if (issue.field == Field::kDate) {
+      if (statements) {
+        severity = statement_severity(issue);
+      }
+      // A row's issues say once that it is skipped, after the last field that skips it.
+      const bool last_skip =
+          issue.skips_row && std::none_of(s.issues.begin() + static_cast<std::ptrdiff_t>(j) + 1,
+                                          s.issues.begin() + static_cast<std::ptrdiff_t>(end),
+                                          [](const FieldIssue& later) { return later.skips_row; });
+      if (last_skip) {
         part += "; the row is skipped";
       }
       append_part(v.message, part);
@@ -287,7 +337,7 @@ const CheckInfo& PrecisionShift::info() const noexcept {
       .name = "precision-shift",
       .summary = "the precision closes are written with changes regime (computed vs quoted prices)",
       .default_severity = Severity::kWarn,
-      .applies = Applies::kAny,
+      .applies = Applies::kTimeSeries,
   };
   return kInfo;
 }
@@ -581,7 +631,7 @@ const CheckInfo& OutOfBounds::info() const noexcept {
       .name = "out-of-bounds",
       .summary = "a value outside the range configured for the series ([integrity] bounds)",
       .default_severity = Severity::kError,
-      .applies = Applies::kAny,
+      .applies = Applies::kTimeSeries,
   };
   return kInfo;
 }
@@ -615,9 +665,10 @@ const CheckInfo& BadContextRow::info() const noexcept {
   static const CheckInfo kInfo{
       .code = "DQ109",
       .name = "bad-context-row",
-      .summary = "a row of an --actions or --meta file that cannot be used: skipped, not fatal",
+      .summary =
+          "a row of an --actions, --meta or --items file that cannot be used: skipped, not fatal",
       .default_severity = Severity::kError,
-      .applies = Applies::kAny,
+      .applies = Applies::kEveryKind,
       .cross_sectional = true,
   };
   return kInfo;

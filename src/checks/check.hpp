@@ -14,6 +14,7 @@
 #include "dorq/series.hpp"
 #include "dorq/violation.hpp"
 #include "price/model.hpp"
+#include "statements/views.hpp"
 
 namespace dorq {
 
@@ -38,6 +39,8 @@ struct SeriesContext {
   bool have_actions = false;
   const SeriesActions* actions = nullptr;
   const SeriesMeta* meta = nullptr;
+  // A statements series' views (ADR 0005), built once; nullptr for the other kinds.
+  const StatementViews* statements = nullptr;
 
   // The exchange tick from --meta, if given.
   [[nodiscard]] std::optional<double> meta_tick() const noexcept {

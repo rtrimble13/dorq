@@ -1,0 +1,6 @@
+column,statement,item_class,sign_convention,is_subtotal
+revenue,income,flow,positive_is_inflow,false
+total_assets,core.balance_sheet,stock,signed,true
+revenue,income,flow,signed,false
+weird,income,vibe,signed,false
+,income,flow,signed,maybe

@@ -1,0 +1,6 @@
+security_id,symbol,statement,period_type,fiscal_date,fiscal_year,fiscal_period,version_no,known_from,known_to,knowledge_source,filing_date,loaded_at,reported_currency,close,revenue,net_income,total_assets
+101,AAA,income,quarter,2024-03-31,2024,Q1,1,2024-05-02,2026-10-25,filed,2024-05-02,2026-10-25 03:12:45+00,USD,25.1,1000000,120000,
+101,AAA,income,quarter,2024-03-31,2024,Q1,2,2026-10-25,,observed,,2026-10-25,USD,31.4,1010000,121000,
+101,AAA,balance_sheet,quarter,2024-03-31,2024,Q1,1,2024-05-02,,filed,2024-05-02,2026-10-25,USD,25.1,,,5000000
+101,AAA,income,quarter,2024-06-30,2024,Q5,0,,soon,guessed,,,USD,n/a,abc,0,
+102,BBB,cash_flow,annual,2023-12-31,2023,FY,1,2024-02-20,,filed,2024-02-20,2026-10-25,EUR,,,,

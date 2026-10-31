@@ -44,4 +44,32 @@ std::string_view to_string(Classification classification) noexcept {
   return "data_error";
 }
 
+bool applies_to(Applies applies, SeriesKind kind) noexcept {
+  switch (applies) {
+    case Applies::kTimeSeries:
+      return kind != SeriesKind::kStatements;
+    case Applies::kOhlcvOnly:
+      return kind == SeriesKind::kOhlcv;
+    case Applies::kStatements:
+      return kind == SeriesKind::kStatements;
+    case Applies::kEveryKind:
+      return true;
+  }
+  return false;
+}
+
+std::string_view to_string(Applies applies) noexcept {
+  switch (applies) {
+    case Applies::kTimeSeries:
+      return "ohlcv,point";
+    case Applies::kOhlcvOnly:
+      return "ohlcv";
+    case Applies::kStatements:
+      return "statements";
+    case Applies::kEveryKind:
+      return "all";
+  }
+  return "ohlcv,point";
+}
+
 }  // namespace dorq

@@ -1,5 +1,5 @@
-// libFuzzer target: arbitrary bytes as an actions file, a metadata file or a
-// labels file (the first byte chooses). A bad file must be an InputError and
+// libFuzzer target: arbitrary bytes as an actions file, a metadata file, a
+// labels file or an items file (the first byte chooses). A bad file must be an InputError and
 // nothing else. The actions and metadata of a good one then go through the price
 // model and every check, on a fixed series, and its skipped rows through DQ109;
 // the labels' removed dates go through --restore. Nothing may crash or trip a
@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -61,7 +62,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   }
   static const dorq::Series kSeries = make_series();
   static const dorq::Calendar kCalendar;
-  const unsigned mode = data[0] % 4U;
+  const unsigned mode = data[0] % 5U;
   const bool actions = mode == 1 || mode == 3;
   std::istringstream in(std::string(reinterpret_cast<const char*>(data + 1), size - 1));
   if (mode == 2) {
@@ -85,6 +86,14 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
       dorq::restore_actions(in, "fuzz", context);
     } else if (actions) {
       dorq::read_actions(in, "fuzz", context);
+    } else if (mode == 4) {
+      // --items: its rows, and the column names the reader would take as items.
+      dorq::read_items(in, "fuzz", context);
+      for (const std::string& name : context.item_names()) {
+        if (context.item(name) == nullptr) {
+          std::abort();  // an item read is not found by its name
+        }
+      }
     } else {
       dorq::read_meta(in, "fuzz", context);
     }
