@@ -9,6 +9,7 @@
 
 #include <doctest/doctest.h>
 
+#include "checks/check.hpp"
 #include "config/config.hpp"
 #include "context/context.hpp"
 #include "dorq/date.hpp"
@@ -16,6 +17,7 @@
 #include "io/columns.hpp"
 #include "io/input_error.hpp"
 #include "io/reader.hpp"
+#include "output/writer.hpp"
 #include "statements/views.hpp"
 #include "test_support.hpp"
 
@@ -410,8 +412,9 @@ TEST_CASE("statements through the CLI: DQ104, --since, --items and no bars check
   const Result all = run_in(dir.path(), {"--isolated", "--show-info", s_csv});
   CHECK(all.status == kViolations);
   CHECK(count_matching(all.out, "DQ104") == 2);
-  CHECK(contains(all.out,
-                 R"(AAA  2024-06-30  DQ104 error  missing-field  net_income "x" is not a number)"));
+  CHECK(contains(
+      all.out,
+      R"(AAA  2024-06-30 Q2 FY2024 income v1  DQ104 error  missing-field  net_income "x" is not a number)"));
   CHECK(contains(all.out, "known_from is empty; the row is skipped"));
   CHECK_FALSE(contains(all.out, "DQ103"));
   CHECK_FALSE(contains(all.out, "DQ105"));
@@ -470,4 +473,215 @@ TEST_CASE("statements: a series is one kind, and list-checks names the kinds") {
   const Result json = run_in(dir.path(), {"list-checks", "--format", "json"});
   CHECK(contains(json.out,
                  R"("code":"DQ104","name":"missing-field","severity":"error","applies":"all")"));
+}
+
+// DR-0902: statement findings in every output format.
+
+namespace {
+
+dorq::Violation finding(const char* date, std::optional<dorq::StatementPeriod> period,
+                        const char* item = nullptr, std::uint32_t line = 0) {
+  dorq::Violation v;
+  v.check = &dorq::find_check("DQ104")->info();
+  v.message = "m";
+  if (date != nullptr) {
+    v.date = day(date);
+  }
+  v.line = line;
+  v.period = std::move(period);
+  if (item != nullptr) {
+    v.key.push_back({"item", std::string{item}});
+  }
+  return v;
+}
+
+dorq::StatementPeriod period(dorq::Statement statement, dorq::PeriodType type, int year,
+                             dorq::FiscalPeriod fiscal, std::optional<std::int32_t> version) {
+  return {.statement = statement,
+          .period_type = type,
+          .fiscal_year = year,
+          .fiscal_period = fiscal,
+          .version = version};
+}
+
+std::string written(dorq::OutputFormat format, const std::vector<dorq::SeriesResult>& results,
+                    const dorq::WriterOptions& options = {}) {
+  std::ostringstream out;
+  const auto writer = dorq::make_writer(format, out, options);
+  writer->begin();
+  for (const dorq::SeriesResult& result : results) {
+    writer->series(result);
+  }
+  writer->end(dorq::Summary{});
+  return out.str();
+}
+
+dorq::SeriesResult statements_result() {
+  using dorq::FiscalPeriod;
+  using dorq::PeriodType;
+  using dorq::Statement;
+  dorq::SeriesResult r;
+  r.id = "101";
+  r.label = "AAA";
+  r.source = "s.csv";
+  r.kind = SeriesKind::kStatements;
+  const auto q1 = [](std::optional<std::int32_t> v) {
+    return period(Statement::kIncome, PeriodType::kQuarter, 2024, FiscalPeriod::kQ1, v);
+  };
+  r.violations.push_back(finding("2024-03-31", q1(1), "revenue", 4));
+  r.violations.push_back(finding("2024-03-31", q1(1), "net_income", 4));
+  r.violations.push_back(finding("2024-03-31", q1(2), "revenue", 5));
+  r.violations.push_back(finding("2024-03-31", q1(std::nullopt)));
+  r.violations.push_back(finding("2023-12-31", period(Statement::kBalanceSheet, PeriodType::kAnnual,
+                                                      2023, FiscalPeriod::kFY, 1)));
+  r.violations.push_back(finding("2023-06-30", period(Statement::kCashFlow, PeriodType::kQuarter, 0,
+                                                      FiscalPeriod::kUnknown, 3)));
+  r.violations.push_back(finding("2024-06-30", std::nullopt, nullptr, 6));
+  r.violations.push_back(finding(nullptr, std::nullopt, nullptr, 7));
+  return r;
+}
+
+std::vector<std::string> lines_of(const std::string& text) {
+  std::vector<std::string> out;
+  std::istringstream in(text);
+  for (std::string line; std::getline(in, line);) {
+    out.push_back(line);
+  }
+  return out;
+}
+
+std::string record_key(const std::string& line) {
+  const auto at = line.find(R"("record_key":)");
+  REQUIRE(at != std::string::npos);
+  const auto end = line.find('}', at);
+  return line.substr(at + 13, end - at - 12);
+}
+
+}  // namespace
+
+TEST_CASE("statement findings: record keys tell items, versions and periods apart") {
+  const auto lines = lines_of(written(dorq::OutputFormat::kJsonl, {statements_result()}));
+  REQUIRE(lines.size() == 8);
+  CHECK(
+      record_key(lines[0]) ==
+      R"({"statement":"income","period_type":"quarter","fiscal_date":"2024-03-31","version_no":1,"item":"revenue"})");
+  CHECK(
+      record_key(lines[1]) ==
+      R"({"statement":"income","period_type":"quarter","fiscal_date":"2024-03-31","version_no":1,"item":"net_income"})");
+  CHECK(
+      record_key(lines[2]) ==
+      R"({"statement":"income","period_type":"quarter","fiscal_date":"2024-03-31","version_no":2,"item":"revenue"})");
+  // A finding on the period, not one version, has no version_no.
+  CHECK(record_key(lines[3]) ==
+        R"({"statement":"income","period_type":"quarter","fiscal_date":"2024-03-31"})");
+  CHECK(
+      record_key(lines[4]) ==
+      R"({"statement":"balance_sheet","period_type":"annual","fiscal_date":"2023-12-31","version_no":1})");
+  // A row whose statement could not be read: by its fiscal date, or its line.
+  CHECK(record_key(lines[6]) == R"({"fiscal_date":"2024-06-30"})");
+  CHECK(record_key(lines[7]) == R"({"line":7})");
+
+  // The record names the period.
+  CHECK(contains(
+      lines[0],
+      R"("date":"2024-03-31","statement":"income","period_type":"quarter","fiscal_year":2024,"fiscal_period":"Q1","version_no":1,"line":4,)"));
+  CHECK(contains(lines[5], R"("fiscal_year":null,"fiscal_period":null,"version_no":3,)"));
+  CHECK_FALSE(contains(lines[6], R"("statement":)"));
+
+  // The json format holds the same records.
+  const std::string json = written(dorq::OutputFormat::kJson, {statements_result()});
+  CHECK(contains(json, lines[0]));
+  CHECK(contains(json, lines[7]));
+}
+
+TEST_CASE("statement findings: fafnir's table by statement, and the text line") {
+  dorq::WriterOptions options;
+  options.fafnir_table = "core.income_statement";
+  const auto fafnir =
+      lines_of(written(dorq::OutputFormat::kFafnir, {statements_result()}, options));
+  REQUIRE(fafnir.size() == 8);
+  CHECK(contains(
+      fafnir[0],
+      R"({"security_id":101,"table_name":"core.income_statement","record_key":{"statement":"income")"));
+  CHECK(contains(fafnir[4], R"("table_name":"core.balance_sheet")"));
+  CHECK(contains(fafnir[5], R"("table_name":"core.cash_flow_statement")"));
+  CHECK(contains(
+      fafnir[6],
+      R"("table_name":"core.income_statement","record_key":{"fiscal_date":"2024-06-30"})"));
+  options.fafnir_statement_tables.at(1) = "staging.balance_sheet";
+  CHECK(contains(written(dorq::OutputFormat::kFafnir, {statements_result()}, options),
+                 R"("table_name":"staging.balance_sheet")"));
+
+  const auto text = lines_of(written(dorq::OutputFormat::kText, {statements_result()}));
+  CHECK(text[0] == "AAA  2024-03-31 Q1 FY2024 income v1  DQ104 error  missing-field  m  (line 4)");
+  CHECK(text[3] == "AAA  2024-03-31 Q1 FY2024 income  DQ104 error  missing-field  m");
+  CHECK(text[4] == "AAA  2023-12-31 FY2023 balance_sheet v1  DQ104 error  missing-field  m");
+  CHECK(text[5] == "AAA  2023-06-30 quarter cash_flow v3  DQ104 error  missing-field  m");
+  CHECK(text[6] == "AAA  2024-06-30  DQ104 error  missing-field  m  (line 6)");
+}
+
+TEST_CASE("statement findings: CSV columns follow the first series") {
+  const auto csv = lines_of(written(dorq::OutputFormat::kCsv, {statements_result()}));
+  CHECK(csv[0] ==
+        "series,label,source,date,end_date,line,code,check,severity,p_error,classification,"
+        "message,statement,period_type,fiscal_year,fiscal_period,version_no,item");
+  CHECK(csv[1] ==
+        "101,AAA,s.csv,2024-03-31,,4,DQ104,missing-field,error,1,data_error,m,income,quarter,"
+        "2024,Q1,1,revenue");
+  CHECK(csv[7] == "101,AAA,s.csv,2024-06-30,,6,DQ104,missing-field,error,1,data_error,m,,,,,,");
+
+  // Bars first: the columns are as they were.
+  dorq::SeriesResult bars;
+  bars.id = "X";
+  bars.violations.push_back(finding("2024-01-02", std::nullopt, nullptr, 2));
+  const auto plain = lines_of(written(dorq::OutputFormat::kCsv, {bars}));
+  CHECK(plain[0] ==
+        "series,label,source,date,end_date,line,code,check,severity,p_error,classification,"
+        "message");
+  CHECK(lines_of(written(dorq::OutputFormat::kCsv, {}))[0] == plain[0]);
+  CHECK(record_key(lines_of(written(dorq::OutputFormat::kJsonl, {bars}))[0]) ==
+        R"({"trade_date":"2024-01-02"})");
+}
+
+TEST_CASE("statement findings: [fafnir.tables], sorted by statement, counted") {
+  const dorq::Config config = dorq::parse_config(
+      "[fafnir]\ntable_name = \"core.income_statement\"\n[fafnir.tables]\n"
+      "balance_sheet = \"staging.balance_sheet\"\n",
+      "f.toml", false);
+  CHECK(config.fafnir_statement_tables.at(0) == "core.income_statement");
+  CHECK(config.fafnir_statement_tables.at(1) == "staging.balance_sheet");
+  const dorq::Config again = dorq::parse_config(dorq::to_toml(config), "again.toml", false);
+  CHECK(again.fafnir_statement_tables == config.fafnir_statement_tables);
+  dorq::Config tables;
+  tables.fafnir_statement_tables.at(2) = "x";
+  CHECK(dorq::config_hash(tables) != dorq::config_hash(dorq::Config{}));
+  CHECK_THROWS_AS((void)dorq::parse_config("[fafnir.tables]\nledger = \"x\"\n", "f.toml", false),
+                  dorq::ConfigError);
+
+  // Two rows of one fiscal date: the income statement's report first, whatever
+  // the input's order, and both counted under DQ104.
+  const TempDir dir;
+  write_file(dir.path() / "s.csv",
+             "security_id,statement,period_type,fiscal_date,known_from,revenue\n"
+             "1,balance_sheet,quarter,2024-03-31,2024-05-01,x\n"
+             "1,income,quarter,2024-03-31,2024-05-01,y\n");
+  const std::string file = (dir.path() / "s.csv").string();
+  const Result r = run_in(dir.path(), {"--isolated", "--statistics", file.c_str()});
+  const auto out = lines_of(r.out);
+  REQUIRE(out.size() >= 3);
+  CHECK(contains(out[0], "quarter income v1  DQ104"));
+  CHECK(contains(out[1], "quarter balance_sheet v1  DQ104"));
+  CHECK(contains(r.out, "2     DQ104 missing-field"));
+
+  // A row whose statement cannot be read has no period: it comes first.
+  write_file(dir.path() / "s.csv",
+             "security_id,statement,period_type,fiscal_date,known_from,revenue\n"
+             "1,cash_flow,quarter,2024-03-31,2024-05-01,x\n"
+             "1,ledger,quarter,2024-03-31,2024-05-01,1\n"
+             "1,income,quarter,2024-03-31,2024-05-01,y\n");
+  const auto mixed = lines_of(run_in(dir.path(), {"--isolated", file.c_str()}).out);
+  REQUIRE(mixed.size() == 3);
+  CHECK(contains(mixed[0], "2024-03-31  DQ104"));
+  CHECK(contains(mixed[1], "quarter income v1  DQ104"));
+  CHECK(contains(mixed[2], "quarter cash_flow v1  DQ104"));
 }

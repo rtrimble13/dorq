@@ -96,11 +96,25 @@ void append_model(std::string& out, const Violation& v) {
   out += v.provisional ? "true" : "false";
 }
 
-void append_record_key(std::string& out, const Violation& v) {
+// The condition a violation describes, for a caller deduplicating across runs: a
+// bar's date, or a statement finding's statement, period type, fiscal date and
+// version (DR-0902), then the check's own key fields (an item, a ratio).
+void append_record_key(std::string& out, const SeriesResult& result, const Violation& v) {
+  const bool statements = result.kind == SeriesKind::kStatements;
+  const StatementPeriod* period = statements && v.period ? &*v.period : nullptr;
+  out += '{';
+  if (period != nullptr) {
+    out += R"("statement":")" + std::string{to_string(period->statement)} + R"(","period_type":")" +
+           std::string{to_string(period->period_type)} + "\",";
+  }
   if (v.date) {
-    out += R"({"trade_date":")" + v.date->to_string() + "\"";
+    out += statements ? R"("fiscal_date":")" : R"("trade_date":")";
+    out += v.date->to_string() + "\"";
   } else {
-    out += R"({"line":)" + std::to_string(v.line);
+    out += R"("line":)" + std::to_string(v.line);
+  }
+  if (period != nullptr && period->version) {
+    out += R"(,"version_no":)" + std::to_string(*period->version);
   }
   for (const DetailField& field : v.key) {
     out += ',';
@@ -109,6 +123,43 @@ void append_record_key(std::string& out, const Violation& v) {
     append_detail_value(out, field.value);
   }
   out += '}';
+}
+
+// A statement finding's period, in the record (DR-0902).
+void append_period(std::string& out, const StatementPeriod& period) {
+  out += R"(,"statement":")" + std::string{to_string(period.statement)} + "\"";
+  out += R"(,"period_type":")" + std::string{to_string(period.period_type)} + "\"";
+  out += R"(,"fiscal_year":)";
+  out += period.fiscal_year > 0 ? std::to_string(period.fiscal_year) : "null";
+  out += R"(,"fiscal_period":)";
+  if (period.fiscal_period == FiscalPeriod::kUnknown) {
+    out += "null";
+  } else {
+    out += "\"" + std::string{to_string(period.fiscal_period)} + "\"";
+  }
+  out += R"(,"version_no":)";
+  out += period.version ? std::to_string(*period.version) : "null";
+}
+
+// "Q3 FY2020 income v1": a statement finding's period, for people.
+std::string period_text(const StatementPeriod& period) {
+  std::string out = period.label() + " " + std::string{to_string(period.statement)};
+  if (period.version) {
+    out += " v" + std::to_string(*period.version);
+  }
+  return out;
+}
+
+// The value of a statement finding's item or identity key field, or empty.
+std::string item_of(const Violation& v) {
+  for (const DetailField& field : v.key) {
+    if (field.key == "item" || field.key == "identity") {
+      if (const auto* text = std::get_if<std::string>(&field.value)) {
+        return *text;
+      }
+    }
+  }
+  return {};
 }
 
 // One violation as the JSON object jsonl, json and fafnir all use.
@@ -137,6 +188,9 @@ void append_record(std::string& out, const SeriesResult& series, const Violation
   if (v.end_date) {
     out += R"(,"end_date":")" + v.end_date->to_string() + "\"";
   }
+  if (v.period) {
+    append_period(out, *v.period);
+  }
   out += R"(,"line":)";
   if (v.line > 0) {
     out += std::to_string(v.line);
@@ -155,7 +209,7 @@ void append_record(std::string& out, const SeriesResult& series, const Violation
   append_fields(out, v.detail);
   append_model(out, v);
   out += R"(,"record_key":)";
-  append_record_key(out, v);
+  append_record_key(out, series, v);
   out += R"(,"dorq":{"version":)";
   append_json_string(out, options.version);
   out += R"(,"config_hash":)";
@@ -221,6 +275,9 @@ class TextWriter final : public Writer {
       line += v.date ? v.date->to_string() : "line " + std::to_string(v.line);
       if (v.end_date) {
         line += ".." + v.end_date->to_string();
+      }
+      if (v.period) {
+        line += " " + period_text(*v.period);
       }
       line += "  ";
       line += v.check->code;
@@ -400,10 +457,13 @@ class FafnirWriter final : public Writer {
       } else {
         append_json_string(buffer_, result.id);
       }
+      // A statement finding goes to its statement's table (DR-0902).
       buffer_ += R"(,"table_name":)";
-      append_json_string(buffer_, options_.fafnir_table);
+      append_json_string(buffer_, v.period ? options_.fafnir_statement_tables.at(
+                                                 static_cast<std::size_t>(v.period->statement))
+                                           : options_.fafnir_table);
       buffer_ += R"(,"record_key":)";
-      append_record_key(buffer_, v);
+      append_record_key(buffer_, result, v);
       std::string check_name = "dorq_" + std::string{v.check->name};
       for (char& ch : check_name) {
         ch = ch == '-' ? '_' : ch;
@@ -438,16 +498,14 @@ void append_csv_field(std::string& out, std::string_view text) {
   out += '"';
 }
 
+// The columns follow the input's first series: a statements input adds its
+// period's columns after the others (DR-0902), and a bars input's are as before.
 class CsvWriter final : public Writer {
  public:
   explicit CsvWriter(std::ostream& out) : out_(out) {}
 
-  void begin() override {
-    out_ << "series,label,source,date,end_date,line,code,check,severity,p_error,classification,"
-            "message\n";
-  }
-
   void series(const SeriesResult& result) override {
+    header(result.kind == SeriesKind::kStatements);
     for (const Violation& v : result.violations) {
       buffer_.clear();
       append_csv_field(buffer_, result.id);
@@ -473,14 +531,53 @@ class CsvWriter final : public Writer {
       buffer_ += to_string(v.classification);
       buffer_ += ',';
       append_csv_field(buffer_, v.message);
+      if (statements_) {
+        append_period_fields(v);
+      }
       buffer_ += '\n';
       out_ << buffer_;
     }
   }
 
+  void end(const Summary& /*summary*/) override { header(false); }
+
  private:
+  void header(bool statements) {
+    if (header_written_) {
+      return;
+    }
+    header_written_ = true;
+    statements_ = statements;
+    out_ << "series,label,source,date,end_date,line,code,check,severity,p_error,classification,"
+            "message"
+         << (statements ? ",statement,period_type,fiscal_year,fiscal_period,version_no,item" : "")
+         << '\n';
+  }
+
+  void append_period_fields(const Violation& v) {
+    if (!v.period) {
+      buffer_ += ",,,,,";
+    } else {
+      const StatementPeriod& p = *v.period;
+      buffer_ += ',';
+      buffer_ += to_string(p.statement);
+      buffer_ += ',';
+      buffer_ += to_string(p.period_type);
+      buffer_ += ',';
+      buffer_ += p.fiscal_year > 0 ? std::to_string(p.fiscal_year) : "";
+      buffer_ += ',';
+      buffer_ += to_string(p.fiscal_period);
+      buffer_ += ',';
+      buffer_ += p.version ? std::to_string(*p.version) : "";
+    }
+    buffer_ += ',';
+    append_csv_field(buffer_, item_of(v));
+  }
+
   std::ostream& out_;
   std::string buffer_;
+  bool header_written_ = false;
+  bool statements_ = false;
 };
 
 }  // namespace

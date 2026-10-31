@@ -102,6 +102,9 @@ struct Violation {
   // Fields of `record_key` beside the date: what tells two rows of one check,
   // series and date apart (DQ601's ratio). Empty for most checks.
   std::vector<DetailField> key;
+  // Statements: the statement, period and version the finding is about (with its
+  // date, the fiscal date); nullopt for a finding on no one period (DR-0902).
+  std::optional<StatementPeriod> period;
   // Statements: the newest knowledge date (known_from or loaded_on) of the
   // versions it names. --since keeps a statement finding unless this is before
   // the date (ADR 0005); one without it is always kept.

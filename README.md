@@ -118,6 +118,14 @@ dorq --actions a.csv --restore-actions before.csv prices.csv   # actions as they
 dorq --items items.csv statements.csv        # financial statements (doc/statements.md)
 ```
 
+A statement finding names its period, statement and version:
+
+```console
+$ dorq statements.csv
+AAA  2024-06-30 Q2 FY2024 income v1  DQ104 error  missing-field  net_income "x" is not a number  (line 4)
+AAA  2024-09-29 Q3 FY2024 income v1  DQ104 error  missing-field  known_from is empty; the row is skipped  (line 5)
+```
+
 Input is long format, one row per series and date. Columns are found by name,
 ignoring case and punctuation: `date`/`trade_date`, `open`, `high`, `low`,
 `close`, `volume`, `series`/`security_id`, `symbol`, `value`, and so on. Bars

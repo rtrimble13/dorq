@@ -29,6 +29,9 @@ struct WriterOptions {
   std::string version;
   std::string config_hash;
   std::string fafnir_table = "core.daily_price";
+  // A statement finding's table, by its statement (indexed by Statement).
+  std::array<std::string, 3> fafnir_statement_tables = {
+      "core.income_statement", "core.balance_sheet", "core.cash_flow_statement"};
 };
 
 // Writes violations as they arrive, series by series. See doc/output.md for each

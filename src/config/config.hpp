@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -365,6 +366,10 @@ struct Config {
   std::string calendar_exchange;
   std::vector<Profile> profiles;  // sorted by name
   std::string fafnir_table = "core.daily_price";
+  // [fafnir.tables]: a statement finding's table_name, by its statement (indexed
+  // by Statement); a statement finding on no one statement takes fafnir_table.
+  std::array<std::string, 3> fafnir_statement_tables = {
+      "core.income_statement", "core.balance_sheet", "core.cash_flow_statement"};
   StatementSettings statements;
   // A digest of the --items file's content, when one is given: config_hash covers
   // it, as it covers a reference calendar's (ADR 0005).

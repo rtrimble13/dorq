@@ -8,6 +8,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -306,6 +307,20 @@ void Engine::filter_and_send(SeriesResult&& result) {
                      }
                      if (!a.date && a.line != b.line) {
                        return a.line < b.line;
+                     }
+                     // Statements: a finding on no one period first, then by
+                     // statement, period type and version (a finding on a whole
+                     // period before its versions'). Bars have no period.
+                     if (a.period.has_value() != b.period.has_value()) {
+                       return !a.period.has_value();
+                     }
+                     if (a.period) {
+                       const auto key = [](const StatementPeriod& p) {
+                         return std::tuple{p.statement, p.period_type, p.version.value_or(0)};
+                       };
+                       if (key(*a.period) != key(*b.period)) {
+                         return key(*a.period) < key(*b.period);
+                       }
                      }
                      return a.check->code < b.check->code;
                    });

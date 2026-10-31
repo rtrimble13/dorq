@@ -6,7 +6,10 @@ the same order:
 1. Series in the order they first appear in the input.
 2. Within a series, by date. A row with no usable date has no date to sort by, so
    it comes first, in line order.
-3. Then by check code.
+3. For statements ([statements.md](statements.md)), within a date: a finding on no
+   one period first, then by statement, period type and version, a finding on a
+   whole period before its versions'.
+4. Then by check code.
 
 That order doesn't depend on `--threads` ([ADR 0001](adr/0001-stateless-deterministic-linter.md)).
 
@@ -36,13 +39,18 @@ One line per violation. This format is for people.
 ```
 AAPL  2024-01-03  DQ101 error  ohlc-bounds  high 9.5 < open 10; high 9.5 < close 10  (line 3)
 BBB  line 7  DQ104 error  missing-field  date "2024-13-01" is not a date; the row is skipped
+AAA  2024-06-30 Q2 FY2024 income v1  DQ104 error  missing-field  net_income "x" is not a number  (line 4)
 ```
 
 The fields are:
 
 - **name**: the series label (e.g. a ticker) if there is one, otherwise the series
   id; `(all series)` for a DQ303 cohort.
-- **date**: the date, or `line N` when the row had no usable date.
+- **date**: the date, or `line N` when the row had no usable date. A statement
+  finding adds its period, statement and version: `2024-06-30 Q2 FY2024 income v1`.
+  The period reads `FY2024` for a year, and the period type (`quarter`) where the
+  input has no fiscal labels; the version is left out of a finding on the whole
+  period.
 - **code and severity**.
 - **check name**.
 - **message**.
@@ -112,6 +120,7 @@ A price check's record carries its model (wrapped the same way):
 | `source` | The input file, or `<stdin>`. For DQ109, the context file's name without its directory. For a cross-sectional violation, the calendar: `XNYS`, or `XNYS, with sessions.csv for 1990-01-02..2027-12-31`, naming a reference file without its directory |
 | `date` | The date the violation is about; `null` for a row with no usable date |
 | `end_date` | Present only on a violation that spans dates |
+| `statement`, `period_type`, `fiscal_year`, `fiscal_period`, `version_no` | Present only on a statement finding about one period: its statement (`income`, `balance_sheet`, `cash_flow`), `quarter` or `annual`, the fiscal labels (`null` where the input has none) and the version (`null` for a finding on the whole period). `date` is the fiscal date |
 | `line` | The source line (CSV) or record (JSON) when one row is at fault, else `null`. For DQ109, the line of the context file |
 | `code`, `check` | The check's code and name ([ADR 0003](adr/0003-check-codes.md)) |
 | `severity` | `info`, `warn` or `error` |
@@ -123,7 +132,7 @@ A price check's record carries its model (wrapped the same way):
 | `evidence` | The evidence terms: `feature`, `value`, `log_bf` (the log Bayes factor for the reported explanation against a real market move) and an optional `note`. `[]` otherwise |
 | `suggested_action` | What would fix it: `kind` (`delete_bars`, `refetch_bar`, `add_split`, `rescale`, `rescale_volume`, `split_history`, `redate_split`, `check_split`, `delete_split`, `fix_split_ratio`, `fix_dividend`, `check_dividend_frequency`, `check_distribution`) and its fields, or `null`. dorq never changes data |
 | `provisional` | `true` when the violation was judged with fewer bars after it than the model needs; a later run may change it. Its severity is at most `warn` |
-| `record_key` | `{"trade_date": "..."}`, or `{"line": N}` when there is no date. A check that can report two rows for one series and date adds what tells them apart: DQ601 adds `"ratio"` (`{"trade_date": "2026-10-06", "ratio": "2:1"}`), since one date can hold a 2:1 cohort and a 3:2 one |
+| `record_key` | `{"trade_date": "..."}`, or `{"line": N}` when there is no date. A check that can report two rows for one series and date adds what tells them apart: DQ601 adds `"ratio"` (`{"trade_date": "2026-10-06", "ratio": "2:1"}`), since one date can hold a 2:1 cohort and a 3:2 one. A statement finding is keyed by its period: `{"statement": "income", "period_type": "quarter", "fiscal_date": "2024-06-30", "version_no": 1}`, with no `version_no` for a finding on the whole period and an `"item"` or `"identity"` for one on an item. One whose statement could not be read is keyed `{"fiscal_date": ...}`, or by its line |
 | `dorq` | The version, and the hash of the settings that can change what is reported. `dorq config show`, given the run's options, prints it; [configuration.md](configuration.md#what-config_hash-covers) lists what it covers. A reference calendar counts by its content, not its path |
 
 Numbers are written in their shortest exact form. A value that is not a finite
@@ -152,6 +161,13 @@ A header row, then one row per violation:
 series,label,source,date,end_date,line,code,check,severity,p_error,classification,message
 ```
 
+When the input's first series is statements, six columns follow `message`:
+`statement,period_type,fiscal_year,fiscal_period,version_no,item`, empty on a
+finding about no one period. A bars or point input's columns are as above. The
+columns are decided by the first series because the header comes before the rest
+of the input is read; run statements and bars separately (as fafnir does) to get
+each its own columns.
+
 `detail` and the model's fields are not included; use `jsonl` when you need them.
 
 ## fafnir
@@ -167,9 +183,16 @@ One JSON object per line, shaped as a row of fafnir's `ops.data_quality_flag`:
   integer, as a string otherwise, and as `null` for a DQ303 cohort, which belongs
   to no one security (fafnir's column is nullable).
 - `table_name` comes from `fafnir.table_name` in the config (default `core.daily_price`).
+  A statement finding about one period takes its statement's table from
+  `[fafnir.tables]` (defaults `core.income_statement`, `core.balance_sheet` and
+  `core.cash_flow_statement`); one about no one statement takes `fafnir.table_name`,
+  so a statements run's config sets that to `core.income_statement`, as fafnir's
+  own statement flags without a statement use.
 - `check_name` is `dorq_` followed by the check name, with `-` turned into `_`.
 - `record_key` keeps fafnir's `{"trade_date": ...}` shape, so fafnir's
-  once-per-condition deduplication works unchanged. Cross-sectional rows have a
+  once-per-condition deduplication works unchanged. A statement finding's names
+  its statement, period and version, the shape fafnir's own statement checks use,
+  so two items, statements or versions of one period are two conditions. Cross-sectional rows have a
   `null` `security_id`, so their key must tell one condition from another on its
   own: DQ601's adds the cohort's `ratio` (from 0.10.0; two cohorts on one date
   were merged before). DQ303 and DQ602 report at most one row a date, and DQ304

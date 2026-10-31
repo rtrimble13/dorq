@@ -64,6 +64,9 @@ struct FieldIssue {
   Date date;
   std::string column;      // the line item's column, when field is kItem
   bool skips_row = false;  // the row could not be used, and is not in the series
+  // Statements: the row's period and version, as far as they could be read (the
+  // statement and period type at least).
+  std::optional<StatementPeriod> period;
   // Statements: the newest of the row's known_from and loaded_on, when it has
   // them (what --since judges a statement finding by).
   std::optional<Date> known;

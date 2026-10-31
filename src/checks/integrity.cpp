@@ -293,6 +293,7 @@ void MissingField::run(const SeriesContext& context, std::vector<Violation>& out
       v.date = s.issues[i].date;
     }
     v.known = s.issues[i].known;
+    v.period = s.issues[i].period;
     std::string fields;
     for (std::size_t j = i; j < end; ++j) {
       const FieldIssue& issue = s.issues[j];

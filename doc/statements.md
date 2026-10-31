@@ -159,6 +159,15 @@ cash_flow = "net_change_in_cash = net_cash_operating + net_cash_investing + net_
 
 `dorq list-checks` shows the kinds each check applies to.
 
+## Output
+
+A statement finding names its period: in text as `2024-06-30 Q2 FY2024 income
+v1`, in the JSON formats as `statement`, `period_type`, `fiscal_year`,
+`fiscal_period` and `version_no` fields, and in `record_key` as
+`{"statement", "period_type", "fiscal_date", "version_no"}` plus an `item` or
+`identity` where the condition is per item. The `fafnir` format files it under its
+statement's table (`[fafnir.tables]`). [output.md](output.md) has each format.
+
 ## `--since` and `--as-of`
 
 - **`--since D`** keeps a statement finding unless every version it names was
