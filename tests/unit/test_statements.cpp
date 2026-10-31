@@ -488,7 +488,7 @@ dorq::Violation finding(const char* date, std::optional<dorq::StatementPeriod> p
     v.date = day(date);
   }
   v.line = line;
-  v.period = std::move(period);
+  v.period = period;
   if (item != nullptr) {
     v.key.push_back({"item", std::string{item}});
   }
