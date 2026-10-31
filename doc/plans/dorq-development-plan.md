@@ -4,6 +4,7 @@
   (PR #1), M1 is done (PR #2), M2 is done (PR #3), M3 is done (PR #4), M4 is done (PR #5), M5 is
   done (PR #7), M6 is done (PR #8), and M7's code is implemented and awaiting merge in both
   repositories; its labelling pass, calibration and shadow period are operational work to follow.
+  M9 (fundamentals) is accepted: [dorq-fundamentals-plan.md](dorq-fundamentals-plan.md).
 - Scope: this repository (the C++ CLI), plus one milestone of integration work in `rtrimble13/fafnir` (M7).
 - Status legend: ⬜ planned · 🔄 in progress · ✅ done (PR #) · ⏭ carried over · ✖ dropped (reason)
 
@@ -1132,6 +1133,14 @@ at precision 1.0. The real test is M7's fit on fafnir's labels (DR-0704).
 - DQ801 cross-vendor disagreement (FMP vs Sharadar) for the parallel run.
 - A gradient-boosted re-ranker, only if there are ≥ 1,000 labels and it beats M6 on held-out precision.
 - Parquet/Arrow input; a pybind11 module so `duk` can call dorq in-process; support for intraday bars.
+
+### M9: Fundamentals (accepted 2026-10-27)
+
+fafnir's Sharadar SF1 statements, checked by a third input kind and the DQ9xx family, so that
+dorq succeeds fafnir's SQL fundamentals checks as it does the price checks. The plan, its
+checks, models and work items (DR-0900 to DR-0914) are in
+[dorq-fundamentals-plan.md](dorq-fundamentals-plan.md). Nothing in M9 changes a bars run, so it
+proceeds alongside DR-0707.
 
 **Rough effort:** M0–M3 ≈ 4 weekly sprints; M4–M6 ≈ 3 sprints; M7 ≈ 2 sprints including the shadow
 period. That is about 9 one-week sprints to cutover, with implementation by Claude Code and operator
