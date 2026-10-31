@@ -38,6 +38,9 @@ struct ReadOptions {
   InputFormat format = InputFormat::kAuto;
   KindOption kind = KindOption::kAuto;
   ColumnOverrides columns;
+  // Statements: the line items --items lists. nullopt without --items: every
+  // column that is not a field is an item (map_columns).
+  std::optional<std::vector<std::string>> items;
 };
 
 // Turns rows into Series, grouping by the series column.
@@ -63,6 +66,11 @@ class SeriesAssembler {
  private:
   Series& series_for(std::string_view id, std::uint32_t line);
   void emit(Series& series);
+  void add_statement_row(Series& series, std::span<const std::string_view> cells,
+                         std::uint32_t line);
+  // Statements: where each of this source's item columns goes in a series' items,
+  // adding the ones the series does not have yet.
+  const std::vector<std::size_t>& item_slots(Series& series);
 
   Grouping grouping_;
   SeriesFn on_series_;
@@ -76,6 +84,8 @@ class SeriesAssembler {
   // kBuffer
   std::vector<Series> buffered_;
   std::unordered_map<std::string, std::size_t> index_;
+  // Statements: item_slots by series id, for the current source.
+  std::unordered_map<std::string, std::vector<std::size_t>> slots_;
 
   std::size_t rows_ = 0;
   std::size_t series_count_ = 0;

@@ -100,6 +100,7 @@ struct CheckOptions {
   std::string actions;
   std::string meta;
   std::string market;
+  std::string items;            // --items: statements' line items (ADR 0005)
   std::string labels;           // --labels: their `remove` dates, with --restore
   std::string restore;          // --restore: bars as they stood before repairs
   std::string restore_actions;  // --restore-actions: actions as they stood before repairs
@@ -243,6 +244,32 @@ void stamp_calendar_digest(Config& config, const fs::path& cwd) {
   }
 }
 
+// What config_hash covers of --items: the file's content, as for a calendar.
+void stamp_items_digest(Config& config, const std::string& items, const fs::path& cwd) {
+  if (!items.empty()) {
+    const fs::path path(items);
+    config.items_digest = file_digest(path.is_relative() ? cwd / path : path);
+  }
+}
+
+// [statements] may name only items --items lists, when it is given: an item it
+// does not list is a typo, or a column that is not read (exit 2).
+void validate_statement_items(const Config& config, const Context& context,
+                              const std::string& items) {
+  if (!context.have_items) {
+    return;
+  }
+  for (const auto& [where, item] : config.statements.named_items()) {
+    if (context.item(item) == nullptr) {
+      std::string message = "statements." + where;
+      message += " names \"" + item + "\", which ";
+      message += items;
+      message += " does not list";
+      throw ConfigError(message);
+    }
+  }
+}
+
 // The built-in calendar, with the reference file over it when one is given.
 Calendar load_calendar(const Config& config, const fs::path& cwd) {
   Calendar calendar(config.calendar);
@@ -283,6 +310,10 @@ Context load_context(const CheckOptions& o, const fs::path& cwd) {
   if (!o.meta.empty()) {
     std::ifstream file = open_context(o.meta, cwd, "metadata");
     read_meta(file, o.meta, context);
+  }
+  if (!o.items.empty()) {
+    std::ifstream file = open_context(o.items, cwd, "items");
+    read_items(file, o.items, context);
   }
   if (!o.market.empty()) {
     std::ifstream file = open_context(o.market, cwd, "market");
@@ -354,7 +385,9 @@ int run_check(const CheckOptions& options, CLI::App& cmd, Io& io) {
   }
   const Calendar calendar = load_calendar(config, io.cwd);
   stamp_calendar_digest(config, io.cwd);
+  stamp_items_digest(config, options.items, io.cwd);
   const Context context = load_context(options, io.cwd);
+  validate_statement_items(config, context, options.items);
   const Restorer restorer = load_restorer(options, load_labels(options.labels, io.cwd), io.cwd);
 
   std::vector<InputFile> inputs;
@@ -410,7 +443,10 @@ int run_check(const CheckOptions& options, CLI::App& cmd, Io& io) {
       restorer.apply(s);
       engine.submit(std::move(s));
     });
-    const ReadOptions read_options{config.input_format, config.kind, config.columns};
+    ReadOptions read_options{config.input_format, config.kind, config.columns, std::nullopt};
+    if (context.have_items) {
+      read_options.items = context.item_names();
+    }
     writer->begin();
     for (const InputFile& input : inputs) {
       if (input.path == "-") {
@@ -465,7 +501,7 @@ int run_calibrate(const CalibrateCommand& command, CLI::App& cmd, Io& io) {
     restorer.apply(s);
     series.push_back(std::move(s));
   });
-  const ReadOptions read_options{config.input_format, config.kind, config.columns};
+  const ReadOptions read_options{config.input_format, config.kind, config.columns, std::nullopt};
   if (options.files.empty()) {
     if (io.stdin_is_tty) {
       throw UsageError("no input: name the data files, or pipe them to stdin");
@@ -523,8 +559,7 @@ int run_list_checks(const std::string& format, Io& io) {
       first = false;
       out += R"({"code":")" + std::string{info.code} + R"(","name":")" + std::string{info.name} +
              R"(","severity":")" + std::string{to_string(info.default_severity)} +
-             R"(","applies":")" + (info.applies == Applies::kOhlcvOnly ? "ohlcv" : "any") +
-             R"(","summary":)";
+             R"(","applies":")" + std::string{to_string(info.applies)} + R"(","summary":)";
       append_json_string(out, info.summary);
       out += '}';
     }
@@ -540,7 +575,9 @@ int run_list_checks(const std::string& format, Io& io) {
       out += "  ";
       out += name;
       out += severity;
-      out += info.applies == Applies::kOhlcvOnly ? "ohlcv  " : "any    ";
+      std::string applies{to_string(info.applies)};
+      applies.resize(std::max<std::size_t>(applies.size() + 2, 13), ' ');
+      out += applies;
       out += info.summary;
       out += '\n';
     }
@@ -565,6 +602,7 @@ int run_config_show(const CheckOptions& options, CLI::App& cmd, Io& io) {
   const bool overridden = apply_overrides(options, cmd, config);
   validate_selection(config);
   stamp_calendar_digest(config, io.cwd);
+  stamp_items_digest(config, options.items, io.cwd);
   io.out << "# source: " << (config.source.empty() ? "defaults" : config.source.string())
          << (overridden ? ", with command-line options" : "") << "\n"
          << "# config_hash: " << config_hash(config) << "\n\n"
@@ -594,7 +632,8 @@ int run_config_init(const std::string& path_text, bool force, Io& io) {
 // line shows the settings, and the config_hash, that the run reports.
 void add_check_options(CLI::App& cmd, CheckOptions& o) {
   cmd.add_option("files", o.files, "Input files; '-' or none reads stdin");
-  cmd.add_option("--kind", o.kind, "Series kind")->check(CLI::IsMember({"auto", "ohlcv", "point"}));
+  cmd.add_option("--kind", o.kind, "Series kind")
+      ->check(CLI::IsMember({"auto", "ohlcv", "point", "statements"}));
   cmd.add_option("--input-format", o.input_format, "Input format")
       ->check(CLI::IsMember({"auto", "csv", "tsv", "jsonl", "json"}));
   cmd.add_option("--columns", o.columns, "Column names, e.g. date=trade_date,series=security_id");
@@ -630,7 +669,8 @@ void add_check_options(CLI::App& cmd, CheckOptions& o) {
   cmd.add_option("--calendar-exchange", o.calendar_exchange,
                  "The exchange to take from a multi-exchange calendar file");
   cmd.add_option("--as-of", o.as_of,
-                 "Date DQ304 judges staleness against (default: the latest bar)");
+                 "Date DQ304 judges staleness against (default: the latest bar), and "
+                 "statements' versions are in force at");
   cmd.add_option("--actions", o.actions,
                  "Corporate actions (CSV: series, ex_date, type, numerator, denominator, "
                  "amount); enables DQ7xx and explains splits on file");
@@ -639,6 +679,9 @@ void add_check_options(CLI::App& cmd, CheckOptions& o) {
                  "peer_group, exchange); profiles match on it");
   cmd.add_option("--market", o.market,
                  "A market reference series (e.g. SPY); moves are judged net of it");
+  cmd.add_option("--items", o.items,
+                 "Statements' line items (CSV: column, statement, item_class, "
+                 "sign_convention, is_subtotal); only these columns are read as items");
   cmd.add_option("--restore", o.restore,
                  "Bars as they stood before repairs, over the input (doc/labels.md)");
   cmd.add_option("--restore-actions", o.restore_actions,

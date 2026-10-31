@@ -398,7 +398,7 @@ const CheckInfo& bad_print_info() noexcept {
       .name = "bad-print",
       .summary = "a wrong value, or a block of up to five bars, that the series reverts from",
       .default_severity = Severity::kError,
-      .applies = Applies::kAny,
+      .applies = Applies::kTimeSeries,
   };
   return kInfo;
 }
@@ -411,7 +411,7 @@ const CheckInfo& scale_shift_info() noexcept {
           "the level changes by a power of ten (or to an implausible price) without the "
           "volume shift a split causes",
       .default_severity = Severity::kError,
-      .applies = Applies::kAny,
+      .applies = Applies::kTimeSeries,
   };
   return kInfo;
 }
@@ -446,7 +446,7 @@ const CheckInfo& history_segment_info() noexcept {
       .name = "history-segment",
       .summary = "after a long gap, a different security's history seems to continue",
       .default_severity = Severity::kError,
-      .applies = Applies::kAny,
+      .applies = Applies::kTimeSeries,
   };
   return kInfo;
 }
@@ -457,7 +457,7 @@ const CheckInfo& large_move_info() noexcept {
       .name = "large-move",
       .summary = "an anomalous move that is probably a market fact (info)",
       .default_severity = Severity::kInfo,
-      .applies = Applies::kAny,
+      .applies = Applies::kTimeSeries,
   };
   return kInfo;
 }

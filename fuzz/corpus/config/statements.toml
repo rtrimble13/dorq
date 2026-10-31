@@ -1,0 +1,18 @@
+kind = "statements"
+
+[statements]
+identity_share = 0.005
+tie_floor = 1e6
+quarter_spacing = [56, 126]
+coverage_floor = "1998-01-01"
+nonnegative = ["revenue", "total_assets"]
+never_absent = ["revenue"]
+bounds = ["total_current_assets <= total_assets"]
+
+[statements.identities]
+balance_sheet = "total_assets = total_liabilities + total_equity_parent"
+"odd name" = "-a + b = c - d"
+
+[profiles.statements]
+match = { kind = "statements" }
+ignore = ["DQ104"]

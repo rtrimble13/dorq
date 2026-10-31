@@ -55,6 +55,26 @@ file above, the 150M-row one included. The unit and CLI tests check 1 against 8
 threads, and buffered against streamed input (DR-0108). `dorq calibrate` writes
 the same file with any `--threads`.
 
+## Statements (DR-0901)
+
+The plan's target for statements ([fundamentals plan](plans/dorq-fundamentals-plan.md)
+§6) is fafnir's full statements history, about 6M rows, in 2 minutes or less end
+to end. DR-0901 reads statements and checks them only for DQ104, so this measures
+the reader: 20,000 synthetic securities of 300 rows each (three statements, twenty
+years of quarters and years), with all 58 items filled with nine-digit numbers.
+That is 4.1 GB of CSV, more than fafnir's export, where each row fills only its
+own statement's items. The rows came through stdin, so they were streamed.
+
+| Run | Rows | Series | Threads | Time | Peak memory |
+|---|---|---|---|---|---|
+| The generator alone, to `/dev/null` | 6.0M | 20,000 | | 4.1 s | |
+| The generator piped into `dorq --kind statements` | 6.0M | 20,000 | 4 | **35.8 s** | 20 MB |
+
+The same 4-core machine and `release` build as above (2026-10-31). Reading runs at
+about 115 MB a second, a little faster per byte than bars. Memory stays at a few
+series, since a security's statements are a few hundred rows. The statement checks
+(DR-0904 onward) add their own cost, measured with each.
+
 ## The profile
 
 The profile is a callgrind run on one copy (230,000 rows, one thread), before

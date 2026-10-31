@@ -124,9 +124,16 @@ const Engine::Settings& Engine::settings_for(const Series& series) {
       }
     }
     const Selection selection(select, ignore);
+    const bool statements = series.kind == SeriesKind::kStatements;
     for (const Check* check : all_checks()) {
       const CheckInfo& info = check->info();
       if (!selection.enabled(info)) {
+        continue;
+      }
+      // Statements and the other kinds share no check but DQ104 (ADR 0005): a
+      // statements series takes no part in the bars' models or cross-sections.
+      if (statements != (info.applies == Applies::kStatements) &&
+          info.applies != Applies::kEveryKind) {
         continue;
       }
       if (info.code == "DQ303") {
@@ -166,13 +173,18 @@ Engine::Processed Engine::process(Work& work) const {
   result.label = series.label;
   result.source = series.source;
   result.kind = series.kind;
-  result.rows = series.size() + static_cast<std::size_t>(std::count_if(
-                                    series.issues.begin(), series.issues.end(),
-                                    [](const FieldIssue& issue) { return !issue.has_date; }));
+  result.rows = series.size() + series.skipped_rows;  // the rows read
 
-  const Frequency frequency = settings.coverage.frequency == Frequency::kAuto
-                                  ? infer_frequency(series.date)
-                                  : settings.coverage.frequency;
+  const bool statements = series.kind == SeriesKind::kStatements;
+  Frequency frequency = Frequency::kDaily;
+  if (!statements) {
+    frequency = settings.coverage.frequency == Frequency::kAuto ? infer_frequency(series.date)
+                                                                : settings.coverage.frequency;
+  }
+  std::optional<StatementViews> views;
+  if (statements) {
+    views = build_statement_views(series, options_.as_of);
+  }
   std::optional<CoverageAnalysis> analysis;
   if (frequency == Frequency::kDaily && settings.coverage_model) {
     analysis =
@@ -205,6 +217,7 @@ Engine::Processed Engine::process(Work& work) const {
       .have_actions = context_.have_actions,
       .actions = actions,
       .meta = meta,
+      .statements = views ? &*views : nullptr,
   };
   for (const Check* check : settings.checks) {
     check->run(context, result.violations);
@@ -304,9 +317,20 @@ void Engine::drop_unreported(SeriesResult& result) const {
   // (a stale feed, a gap, an era, a run) counts by its last date, so one that
   // began before the window and is still open stays reported, under its first
   // date. A caller deduplicating by that date sees one condition across runs.
-  std::erase_if(result.violations, [this](const Violation& v) {
-    return v.severity < options_.min_severity ||
-           (options_.since && v.date && v.end_date.value_or(*v.date) < *options_.since);
+  // A statement finding counts by when the versions it names became known (ADR
+  // 0005): a restatement of an old period, loaded last night, is new.
+  const bool statements = result.kind == SeriesKind::kStatements;
+  std::erase_if(result.violations, [this, statements](const Violation& v) {
+    if (v.severity < options_.min_severity) {
+      return true;
+    }
+    if (!options_.since) {
+      return false;
+    }
+    if (statements) {
+      return v.known && *v.known < *options_.since;
+    }
+    return v.date && v.end_date.value_or(*v.date) < *options_.since;
   });
 }
 

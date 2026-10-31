@@ -1,12 +1,13 @@
 # Context inputs
 
-dorq judges a series by its own bars. Three optional files add context:
+dorq judges a series by its own bars. These optional files add context:
 
 | Option | What it holds | What it does |
 |---|---|---|
 | `--actions F` | splits and dividends on file | explains moves at a split's or a dividend's ex-date; enables DQ701–DQ705 |
 | `--meta F` | per-series metadata | profiles match on it; `tick_size` replaces the inferred tick; `peer_group` feeds DQ601 |
 | `--market F` | a market reference series (an index, SPY) | moves are judged net of the market; enables DQ602 |
+| `--items F` | statements' line items: their statement, class and sign | decides which columns of a statements input are items ([statements.md](statements.md#--items)) |
 
 fafnir passes exports of `core.corporate_action` and `core.security`, and dorq
 accepts their column names as they are. Each file is CSV or TSV: the delimiter is
@@ -136,3 +137,11 @@ With `--market`, for each series on the log scale:
   deviations of its own recent moves.
 
 Point series on the difference scale (rates) are not adjusted.
+
+## Line items: `--items`
+
+For a statements input ([statements.md](statements.md)): what each line item is,
+in the shape of fafnir's `ref.statement_line_item` (`column`, `statement`,
+`item_class`, `sign_convention`, `is_subtotal`). Only the columns it lists are
+read as items. It names items, not series, so its DQ109 reports are filed under no
+series. Its content is part of `config_hash`.

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "dorq/date.hpp"
+#include "dorq/series.hpp"
 
 namespace dorq {
 
@@ -26,7 +27,17 @@ enum class Classification : std::uint8_t {
 [[nodiscard]] std::string_view to_string(Classification classification) noexcept;
 
 // The input series a check is applicable to.
-enum class Applies : std::uint8_t { kAny, kOhlcvOnly };
+enum class Applies : std::uint8_t {
+  kTimeSeries,  // bars and point series
+  kOhlcvOnly,   // bars only
+  kStatements,  // statements only (DQ9xx)
+  kEveryKind,   // every kind: bars, point series and statements (DQ104)
+};
+
+// Whether a check that applies to `applies` runs on a series of `kind`.
+[[nodiscard]] bool applies_to(Applies applies, SeriesKind kind) noexcept;
+// The kinds, for list-checks: "ohlcv,point", "ohlcv", "statements" or "all".
+[[nodiscard]] std::string_view to_string(Applies applies) noexcept;
 
 // A check's identity and documentation (doc/adr/0003-check-codes.md).
 struct CheckInfo {
@@ -34,7 +45,7 @@ struct CheckInfo {
   std::string_view name;     // ohlc-bounds
   std::string_view summary;  // one line, for list-checks
   Severity default_severity = Severity::kError;
-  Applies applies = Applies::kAny;
+  Applies applies = Applies::kTimeSeries;
   // Judged across all series at the end of a run (DQ303, DQ304), not per series.
   bool cross_sectional = false;
 };
@@ -91,6 +102,10 @@ struct Violation {
   // Fields of `record_key` beside the date: what tells two rows of one check,
   // series and date apart (DQ601's ratio). Empty for most checks.
   std::vector<DetailField> key;
+  // Statements: the newest knowledge date (known_from or loaded_on) of the
+  // versions it names. --since keeps a statement finding unless this is before
+  // the date (ADR 0005); one without it is always kept.
+  std::optional<Date> known;
 };
 
 }  // namespace dorq

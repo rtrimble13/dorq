@@ -33,7 +33,10 @@ flake8 and its plugins, and one letter gives few families.
    | DQ6xx | cross-sectional (needs more than one series) |
    | DQ7xx | corporate actions (needs `--actions`) |
    | DQ8xx | cross-vendor |
-   | DQ9xx | reserved |
+   | DQ9xx | statements (from 2026-10-31; see below) |
+
+   *(Corrected 2026-10-31: DQ9xx was reserved. [ADR 0005](0005-statements.md) gives it
+   to statements, the third series kind, with sub-families by the tens digit.)*
 
 3. **Codes are permanent.** A code is never renumbered and never reused. A retired
    check keeps its code as *reserved* in the registry and in `doc/checks/`, and
@@ -60,7 +63,7 @@ flake8 and its plugins, and one letter gives few families.
 - A flag in fafnir's queue stays meaningful for as long as the queue keeps it,
   because neither the code nor the derived `check_name` ever means anything else.
 - One hundred codes per family is more than enough room. DQ9xx is held back rather
-  than given a meaning before one is needed.
+  than given a meaning before one is needed. *(It was needed by 2026-10-31: ADR 0005.)*
 
 ## Alternatives considered
 

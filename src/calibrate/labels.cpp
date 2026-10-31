@@ -251,6 +251,10 @@ Restorer::Restorer(const std::vector<Label>& labels, std::vector<Series> restore
 }
 
 void Restorer::apply(Series& series) const {
+  // --restore holds bars; a statements series is not restored from them.
+  if (series.kind == SeriesKind::kStatements) {
+    return;
+  }
   const auto find = [&series](const auto& map) {
     auto it = map.find(series.id);
     if (it == map.end() && !series.label.empty()) {

@@ -29,7 +29,7 @@ const CheckInfo& MarketDay::info() const noexcept {
       .name = "market-day",
       .summary = "info: the market reference moved far beyond its usual range (with --market)",
       .default_severity = Severity::kInfo,
-      .applies = Applies::kAny,
+      .applies = Applies::kTimeSeries,
       .cross_sectional = true,
   };
   return kInfo;

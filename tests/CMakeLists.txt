@@ -14,7 +14,8 @@ add_executable(
   unit/test_price.cpp
   unit/test_volume_stale.cpp
   unit/test_context.cpp
-  unit/test_calibrate.cpp)
+  unit/test_calibrate.cpp
+  unit/test_statements.cpp)
 target_include_directories(dorq_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(dorq_tests PRIVATE dorq_lib doctest::doctest_with_main)
 dorq_configure_target(dorq_tests)
@@ -79,6 +80,20 @@ dorq_eval_test(
 dorq_eval_test(
   eval-input-time "${EVAL_ARGS}|--input-time|2026-10-14"
   "distinct conditions / warn and above / 6 / 4 / 0.667 / 1 / 1 / 2 / 2 / 0.250 / 0.500")
+
+# The bars output on a dorq-synth universe, held to fixed hashes: work on another
+# series kind (M9's statements) must not change a bars run. The hashes are this
+# platform's; ADR 0001 promises byte-identical output per platform, and macOS's
+# libm rounds differently, so the test runs on Linux, where fafnir does.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_test(
+    NAME synth.bars-golden
+    COMMAND
+      "${CMAKE_COMMAND}" "-DSYNTH=$<TARGET_FILE:dorq-synth>" "-DDORQ=$<TARGET_FILE:dorq>"
+      "-DCONFIG=${PROJECT_SOURCE_DIR}/tools/synth/dorq.toml"
+      "-DOUT=${CMAKE_CURRENT_BINARY_DIR}/bars-golden" "-DEXPECTED=${DATA}/bars-golden.sha256" -P
+      "${CMAKE_CURRENT_SOURCE_DIR}/bars_golden.cmake")
+endif()
 
 # The synthetic-data gate (DR-0308): precision and recall per check on dorq-synth
 # universes, against tools/synth/gates.txt.

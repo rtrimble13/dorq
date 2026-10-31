@@ -39,6 +39,7 @@ add_library(
   core/frequency.cpp
   core/number.cpp
   core/series.cpp
+  core/statement.cpp
   core/text.cpp
   core/violation.cpp
   io/columns.cpp
@@ -55,6 +56,7 @@ add_library(
   stats/robust.cpp
   stats/special.cpp
   stats/student_t.cpp
+  statements/views.cpp
   output/writer.cpp
   "${DORQ_BUILD_INFO_CPP}"
   "${DORQ_CHECK_DOCS_CPP}")

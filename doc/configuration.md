@@ -47,7 +47,7 @@ min_severity = "warn"  # report at or above: info, warn, error
 fail_on = "warn"       # exit 1 at or above: info, warn, error, never
 format = "text"        # text, json, jsonl, csv, fafnir
 threads = 0            # 0: one per core; output does not depend on it
-kind = "auto"          # auto, ohlcv, point
+kind = "auto"          # auto, ohlcv, point, statements
 input_format = "auto"  # auto, csv, tsv, jsonl, json
 
 [columns]              # column names, when the aliases do not find them
@@ -138,6 +138,19 @@ table_name = "core.daily_price"
 [calibration]         # written by `dorq calibrate` (doc/calibration.md)
 version = "2026-10"   # names the fit; shown by `dorq config show`
 p_error_map = [[0.02, 0.01], [0.5, 0.3], [0.97, 0.99]]  # raw -> calibrated p_error
+
+[statements]          # the statement checks' settings: see doc/statements.md
+identity_share = 0.005
+tie_floor = 1e6
+cash_tie_share = 0.02
+quarter_spacing = [56, 126]
+year_spacing = [300, 430]
+coverage_floor = "1998-01-01"
+nonnegative = []      # items that cannot be negative
+never_absent = []     # items a reporting company always carries
+bounds = []           # "item <= item"
+
+[statements.identities]  # name = "item = item + item - item"
 ```
 
 Lists can also be written as one comma-separated string (`ignore = "DQ106, DQ107"`).
@@ -227,7 +240,10 @@ covers:
   `--min-severity` (and `--show-info`), `--kind`, `--columns`, `--calendar`,
   `--calendar-file` and `--calendar-exchange`;
 - a reference calendar by its content, not its path, so the same sessions read
-  from another directory hash the same.
+  from another directory hash the same;
+- the `--items` file by its content, in the same way;
+- `[statements]`, but only where it differs from its defaults: the release that
+  added it (DR-0901) left every existing hash as it was.
 
 It does not cover:
 

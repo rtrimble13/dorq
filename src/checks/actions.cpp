@@ -472,7 +472,7 @@ const CheckInfo& DividendImplausible::info() const noexcept {
       .name = "dividend-implausible",
       .summary = "a dividend on file at or above the price, or ten times off the series' others",
       .default_severity = Severity::kError,
-      .applies = Applies::kAny,
+      .applies = Applies::kTimeSeries,
   };
   return kInfo;
 }

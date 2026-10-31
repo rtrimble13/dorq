@@ -1,5 +1,7 @@
 #include "io/reader.hpp"
 
+#include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -9,6 +11,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -107,6 +110,30 @@ InputFormat format_from_extension(std::string_view extension) {
   return InputFormat::kAuto;
 }
 
+// A whole number as written ("3", "2025"), or nullopt.
+std::optional<std::int32_t> parse_whole(std::string_view text) {
+  std::int32_t value = 0;
+  const char* end = text.data() + text.size();
+  const auto [ptr, ec] = std::from_chars(text.data(), end, value);
+  if (text.empty() || ec != std::errc{} || ptr != end) {
+    return std::nullopt;
+  }
+  return value;
+}
+
+// The day of a date or of a timestamp ("2026-10-27 03:12:45.12+00"): when a row
+// was loaded.
+std::optional<Date> parse_day(std::string_view text) {
+  if (const std::optional<Date> date = parse_date(text)) {
+    return date;
+  }
+  constexpr std::size_t kDateLength = 10;
+  if (text.size() > kDateLength && (text[kDateLength] == 'T' || text[kDateLength] == ' ')) {
+    return parse_date(text.substr(0, kDateLength));
+  }
+  return std::nullopt;
+}
+
 bool is_blank(std::string_view text) {
   std::size_t pos = 0;
   skip_json_whitespace(text, pos);
@@ -123,7 +150,8 @@ void read_delimited(ChunkSource& source_chunks, char delimiter, const std::strin
     if (!have_header) {
       const std::vector<std::string> names(fields.begin(), fields.end());
       out.begin_source(source, default_id,
-                       map_columns(names, options.columns, options.kind, source));
+                       map_columns(names, options.columns, options.kind, source,
+                                   options.items ? &*options.items : nullptr));
       have_header = true;
       return;
     }
@@ -157,7 +185,8 @@ class JsonRows {
         }
       }
       out_.begin_source(source_, default_id_,
-                        map_columns(names, options_.columns, options_.kind, source_));
+                        map_columns(names, options_.columns, options_.kind, source_,
+                                    options_.items ? &*options_.items : nullptr));
       cells_.resize(names.size());
       started_ = true;
     }
@@ -307,6 +336,7 @@ void SeriesAssembler::begin_source(const std::string& source, const std::string&
   source_ = source;
   default_id_ = default_id;
   mapping_ = mapping;
+  slots_.clear();
 }
 
 void SeriesAssembler::emit(Series& series) {
@@ -322,6 +352,7 @@ Series& SeriesAssembler::series_for(std::string_view id, std::uint32_t line) {
     }
     if (current_) {
       emitted_.insert(current_->id);
+      slots_.erase(current_->id);
       emit(*current_);
       current_.reset();
     }
@@ -368,6 +399,10 @@ void SeriesAssembler::add_row(std::span<const std::string_view> cells, std::uint
   if (series.label.empty() && mapping_.has(Field::kLabel)) {
     series.label = std::string{cell(Field::kLabel)};
   }
+  if (mapping_.kind == SeriesKind::kStatements) {
+    add_statement_row(series, cells, line);
+    return;
+  }
   series.has_volume = series.has_volume || mapping_.has(Field::kVolume);
   series.has_vwap = series.has_vwap || mapping_.has(Field::kVwap);
 
@@ -379,7 +414,9 @@ void SeriesAssembler::add_row(std::span<const std::string_view> cells, std::uint
     issue.field = Field::kDate;
     issue.kind = date_text.empty() ? FieldIssue::Kind::kMissing : FieldIssue::Kind::kInvalid;
     issue.text = abbreviate(date_text, kIssueTextMax);
+    issue.skips_row = true;
     series.issues.push_back(std::move(issue));
+    ++series.skipped_rows;
     return;
   }
   series.date.push_back(*date);
@@ -422,6 +459,190 @@ void SeriesAssembler::add_row(std::span<const std::string_view> cells, std::uint
   series.close_sig_figs.push_back(close.sig_figs);
   read(Field::kVolume, series.volume);
   read(Field::kVwap, series.vwap);
+}
+
+const std::vector<std::size_t>& SeriesAssembler::item_slots(Series& series) {
+  const auto [it, inserted] = slots_.try_emplace(series.id);
+  if (inserted) {
+    StatementRows& rows = series.statements;
+    for (const auto& item : mapping_.items) {
+      const std::string& name = item.second;
+      const auto found = std::find(rows.item_names.begin(), rows.item_names.end(), name);
+      const auto slot = static_cast<std::size_t>(found - rows.item_names.begin());
+      if (found == rows.item_names.end()) {
+        rows.item_names.push_back(name);
+        rows.items.emplace_back(rows.size(), kNaN);  // NULL on the rows read so far
+      }
+      it->second.push_back(slot);
+    }
+  }
+  return it->second;
+}
+
+void SeriesAssembler::add_statement_row(Series& series, std::span<const std::string_view> cells,
+                                        std::uint32_t line) {
+  const auto cell = [&](int index) -> std::string_view {
+    if (index < 0 || static_cast<std::size_t>(index) >= cells.size()) {
+      return {};
+    }
+    return trim(cells[static_cast<std::size_t>(index)]);
+  };
+  const auto field_cell = [&](Field field) { return cell(mapping_.index(field)); };
+  std::vector<FieldIssue> issues;
+  const auto report = [&](Field field, std::string_view text, bool skips_row) {
+    FieldIssue& issue = issues.emplace_back();
+    issue.line = line;
+    issue.field = field;
+    issue.kind = text.empty() ? FieldIssue::Kind::kMissing : FieldIssue::Kind::kInvalid;
+    issue.text = abbreviate(text, kIssueTextMax);
+    issue.skips_row = skips_row;
+    return &issue;
+  };
+
+  // The key, and the day the version became known: a row without them is skipped.
+  const std::string_view date_text = field_cell(Field::kDate);
+  const std::optional<Date> fiscal_date = parse_date(date_text);
+  if (!fiscal_date) {
+    report(Field::kDate, date_text, true);
+  }
+  const std::string_view statement_text = field_cell(Field::kStatement);
+  const std::optional<Statement> statement = parse_statement(statement_text);
+  if (!statement) {
+    report(Field::kStatement, statement_text, true);
+  }
+  const std::string_view type_text = field_cell(Field::kPeriodType);
+  const std::optional<PeriodType> period_type = parse_period_type(type_text);
+  if (!period_type) {
+    report(Field::kPeriodType, type_text, true);
+  }
+  std::int32_t version = 1;
+  if (mapping_.has(Field::kVersion)) {
+    const std::string_view text = field_cell(Field::kVersion);
+    const std::optional<std::int32_t> parsed = parse_whole(text);
+    if (parsed && *parsed >= 1) {
+      version = *parsed;
+    } else {
+      report(Field::kVersion, text, true);
+    }
+  }
+  const std::string_view from_text = field_cell(Field::kKnownFrom);
+  const std::optional<Date> known_from = parse_date(from_text);
+  if (!known_from) {
+    report(Field::kKnownFrom, from_text, true);
+  }
+  std::optional<Date> known_to;
+  if (const std::string_view text = field_cell(Field::kKnownTo); !text.empty()) {
+    known_to = parse_date(text);
+    if (!known_to) {
+      report(Field::kKnownTo, text, true);
+    }
+  }
+
+  // The rest: what cannot be read is reported, and the row kept without it.
+  std::int32_t fiscal_year = 0;
+  if (mapping_.has(Field::kFiscalYear)) {
+    const std::string_view text = field_cell(Field::kFiscalYear);
+    if (const auto year = parse_whole(text); year && *year >= 1800 && *year <= 2200) {
+      fiscal_year = *year;
+    } else {
+      report(Field::kFiscalYear, text, false);
+    }
+  }
+  FiscalPeriod fiscal_period = FiscalPeriod::kUnknown;
+  if (mapping_.has(Field::kFiscalPeriod)) {
+    const std::string_view text = field_cell(Field::kFiscalPeriod);
+    if (const auto period = parse_fiscal_period(text)) {
+      fiscal_period = *period;
+    } else {
+      report(Field::kFiscalPeriod, text, false);
+    }
+  }
+  KnowledgeSource knowledge_source = KnowledgeSource::kUnknown;
+  if (const std::string_view text = field_cell(Field::kKnowledgeSource); !text.empty()) {
+    if (const auto source = parse_knowledge_source(text)) {
+      knowledge_source = *source;
+    } else {
+      report(Field::kKnowledgeSource, text, false);
+    }
+  }
+  std::optional<Date> filing_date;
+  if (const std::string_view text = field_cell(Field::kFilingDate); !text.empty()) {
+    filing_date = parse_date(text);
+    if (!filing_date) {
+      report(Field::kFilingDate, text, false);
+    }
+  }
+  std::optional<Date> loaded_on;
+  if (const std::string_view text = field_cell(Field::kLoadedOn); !text.empty()) {
+    loaded_on = parse_day(text);
+    if (!loaded_on) {
+      report(Field::kLoadedOn, text, false);
+    }
+  }
+  ParsedNumber close;
+  if (mapping_.has(Field::kClose)) {
+    const std::string_view text = field_cell(Field::kClose);
+    close = parse_number(text);
+    if (close.status == ParsedNumber::Status::kInvalid) {
+      report(Field::kClose, text, false);
+    }
+  }
+  std::vector<double> values(mapping_.items.size(), kNaN);
+  for (std::size_t k = 0; k < mapping_.items.size(); ++k) {
+    const std::string_view text = cell(static_cast<int>(mapping_.items[k].first));
+    const ParsedNumber parsed = parse_number(text);
+    if (parsed.status == ParsedNumber::Status::kOk) {
+      values[k] = parsed.value;
+    } else if (parsed.status == ParsedNumber::Status::kInvalid) {
+      report(Field::kItem, text, false)->column = mapping_.items[k].second;
+    }
+  }
+
+  std::optional<Date> known = known_from;
+  if (known && loaded_on && *loaded_on > *known) {
+    known = loaded_on;
+  }
+  bool skipped = false;
+  for (FieldIssue& issue : issues) {
+    issue.has_date = fiscal_date.has_value();
+    issue.date = fiscal_date.value_or(Date{});
+    issue.known = known;
+    skipped = skipped || issue.skips_row;
+    series.issues.push_back(std::move(issue));
+  }
+  // A row that nothing skipped has every key field.
+  if (skipped || !fiscal_date || !statement || !period_type || !known_from) {
+    ++series.skipped_rows;
+    return;
+  }
+
+  const std::vector<std::size_t>& slots = item_slots(series);
+  StatementRows& rows = series.statements;
+  series.date.push_back(*fiscal_date);
+  series.line.push_back(line);
+  series.close.push_back(close.status == ParsedNumber::Status::kOk ? close.value : kNaN);
+  series.close_decimals.push_back(close.decimals);
+  series.close_sig_figs.push_back(close.sig_figs);
+  // As a point series has them: no volume, no vwap.
+  series.volume.push_back(kNaN);
+  series.vwap.push_back(kNaN);
+  rows.statement.push_back(*statement);
+  rows.period_type.push_back(*period_type);
+  rows.fiscal_year.push_back(fiscal_year);
+  rows.fiscal_period.push_back(fiscal_period);
+  rows.version.push_back(version);
+  rows.known_from.push_back(*known_from);
+  rows.known_to.push_back(known_to);
+  rows.knowledge_source.push_back(knowledge_source);
+  rows.filing_date.push_back(filing_date);
+  rows.loaded_on.push_back(loaded_on);
+  rows.currency.emplace_back(field_cell(Field::kCurrency));
+  for (std::vector<double>& column : rows.items) {
+    column.push_back(kNaN);
+  }
+  for (std::size_t k = 0; k < slots.size(); ++k) {
+    rows.items[slots[k]].back() = values[k];
+  }
 }
 
 void SeriesAssembler::finish() {

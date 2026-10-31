@@ -10,6 +10,7 @@
 
 #include "dorq/date.hpp"
 #include "dorq/series.hpp"
+#include "dorq/statement.hpp"
 #include "dorq/violation.hpp"
 
 namespace dorq {
@@ -54,6 +55,16 @@ struct SeriesMeta {
   std::string exchange;
 };
 
+// A line item of the statements, from --items (fafnir's ref.statement_line_item).
+struct LineItem {
+  std::string column;  // the input column, as the items file names it
+  Statement statement = Statement::kIncome;
+  ItemClass item_class = ItemClass::kFlow;
+  SignConvention sign = SignConvention::kSigned;
+  bool is_subtotal = false;
+  std::uint32_t line = 0;  // in the items file
+};
+
 // The market reference: the log of its level by date.
 struct MarketSeries {
   std::string name;
@@ -81,14 +92,20 @@ struct ContextIssue {
 struct Context {
   bool have_actions = false;
   bool have_meta = false;
+  bool have_items = false;
   std::unordered_map<std::string, SeriesActions> actions;  // by series id
   std::unordered_map<std::string, SeriesMeta> meta;        // by series id
   std::optional<MarketSeries> market;
+  std::vector<LineItem> items;       // in the items file's order
   std::vector<ContextIssue> issues;  // in the order the files were read
 
   // A series' entries, by its id or else its label (a ticker); nullptr if none.
   [[nodiscard]] const SeriesActions* actions_for(const Series& series) const;
   [[nodiscard]] const SeriesMeta* meta_for(const Series& series) const;
+  // A line item by its column name (any case), or nullptr.
+  [[nodiscard]] const LineItem* item(std::string_view column) const;
+  // The items' column names, for the reader (ReadOptions::items).
+  [[nodiscard]] std::vector<std::string> item_names() const;
 };
 
 // Read a CSV or TSV actions file into `context`: columns series, ex_date, type
@@ -115,6 +132,14 @@ void restore_actions(std::istream& in, const std::string& source, Context& conte
 // row; a nav_priced or tick_size that cannot be read is left unset. Each goes to
 // `context.issues`. Throws InputError when the file cannot be read as a whole.
 void read_meta(std::istream& in, const std::string& source, Context& context);
+
+// Read a CSV or TSV items file: column (or item), statement, item_class,
+// sign_convention and is_subtotal, as fafnir's ref.statement_line_item holds
+// them. A row whose statement, class or sign cannot be read is skipped, and a
+// column listed twice keeps its first row; each goes to `context.issues` (DQ109).
+// Throws InputError when the file cannot be read as a whole: empty, or without a
+// column, statement, item_class or sign_convention column.
+void read_items(std::istream& in, const std::string& source, Context& context);
 
 // The market reference from a series' dates and closes (the first of each date;
 // values at or below zero are skipped). Throws InputError when fewer than two

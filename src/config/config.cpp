@@ -394,8 +394,11 @@ Profile read_profile(std::string name, const toml::table& table, const std::stri
             profile.match_kind = SeriesKind::kOhlcv;
           } else if (kind == "point") {
             profile.match_kind = SeriesKind::kPoint;
+          } else if (kind == "statements") {
+            profile.match_kind = SeriesKind::kStatements;
           } else {
-            fail(where, match_node, "\"" + match_path + R"(" must be "ohlcv" or "point")");
+            fail(where, match_node,
+                 "\"" + match_path + R"(" must be "ohlcv", "point" or "statements")");
           }
         } else if (match_key == "series") {
           profile.match_series = read_string_list(match_node, where, match_path);
@@ -498,6 +501,88 @@ void read_calibration(const toml::table& table, const std::string& where, Config
   }
 }
 
+std::pair<int, int> read_spacing(const toml::node& node, const std::string& where,
+                                 const std::string& key) {
+  const auto* array = node.as_array();
+  const auto day = [](const toml::node* item) -> std::optional<int> {
+    const auto* value = item != nullptr ? item->as_integer() : nullptr;
+    if (value == nullptr || value->get() < 1 || value->get() > 1000) {
+      return std::nullopt;
+    }
+    return static_cast<int>(value->get());
+  };
+  const auto low = array != nullptr && array->size() == 2 ? day(array->get(0)) : std::nullopt;
+  const auto high = array != nullptr && array->size() == 2 ? day(array->get(1)) : std::nullopt;
+  if (!low || !high || *low > *high) {
+    fail(where, node, "\"" + key + "\" must be [fewest, most] days, from 1 to 1000");
+  }
+  return {*low, *high};
+}
+
+void read_statements(const toml::table& table, const std::string& where, Config& config) {
+  StatementSettings& settings = config.statements;
+  for (const auto& [key_node, node] : table) {
+    const std::string_view key = key_node.str();
+    const std::string path = key_path("statements", key);
+    if (key == "identities") {
+      // By name: a file adds identities to those it includes, or replaces them.
+      for (const auto& [name_node, equation] : read_table(node, where, path)) {
+        const std::string name_path = key_path(path, name_node.str());
+        Identity identity;
+        identity.name = std::string{name_node.str()};
+        if (const std::string error =
+                parse_identity(read_string(equation, where, name_path), identity);
+            !error.empty()) {
+          std::string message = "\"" + name_path;
+          message += "\": ";
+          message += error;
+          fail(where, equation, message);
+        }
+        std::erase_if(settings.identities,
+                      [&identity](const Identity& old) { return old.name == identity.name; });
+        settings.identities.push_back(std::move(identity));
+      }
+      std::sort(settings.identities.begin(), settings.identities.end(),
+                [](const Identity& a, const Identity& b) { return a.name < b.name; });
+    } else if (key == "nonnegative") {
+      settings.nonnegative = read_string_list(node, where, path);
+    } else if (key == "never_absent") {
+      settings.never_absent = read_string_list(node, where, path);
+    } else if (key == "bounds") {
+      settings.bounds.clear();
+      for (const std::string& text : read_string_list(node, where, path)) {
+        ItemBound bound;
+        if (const std::string error = parse_item_bound(text, bound); !error.empty()) {
+          std::string message = "\"" + path;
+          message += "\": ";
+          message += error;
+          fail(where, node, message);
+        }
+        settings.bounds.push_back(std::move(bound));
+      }
+    } else if (key == "identity_share") {
+      settings.identity_share = read_double(node, where, path, 0.0, 1.0);
+    } else if (key == "tie_floor") {
+      settings.tie_floor = read_double(node, where, path, 0.0, 1e15);
+    } else if (key == "cash_tie_share") {
+      settings.cash_tie_share = read_double(node, where, path, 0.0, 1.0);
+    } else if (key == "quarter_spacing") {
+      settings.quarter_spacing = read_spacing(node, where, path);
+    } else if (key == "year_spacing") {
+      settings.year_spacing = read_spacing(node, where, path);
+    } else if (key == "coverage_floor") {
+      const std::string text = read_string(node, where, path);
+      const auto date = parse_date(text);
+      if (!date) {
+        fail(where, node, "\"" + path + "\" must be a date (YYYY-MM-DD)");
+      }
+      settings.coverage_floor = *date;
+    } else {
+      fail(where, node, "unknown key \"" + path + "\"");
+    }
+  }
+}
+
 void read_root(const toml::table& root, const std::string& where, Config& config) {
   for (const auto& [key_node, node] : root) {
     const std::string key{key_node.str()};
@@ -534,7 +619,7 @@ void read_root(const toml::table& root, const std::string& where, Config& config
       if (const auto kind = parse_kind_option(read_string(node, where, key))) {
         config.kind = *kind;
       } else {
-        fail(where, node, R"("kind" must be "auto", "ohlcv" or "point")");
+        fail(where, node, R"("kind" must be "auto", "ohlcv", "point" or "statements")");
       }
     } else if (key == "input_format") {
       const auto format = parse_input_format(read_string(node, where, key));
@@ -548,8 +633,7 @@ void read_root(const toml::table& root, const std::string& where, Config& config
         const auto field = parse_field_name(field_node.str());
         if (!field) {
           fail(where, column_node,
-               "unknown field \"" + path +
-                   "\" (fields: series, label, date, open, high, low, close, value, volume, vwap)");
+               "unknown field \"" + path + "\" (" + std::string{kFieldNames} + ")");
         }
         config.columns.emplace_back(*field, read_string(column_node, where, path));
       }
@@ -573,6 +657,8 @@ void read_root(const toml::table& root, const std::string& where, Config& config
       read_fafnir(read_table(node, where, key), where, config);
     } else if (key == "calibration") {
       read_calibration(read_table(node, where, key), where, config);
+    } else if (key == "statements") {
+      read_statements(read_table(node, where, key), where, config);
     } else if (key == "include") {
       // Read by load_config before the rest of the file.
     } else if (key == "profiles") {
@@ -635,6 +721,8 @@ std::string_view kind_name(KindOption kind) {
       return "ohlcv";
     case KindOption::kPoint:
       return "point";
+    case KindOption::kStatements:
+      return "statements";
   }
   return "auto";
 }
@@ -851,9 +939,44 @@ void append_priors_patch(std::string& out, const PricePatch& patch) {
   append_number(out, "stale_run", patch.stale_run);
 }
 
+void append_statements(std::string& out, const StatementSettings& settings) {
+  out += "\n[statements]\nidentity_share = " + format_number(settings.identity_share);
+  out += "\ntie_floor = " + format_number(settings.tie_floor);
+  out += "\ncash_tie_share = " + format_number(settings.cash_tie_share);
+  out += "\nquarter_spacing = [" + std::to_string(settings.quarter_spacing.first) + ", " +
+         std::to_string(settings.quarter_spacing.second) + "]";
+  out += "\nyear_spacing = [" + std::to_string(settings.year_spacing.first) + ", " +
+         std::to_string(settings.year_spacing.second) + "]";
+  out += "\ncoverage_floor = \"" + settings.coverage_floor.to_string() + "\"";
+  out += "\nnonnegative = ";
+  append_toml_list(out, settings.nonnegative);
+  out += "\nnever_absent = ";
+  append_toml_list(out, settings.never_absent);
+  std::vector<std::string> bounds;
+  bounds.reserve(settings.bounds.size());
+  for (const ItemBound& bound : settings.bounds) {
+    bounds.push_back(bound.to_string());
+  }
+  out += "\nbounds = ";
+  append_toml_list(out, bounds);
+  out += "\n";
+  if (!settings.identities.empty()) {
+    out += "\n[statements.identities]\n";
+    for (const Identity& identity : settings.identities) {
+      out += toml_key(identity.name) + " = ";
+      append_toml_string(out, identity.to_string());
+      out += "\n";
+    }
+  }
+}
+
+std::string render(const Config& config, bool with_statements);
+
 // The settings that decide what is reported (config_hash): the effective
 // configuration as TOML, with the keys that only change presentation, speed or
-// the exit status held at their defaults.
+// the exit status held at their defaults. [statements] is left out where it holds
+// its defaults, so the release that added it changed no existing hash; the
+// --items file's content is in where one is given (ADR 0005).
 std::string canonical(const Config& config) {
   Config copy = config;
   copy.format = OutputFormat::kText;
@@ -864,7 +987,11 @@ std::string canonical(const Config& config) {
   if (!copy.calendar_digest.empty()) {
     copy.calendar_file = "content:" + copy.calendar_digest;
   }
-  return to_toml(copy);
+  std::string out = render(copy, copy.statements != StatementSettings{});
+  if (!copy.items_digest.empty()) {
+    out += "\n# --items content: " + copy.items_digest + "\n";
+  }
+  return out;
 }
 
 }  // namespace
@@ -1065,6 +1192,116 @@ std::optional<SplitRatio> parse_split_ratio(std::string_view text) noexcept {
   return SplitRatio{*after, *before};
 }
 
+namespace {
+
+bool is_item_name(std::string_view name) {
+  const auto letter = [](char ch) {
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_';
+  };
+  return !name.empty() && letter(name.front()) &&
+         std::all_of(name.begin(), name.end(),
+                     [&letter](char ch) { return letter(ch) || (ch >= '0' && ch <= '9'); });
+}
+
+// One side of an identity: "b + c - d", or "-a + b".
+std::string parse_terms(std::string_view text, std::vector<IdentityTerm>& out) {
+  out.clear();
+  std::string_view rest = trim(text);
+  bool negative = false;
+  if (!rest.empty() && (rest.front() == '-' || rest.front() == '+')) {
+    negative = rest.front() == '-';
+    rest = trim(rest.substr(1));
+  }
+  while (true) {
+    const std::size_t op = rest.find_first_of("+-");
+    const std::string_view name = trim(rest.substr(0, op));
+    if (!is_item_name(name)) {
+      return name.empty() ? std::string{"a term is missing"}
+                          : "\"" + std::string{name} + "\" is not an item name";
+    }
+    out.push_back({std::string{name}, negative});
+    if (op == std::string_view::npos) {
+      return {};
+    }
+    negative = rest[op] == '-';
+    rest = trim(rest.substr(op + 1));
+  }
+}
+
+void append_terms(std::string& out, const std::vector<IdentityTerm>& terms) {
+  for (std::size_t i = 0; i < terms.size(); ++i) {
+    if (i == 0) {
+      out += terms[i].negative ? "-" : "";
+    } else {
+      out += terms[i].negative ? " - " : " + ";
+    }
+    out += terms[i].item;
+  }
+}
+
+}  // namespace
+
+std::string parse_identity(std::string_view text, Identity& out) {
+  const std::size_t eq = text.find('=');
+  if (eq == std::string_view::npos || text.find('=', eq + 1) != std::string_view::npos) {
+    return R"(an identity has one "=" between two sums of items, as "a = b + c")";
+  }
+  if (const std::string error = parse_terms(text.substr(0, eq), out.left); !error.empty()) {
+    return "left of \"=\": " + error;
+  }
+  if (const std::string error = parse_terms(text.substr(eq + 1), out.right); !error.empty()) {
+    return "right of \"=\": " + error;
+  }
+  return {};
+}
+
+std::string Identity::to_string() const {
+  std::string out;
+  append_terms(out, left);
+  out += " = ";
+  append_terms(out, right);
+  return out;
+}
+
+std::string parse_item_bound(std::string_view text, ItemBound& out) {
+  const std::size_t at = text.find("<=");
+  if (at == std::string_view::npos) {
+    return R"(a bound is one item at most another, as "a <= b")";
+  }
+  const std::string_view lesser = trim(text.substr(0, at));
+  const std::string_view greater = trim(text.substr(at + 2));
+  if (!is_item_name(lesser) || !is_item_name(greater)) {
+    return "\"" + std::string{trim(text)} + R"(" is not "item <= item")";
+  }
+  out.lesser = std::string{lesser};
+  out.greater = std::string{greater};
+  return {};
+}
+
+std::string ItemBound::to_string() const { return lesser + " <= " + greater; }
+
+std::vector<std::pair<std::string, std::string>> StatementSettings::named_items() const {
+  std::vector<std::pair<std::string, std::string>> out;
+  for (const Identity& identity : identities) {
+    for (const auto* side : {&identity.left, &identity.right}) {
+      for (const IdentityTerm& term : *side) {
+        out.emplace_back("identities." + identity.name, term.item);
+      }
+    }
+  }
+  for (const std::string& item : nonnegative) {
+    out.emplace_back("nonnegative", item);
+  }
+  for (const std::string& item : never_absent) {
+    out.emplace_back("never_absent", item);
+  }
+  for (const ItemBound& bound : bounds) {
+    out.emplace_back("bounds", bound.lesser);
+    out.emplace_back("bounds", bound.greater);
+  }
+  return out;
+}
+
 std::optional<Severity> SeverityThresholds::for_probability(double p) const noexcept {
   if (p >= error) {
     return Severity::kError;
@@ -1218,7 +1455,9 @@ Config load_config(const fs::path& path) {
   return config;
 }
 
-std::string to_toml(const Config& config) {
+namespace {
+
+std::string render(const Config& config, bool with_statements) {
   std::string out;
   out += "select = ";
   append_toml_list(out, config.select);
@@ -1293,6 +1532,10 @@ std::string to_toml(const Config& config) {
     out += "]\n";
   }
 
+  if (with_statements) {
+    append_statements(out, config.statements);
+  }
+
   for (const Profile& profile : config.profiles) {
     const std::string section = "profiles." + toml_key(profile.name);
     out += "\n[" + section + "]\n";
@@ -1355,6 +1598,10 @@ std::string to_toml(const Config& config) {
   }
   return out;
 }
+
+}  // namespace
+
+std::string to_toml(const Config& config) { return render(config, true); }
 
 std::string config_hash(const Config& config) {
   // FNV-1a, 64-bit: an identity for a set of settings, not a security measure.

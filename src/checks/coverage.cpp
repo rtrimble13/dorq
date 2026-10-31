@@ -70,7 +70,7 @@ const CheckInfo& NonSessionBar::info() const noexcept {
       .name = "non-session-bar",
       .summary = "a bar dated on a day the calendar has no session",
       .default_severity = Severity::kWarn,
-      .applies = Applies::kAny,
+      .applies = Applies::kTimeSeries,
   };
   return kInfo;
 }
@@ -126,7 +126,7 @@ const CheckInfo& DateShift::info() const noexcept {
       .name = "date-shift",
       .summary = "weekday counts show the history dated a day early or late",
       .default_severity = Severity::kError,
-      .applies = Applies::kAny,
+      .applies = Applies::kTimeSeries,
   };
   return kInfo;
 }
@@ -206,7 +206,7 @@ const CheckInfo& MissingRunCheck::info() const noexcept {
       .name = "missing-run",
       .summary = "sessions with no bar that look like a feed outage, given how the series trades",
       .default_severity = Severity::kWarn,
-      .applies = Applies::kAny,
+      .applies = Applies::kTimeSeries,
   };
   return kInfo;
 }
@@ -265,7 +265,7 @@ const CheckInfo& SparseSeries::info() const noexcept {
       .name = "sparse-series",
       .summary = "the series has a bar on few of its sessions (info: liquidity, not a defect)",
       .default_severity = Severity::kInfo,
-      .applies = Applies::kAny,
+      .applies = Applies::kTimeSeries,
   };
   return kInfo;
 }
@@ -310,7 +310,7 @@ const CheckInfo& CohortGap::info() const noexcept {
       .name = "cohort-gap",
       .summary = "many series that trade every session miss the same one: a failed load",
       .default_severity = Severity::kError,
-      .applies = Applies::kAny,
+      .applies = Applies::kTimeSeries,
       .cross_sectional = true,
   };
   return kInfo;
@@ -322,7 +322,7 @@ const CheckInfo& StaleFeed::info() const noexcept {
       .name = "stale-feed",
       .summary = "the series stops before the as-of date by more than its density explains",
       .default_severity = Severity::kWarn,
-      .applies = Applies::kAny,
+      .applies = Applies::kTimeSeries,
       .cross_sectional = true,
   };
   return kInfo;
@@ -337,7 +337,7 @@ const CheckInfo& FrequencyGap::info() const noexcept {
       .name = "frequency-gap",
       .summary = "missing periods in a weekly, monthly, quarterly or annual series",
       .default_severity = Severity::kWarn,
-      .applies = Applies::kAny,
+      .applies = Applies::kTimeSeries,
   };
   return kInfo;
 }

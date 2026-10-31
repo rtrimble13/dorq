@@ -1,11 +1,13 @@
 #include "io/columns.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "core/text.hpp"
@@ -47,6 +49,48 @@ struct Aliases {
   std::span<const std::string_view> names;  // normalized, most preferred first
 };
 
+// Statements (ADR 0005). fafnir's column names first, then SF1's and others'.
+constexpr std::array<std::string_view, 4> kStatementAliases = {"statement", "statementtype",
+                                                               "tablename", "table"};
+constexpr std::array<std::string_view, 1> kPeriodTypeAliases = {"periodtype"};
+constexpr std::array<std::string_view, 4> kFiscalDateAliases = {"fiscaldate", "reportperiod",
+                                                                "periodend", "periodenddate"};
+constexpr std::array<std::string_view, 1> kFiscalYearAliases = {"fiscalyear"};
+constexpr std::array<std::string_view, 1> kFiscalPeriodAliases = {"fiscalperiod"};
+constexpr std::array<std::string_view, 2> kVersionAliases = {"versionno", "version"};
+constexpr std::array<std::string_view, 1> kKnownFromAliases = {"knownfrom"};
+constexpr std::array<std::string_view, 1> kKnownToAliases = {"knownto"};
+constexpr std::array<std::string_view, 1> kKnowledgeSourceAliases = {"knowledgesource"};
+constexpr std::array<std::string_view, 1> kFilingDateAliases = {"filingdate"};
+constexpr std::array<std::string_view, 2> kLoadedOnAliases = {"loadedon", "loadedat"};
+constexpr std::array<std::string_view, 2> kCurrencyAliases = {"reportedcurrency", "currency"};
+constexpr std::array<std::string_view, 3> kStatementCloseAliases = {"close", "closeprice",
+                                                                    "rawclose"};
+
+constexpr std::array<Aliases, 15> kStatementFields = {{
+    {Field::kStatement, kStatementAliases},
+    {Field::kPeriodType, kPeriodTypeAliases},
+    {Field::kDate, kFiscalDateAliases},
+    {Field::kSeries, kSeriesAliases},
+    {Field::kFiscalYear, kFiscalYearAliases},
+    {Field::kFiscalPeriod, kFiscalPeriodAliases},
+    {Field::kVersion, kVersionAliases},
+    {Field::kKnownFrom, kKnownFromAliases},
+    {Field::kKnownTo, kKnownToAliases},
+    {Field::kKnowledgeSource, kKnowledgeSourceAliases},
+    {Field::kFilingDate, kFilingDateAliases},
+    {Field::kLoadedOn, kLoadedOnAliases},
+    {Field::kCurrency, kCurrencyAliases},
+    {Field::kClose, kStatementCloseAliases},
+    {Field::kLabel, kLabelAliases},
+}};
+
+// Columns fafnir's statement tables carry beside their items, which are not line
+// items. Without --items, every other column is one.
+constexpr std::array<std::string_view, 9> kStatementBookkeeping = {
+    "vendorkey", "calendardate",   "periodstartdate", "contenthash", "extra",
+    "source",    "ingestionrunid", "supersededat",    "dimension"};
+
 // Resolved in this order. `series` before `label`, so a lone `symbol` column
 // names the series and a `symbol` beside `security_id` labels it. `close` before
 // `value`: a file with both is OHLC and its value column is someone else's.
@@ -74,6 +118,9 @@ std::optional<KindOption> parse_kind_option(std::string_view text) noexcept {
   if (iequals(text, "point")) {
     return KindOption::kPoint;
   }
+  if (iequals(text, "statements")) {
+    return KindOption::kStatements;
+  }
   return std::nullopt;
 }
 
@@ -85,7 +132,7 @@ std::optional<Field> parse_field_name(std::string_view name) {
   if (n == "label") {
     return Field::kLabel;
   }
-  if (n == "date") {
+  if (n == "date" || n == "fiscaldate") {
     return Field::kDate;
   }
   if (n == "open") {
@@ -106,6 +153,24 @@ std::optional<Field> parse_field_name(std::string_view name) {
   if (n == "vwap") {
     return Field::kVwap;
   }
+  constexpr std::array<std::pair<std::string_view, Field>, 11> kStatementNames = {{
+      {"statement", Field::kStatement},
+      {"periodtype", Field::kPeriodType},
+      {"fiscalyear", Field::kFiscalYear},
+      {"fiscalperiod", Field::kFiscalPeriod},
+      {"versionno", Field::kVersion},
+      {"knownfrom", Field::kKnownFrom},
+      {"knownto", Field::kKnownTo},
+      {"knowledgesource", Field::kKnowledgeSource},
+      {"filingdate", Field::kFilingDate},
+      {"loadedon", Field::kLoadedOn},
+      {"reportedcurrency", Field::kCurrency},
+  }};
+  for (const auto& [known, field] : kStatementNames) {
+    if (n == known) {
+      return field;
+    }
+  }
   return std::nullopt;
 }
 
@@ -120,6 +185,60 @@ std::string join_names(std::span<const std::string> names) {
     out += '"' + name + '"';
   }
   return out.empty() ? "(none)" : out;
+}
+
+// Statements' fields and line items (ADR 0005), after the --columns overrides.
+// Throws InputError when a required column is missing.
+void map_statement_columns(std::span<const std::string> names,
+                           const std::vector<std::string>& normalized,
+                           const std::vector<std::string>* items, const std::string& source,
+                           std::vector<bool>& used, ColumnMapping& mapping) {
+  mapping.kind = SeriesKind::kStatements;
+  for (const auto& entry : kStatementFields) {
+    if (mapping.has(entry.field)) {
+      continue;
+    }
+    for (const std::string_view alias : entry.names) {
+      std::size_t i = 0;
+      while (i < names.size() && (used[i] || normalized[i] != alias)) {
+        ++i;
+      }
+      if (i < names.size()) {
+        mapping.column.at(static_cast<std::size_t>(entry.field)) = static_cast<int>(i);
+        used[i] = true;
+        break;
+      }
+    }
+  }
+  std::string missing;
+  for (const Field f : {Field::kStatement, Field::kPeriodType, Field::kDate, Field::kKnownFrom}) {
+    if (!mapping.has(f)) {
+      missing += missing.empty() ? "" : ", ";
+      missing += field_name(f, SeriesKind::kStatements);
+    }
+  }
+  if (!missing.empty()) {
+    throw InputError(source + ": statements need statement, period_type, fiscal_date and " +
+                     "known_from columns; missing " + missing + "; columns are " +
+                     join_names(names));
+  }
+  for (std::size_t i = 0; i < names.size(); ++i) {
+    if (used[i]) {
+      continue;
+    }
+    const std::string_view name = trim(names[i]);
+    if (items != nullptr) {
+      const auto it = std::find_if(items->begin(), items->end(),
+                                   [name](const std::string& item) { return iequals(item, name); });
+      if (it != items->end()) {
+        mapping.items.emplace_back(i, *it);
+      }
+    } else if (!name.empty() &&
+               std::find(kStatementBookkeeping.begin(), kStatementBookkeeping.end(),
+                         normalized[i]) == kStatementBookkeeping.end()) {
+      mapping.items.emplace_back(i, std::string{name});
+    }
+  }
 }
 
 }  // namespace
@@ -139,8 +258,8 @@ std::optional<std::string> parse_column_overrides(const std::string& text, Colum
     }
     const auto field = parse_field_name(entry.substr(0, eq));
     if (!field) {
-      return "unknown field \"" + std::string{entry.substr(0, eq)} +
-             "\" (fields: series, label, date, open, high, low, close, value, volume, vwap)";
+      return "unknown field \"" + std::string{entry.substr(0, eq)} + "\" (" +
+             std::string{kFieldNames} + ")";
     }
     out.emplace_back(*field, std::string{trim(entry.substr(eq + 1))});
   }
@@ -148,7 +267,8 @@ std::optional<std::string> parse_column_overrides(const std::string& text, Colum
 }
 
 ColumnMapping map_columns(std::span<const std::string> names, const ColumnOverrides& overrides,
-                          KindOption kind, const std::string& source) {
+                          KindOption kind, const std::string& source,
+                          const std::vector<std::string>* items) {
   ColumnMapping mapping;
   mapping.column.fill(-1);
   std::vector<bool> used(names.size(), false);
@@ -197,6 +317,22 @@ ColumnMapping map_columns(std::span<const std::string> names, const ColumnOverri
       }
     }
   };
+  // Statements (ADR 0005): named by --kind, or a file with a statement, a period
+  // type and a fiscal date column.
+  const auto present = [&](Field field, std::span<const std::string_view> aliases) {
+    return mapping.has(field) ||
+           std::any_of(aliases.begin(), aliases.end(), [&](std::string_view alias) {
+             return std::find(normalized.begin(), normalized.end(), alias) != normalized.end();
+           });
+  };
+  if (kind == KindOption::kStatements ||
+      (kind == KindOption::kAuto && present(Field::kStatement, kStatementAliases) &&
+       present(Field::kPeriodType, kPeriodTypeAliases) &&
+       present(Field::kDate, kFiscalDateAliases))) {
+    map_statement_columns(names, normalized, items, source, used, mapping);
+    return mapping;
+  }
+
   for (const auto& entry : kAliases) {
     pick(entry.field, entry.names);
   }
@@ -256,6 +392,7 @@ ColumnMapping map_columns(std::span<const std::string> names, const ColumnOverri
       mapping.column.at(static_cast<std::size_t>(Field::kHigh)) = -1;
       mapping.column.at(static_cast<std::size_t>(Field::kLow)) = -1;
       break;
+    case KindOption::kStatements:  // mapped above
     case KindOption::kAuto:
       if (any_ohl) {
         if (!all_ohlc) {
