@@ -44,8 +44,9 @@ Lines and JSON arrays, and reports in five formats. It runs:
 - financial statements, the third input kind, for milestone M9 (fundamentals):
   every version of each period on its knowledge timeline, with `--items` naming
   the line items ([doc/statements.md](doc/statements.md)). The statement checks
-  (DQ9xx) arrive item by item ([the plan](doc/plans/dorq-fundamentals-plan.md));
-  so far DQ104 reports the rows and values that cannot be used.
+  (DQ9xx) arrive item by item ([the plan](doc/plans/dorq-fundamentals-plan.md)).
+  So far DQ104 reports the rows and values that cannot be used, DQ901 versions
+  that collide or do not chain, and DQ902 values that cannot be right.
 
 `dorq calibrate` fits the price model's priors and its `p_error` map to labelled
 history: fafnir's own repair decisions ([doc/calibration.md](doc/calibration.md),
@@ -168,6 +169,8 @@ including the `fafnir` format that maps onto `ops.data_quality_flag`.
 | [DQ502](doc/checks/DQ502.md) | carry-bar | info: untraded bars that carry the last close |
 | [DQ601](doc/checks/DQ601.md) | cohort-move | several series moving by the same split ratio on the same date, beyond the day's base rate |
 | [DQ602](doc/checks/DQ602.md) | market-day | info: a day the market reference moved far beyond its range (`--market`) |
+| [DQ901](doc/checks/DQ901.md) | statement-key | statements: two rows for one version, versions that do not chain, or a knowledge date before the period's end or apart from its filing |
+| [DQ902](doc/checks/DQ902.md) | impossible-value | statements: a negative where none can be, or a component above its total (`[statements] nonnegative`, `bounds`) |
 | [DQ701](doc/checks/DQ701.md) | split-misdated | a split on file the bars show a few sessions away (`--actions`) |
 | [DQ702](doc/checks/DQ702.md) | split-without-jump | a split on file the bars do not show: not real, already applied, or a duplicate row |
 | [DQ703](doc/checks/DQ703.md) | split-ratio-mismatch | a split on file at the wrong ratio (often inverted) |

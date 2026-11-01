@@ -1,10 +1,11 @@
 # Generates dorq-synth's statements universe twice and holds the files byte for
 # byte; holds its identities on the rows with no fault (dorq-synth
 # verify-statements); checks it with dorq; and scores the result against the
-# labels and tools/synth/gates.txt with both dorq-synth score and dorq-eval.
+# labels and tools/synth/gates.txt with both dorq-synth score and dorq-eval. fafnir's
+# statements configuration must name only items fafnir's taxonomy lists.
 #
-#   cmake -DSYNTH=... -DDORQ=... -DEVAL=... -DGATES=... -DCONFIG=... -DOUT=... -DSEED=N
-#         -P synth_statements_gate.cmake
+#   cmake -DSYNTH=... -DDORQ=... -DEVAL=... -DGATES=... -DCONFIG=... -DFAFNIR_CONFIG=...
+#         -DOUT=... -DSEED=N -P synth_statements_gate.cmake
 file(REMOVE_RECURSE "${OUT}" "${OUT}-again")
 foreach(dir "${OUT}" "${OUT}-again")
   execute_process(COMMAND "${SYNTH}" statements --seed "${SEED}" --out "${dir}"
@@ -33,6 +34,14 @@ execute_process(
   RESULT_VARIABLE status)
 if(NOT status EQUAL 0)
   message(FATAL_ERROR "dorq failed (${status})")
+endif()
+execute_process(
+  COMMAND "${DORQ}" "${OUT}/statements.csv" --items "${OUT}/items.csv" --config
+          "${FAFNIR_CONFIG}" --exit-zero --format fafnir
+  OUTPUT_QUIET
+  RESULT_VARIABLE status)
+if(NOT status EQUAL 0)
+  message(FATAL_ERROR "dorq with fafnir's statements configuration failed (${status})")
 endif()
 execute_process(
   COMMAND "${SYNTH}" score --labels "${OUT}/labels.csv" --results "${OUT}/results.csv" --gates

@@ -219,6 +219,7 @@ Engine::Processed Engine::process(Work& work) const {
       .actions = actions,
       .meta = meta,
       .statements = views ? &*views : nullptr,
+      .statement_settings = &config_.statements,
   };
   for (const Check* check : settings.checks) {
     check->run(context, result.violations);

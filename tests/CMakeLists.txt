@@ -15,7 +15,8 @@ add_executable(
   unit/test_volume_stale.cpp
   unit/test_context.cpp
   unit/test_calibrate.cpp
-  unit/test_statements.cpp)
+  unit/test_statements.cpp
+  unit/test_statement_checks.cpp)
 target_include_directories(dorq_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(dorq_tests PRIVATE dorq_lib doctest::doctest_with_main)
 dorq_configure_target(dorq_tests)
@@ -48,6 +49,9 @@ dorq_cli_exit_test(
   config-show-check-options 0 config show --config "${PROJECT_SOURCE_DIR}/priors/fafnir.toml" -
   --format fafnir --exit-zero --calendar-exchange NASDAQ --actions actions.csv --meta meta.csv
   --restore-actions before-actions.csv --as-of 2026-10-09 --since 2026-10-02)
+# And fafnir's statements configuration (priors/fafnir-statements.toml).
+dorq_cli_exit_test(fafnir-statements-config 0 config show --config
+                   "${PROJECT_SOURCE_DIR}/priors/fafnir-statements.toml")
 dorq_cli_exit_test(version-json 0 version --format json)
 dorq_cli_exit_test(list-checks 0 list-checks)
 dorq_cli_exit_test(explain 0 explain DQ101)
@@ -137,6 +141,7 @@ foreach(seed 1 2)
       "-DEVAL=$<TARGET_FILE:dorq-eval>"
       "-DGATES=${PROJECT_SOURCE_DIR}/tools/synth/gates.txt"
       "-DCONFIG=${PROJECT_SOURCE_DIR}/tools/synth/statements.toml"
+      "-DFAFNIR_CONFIG=${PROJECT_SOURCE_DIR}/priors/fafnir-statements.toml"
       "-DOUT=${CMAKE_CURRENT_BINARY_DIR}/statements-${seed}" "-DSEED=${seed}" -P
       "${CMAKE_CURRENT_SOURCE_DIR}/synth_statements_gate.cmake")
 endforeach()

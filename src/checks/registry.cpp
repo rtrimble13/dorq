@@ -13,6 +13,7 @@
 #include "checks/integrity.hpp"
 #include "checks/price.hpp"
 #include "checks/stale.hpp"
+#include "checks/statements.hpp"
 #include "checks/volume.hpp"
 #include "core/text.hpp"
 
@@ -87,14 +88,16 @@ std::span<const Check* const> all_checks() {
   static const DividendImplausible kDividend;
   static const CohortMove kCohortMove;
   static const MarketDay kMarketDay;
-  static const std::array<const Check*, 33> kChecks = {
+  static const StatementKey kStatementKey;
+  static const ImpossibleValue kImpossibleValue;
+  static const std::array<const Check*, 35> kChecks = {
       &kOhlcBounds,     &kNonPositive,     &kDuplicateDate, &kMissingField,   &kNonSession,
       &kPrecisionShift, &kZeroRange,       &kOutOfBounds,   &kBadContextRow,  &kBadPrint,
       &kScaleShift,     &kUnreportedSplit, &kCloseMismatch, &kHistorySegment, &kDateShift,
       &kLargeMove,      &kMissingRun,      &kSparse,        &kCohort,         &kStale,
       &kFrequencyGap,   &kVolumeShift,     &kVolumeSpike,   &kZeroVolumeMove, &kRepeatedPrice,
       &kCarryBar,       &kCohortMove,      &kMarketDay,     &kSplitMisdated,  &kSplitNoJump,
-      &kSplitRatio,     &kSplitDouble,     &kDividend};
+      &kSplitRatio,     &kSplitDouble,     &kDividend,      &kStatementKey,   &kImpossibleValue};
   return kChecks;
 }
 
