@@ -38,4 +38,29 @@ class PeriodTie final : public Check {
   void run(const SeriesContext& context, std::vector<Violation>& out) const override;
 };
 
+// DQ911, DQ912, DQ913 and DQ919 (values.cpp): the statement value model's findings.
+class BadValue final : public Check {
+ public:
+  [[nodiscard]] const CheckInfo& info() const noexcept override;
+  void run(const SeriesContext& context, std::vector<Violation>& out) const override;
+};
+
+class UnitError final : public Check {
+ public:
+  [[nodiscard]] const CheckInfo& info() const noexcept override;
+  void run(const SeriesContext& context, std::vector<Violation>& out) const override;
+};
+
+class SignError final : public Check {
+ public:
+  [[nodiscard]] const CheckInfo& info() const noexcept override;
+  void run(const SeriesContext& context, std::vector<Violation>& out) const override;
+};
+
+class LargeChange final : public Check {
+ public:
+  [[nodiscard]] const CheckInfo& info() const noexcept override;
+  void run(const SeriesContext& context, std::vector<Violation>& out) const override;
+};
+
 }  // namespace dorq

@@ -291,6 +291,24 @@ struct ItemBound {
 // Parses "a <= b". Returns an error message, or empty.
 [[nodiscard]] std::string parse_item_bound(std::string_view text, ItemBound& out);
 
+// [statements.priors]: the statement value model's defaults (DQ911 to DQ919;
+// doc/statements.md), which `dorq calibrate` fits (DR-0911).
+struct StatementPriors {
+  // The prior probability that any one value is wrong in each way. A real change as
+  // large as an error is as likely as the item's own history says: as often as its
+  // other values stray as far.
+  double bad_value = 0.001;
+  double unit_error = 0.0002;
+  double sign_error = 0.0002;
+  // The class prior on an item's period-to-period scale, on the asinh scale (about
+  // a log): flows (income and cash flow) and stocks (the balance sheet).
+  double flow_scale = 0.08;
+  double stock_scale = 0.05;
+  double prior_weight = 6.0;  // in periods, against the item's own residuals
+
+  bool operator==(const StatementPriors&) const = default;
+};
+
 // [statements]: the judgements the statement checks make (doc/statements.md). What
 // an item is comes from --items; these are the settings a check applies to them.
 // Global, not per profile.
@@ -317,6 +335,7 @@ struct StatementSettings {
   // the balance sheet's need not: a gap within this share of the balance is that.
   Date restricted_cash_from = Date::from_ymd(2018, 1, 1);
   double restricted_cash_share = 0.10;
+  StatementPriors priors;
 
   // Each line item the settings name, with where: ("identities.balance_sheet",
   // "total_assets"), for checking them against --items.
