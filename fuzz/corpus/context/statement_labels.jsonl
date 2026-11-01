@@ -1,0 +1,3 @@
+{"series":"IND01","date":"2020-06-30","class":"data_error","expect":"DQ912","statement":"income","period_type":"quarter","version_no":2,"item":"revenue"}
+{"series":"IND02","first":"2019-03-31","last":"2019-12-31","class":"market_fact","codes":"DQ9","statement":"core.cash_flow_statement","period_type":"annual"}
+{"series":"IND03","date":"2020-06-30","class":"data_error","version_no":"1.5"}

@@ -12,6 +12,8 @@
 #include <vector>
 
 #include "core/text.hpp"
+#include "dorq/number.hpp"
+#include "dorq/statement.hpp"
 #include "io/input_error.hpp"
 #include "io/json.hpp"
 
@@ -79,6 +81,35 @@ LabelClass class_of(const std::string& text, const std::string& source, std::uin
     return LabelClass::kMarketFact;
   }
   fail(source, line, "class \"" + text + "\" is not data_error, context_gap or market_fact");
+}
+
+// A statements label's field: statement, period_type, version_no or item. Returns
+// false for any other key.
+bool statement_field(const JsonMember& m, const std::string& source, std::uint32_t line,
+                     Label& label) {
+  if (m.key == "statement") {
+    label.statement = parse_statement(m.text);
+    if (!label.statement) {
+      fail(source, line, "statement \"" + m.text + "\" is not income, balance_sheet or cash_flow");
+    }
+  } else if (m.key == "period_type") {
+    label.period_type = parse_period_type(m.text);
+    if (!label.period_type) {
+      fail(source, line, "period_type \"" + m.text + "\" is not quarter or annual");
+    }
+  } else if (m.key == "version_no") {
+    const ParsedNumber number = parse_number(m.text);
+    if (number.status != ParsedNumber::Status::kOk || number.value < 1.0 || number.value > 1e6 ||
+        number.value != std::floor(number.value)) {
+      fail(source, line, "version_no \"" + m.text + "\" is not a whole number from 1");
+    }
+    label.version = static_cast<std::int32_t>(number.value);
+  } else if (m.key == "item") {
+    label.item = m.text;
+  } else {
+    return false;
+  }
+  return true;
 }
 
 }  // namespace
@@ -218,6 +249,8 @@ std::vector<Label> read_labels(std::istream& in, const std::string& source) {
         label.verified = verified;
       } else if (m.key == "members") {
         label.members = list_items(m.text);
+      } else if (statement_field(m, source, line, label)) {
+        // statement, period_type, version_no or item
       }
       // Other keys are kept by the exporter for people, and ignored here.
     }

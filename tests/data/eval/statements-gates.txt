@@ -1,0 +1,5 @@
+# max on a code bounds its reports at warn and above; on a hard-negative kind, its hits.
+DQ912 max 3
+DQ903 max 1
+hn_reclassification max 1
+DQ932 recall 1.0

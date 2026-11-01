@@ -3,6 +3,9 @@
 //
 //   dorq-synth generate [--seed N] --out DIR     writes DIR/bars.csv, points.csv, labels.csv,
 //                                                labels.jsonl, actions.csv, meta.csv, market.csv
+//   dorq-synth statements [--seed N] --out DIR   writes DIR/statements.csv, items.csv,
+//                                                actions.csv, meta.csv, labels.csv, labels.jsonl
+//   dorq-synth verify-statements --dir DIR --config F
 //   dorq-synth score --labels F --results F [--gates F] [--verbose]
 //
 // The generator draws from its own PRNG (xoshiro256**) and its own normal and t
@@ -24,68 +27,21 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "dorq/calendar.hpp"
 #include "dorq/date.hpp"
 #include "dorq/number.hpp"
 #include "io/csv.hpp"
+#include "rng.hpp"
+#include "statements.hpp"
 
 namespace {
 
 using dorq::Date;
 
-// ---------------------------------------------------------------------------
-// Random numbers
-
-class Rng {
- public:
-  explicit Rng(std::uint64_t seed) {
-    for (auto& word : state_) {
-      seed += 0x9e3779b97f4a7c15ULL;  // splitmix64
-      std::uint64_t z = seed;
-      z = (z ^ (z >> 30U)) * 0xbf58476d1ce4e5b9ULL;
-      z = (z ^ (z >> 27U)) * 0x94d049bb133111ebULL;
-      word = z ^ (z >> 31U);
-    }
-  }
-
-  std::uint64_t next() {
-    const std::uint64_t result = rotl(state_[1] * 5, 7) * 9;
-    const std::uint64_t t = state_[1] << 17U;
-    state_[2] ^= state_[0];
-    state_[3] ^= state_[1];
-    state_[1] ^= state_[2];
-    state_[0] ^= state_[3];
-    state_[2] ^= t;
-    state_[3] = rotl(state_[3], 45);
-    return result;
-  }
-
-  // Uniform on (0, 1).
-  double uniform() { return (static_cast<double>(next() >> 11U) + 0.5) * 0x1.0p-53; }
-  double uniform(double lo, double hi) { return lo + (hi - lo) * uniform(); }
-  // Log-uniform on [lo, hi].
-  double log_uniform(double lo, double hi) { return std::exp(uniform(std::log(lo), std::log(hi))); }
-  int integer(int lo, int hi) {  // inclusive
-    return lo + static_cast<int>(uniform() * (hi - lo + 1));
-  }
-  bool chance(double p) { return uniform() < p; }
-  double normal() {  // Box-Muller, one of the pair
-    return std::sqrt(-2.0 * std::log(uniform())) * std::cos(2.0 * std::numbers::pi * uniform());
-  }
-  // Student t with 4 degrees of freedom, scaled to unit variance.
-  double t4() {
-    const double chi2 = -2.0 * std::log(uniform() * uniform());  // chi-square, 4 dof
-    return normal() / std::sqrt(chi2 / 4.0) / std::numbers::sqrt2;
-  }
-
- private:
-  static std::uint64_t rotl(std::uint64_t x, int k) {
-    return (x << static_cast<unsigned>(k)) | (x >> static_cast<unsigned>(64 - k));
-  }
-  std::array<std::uint64_t, 4> state_{};
-};
+using synth::Rng;
 
 // ---------------------------------------------------------------------------
 // Generation
@@ -99,12 +55,25 @@ struct Bar {
 };
 
 struct Label {
+  Label(std::string id, Date from, Date to, std::string what, std::string code, std::string prefix)
+      : series(std::move(id)),
+        first(from),
+        last(to),
+        kind(std::move(what)),
+        expect(std::move(code)),
+        codes(std::move(prefix)) {}
+
   std::string series;  // "*" for every series
   Date first;
   Date last;
   std::string kind;
   std::string expect;  // the code dorq should report; empty for a hard negative
   std::string codes;   // hard negatives: the code prefix a report would be wrong under
+  // Statements: what the label covers; empty covers every one.
+  std::string statement;
+  std::string period_type;
+  std::string version;
+  std::string item;
 };
 
 // A row of actions.csv: a split (numerator new shares for denominator old) or a
@@ -291,7 +260,7 @@ void Generator::simulate(SeriesPlan& plan, const std::vector<Date>& dates,
       day_surge = std::log(rng_.uniform(3.0, 10.0));
       surge = 0.7;
       gap_share = rng_.uniform(0.7, 1.0);
-      labels_.push_back({plan.id, dates[t], dates[t], "hn_earnings", "", "DQ2"});
+      labels_.emplace_back(plan.id, dates[t], dates[t], "hn_earnings", "", "DQ2");
     }
     if (t == crash_index) {
       day_surge = std::max(day_surge, std::log(rng_.uniform(2.5, 5.0)));
@@ -391,7 +360,7 @@ SeriesPlan& Generator::any(Pool& from) {
 
 void Generator::label(const SeriesPlan& plan, std::size_t first, std::size_t last, const char* kind,
                       const char* expect) {
-  labels_.push_back({plan.id, plan.bars[first].date, plan.bars[last].date, kind, expect, ""});
+  labels_.emplace_back(plan.id, plan.bars[first].date, plan.bars[last].date, kind, expect, "");
 }
 
 // Bad prints: one to three bars off, then back.
@@ -589,7 +558,7 @@ void Generator::inject_failed_load(Pool& liquid) {
     }
   }
   const Date date = liquid.front()->bars[load].date;
-  labels_.push_back({"*", date, date, "failed_load", "DQ303", ""});
+  labels_.emplace_back("*", date, date, "failed_load", "DQ303", "");
 }
 
 // Volume in the wrong units, or adjusted for a split, for an era or to the end;
@@ -687,24 +656,24 @@ void Generator::rates(const std::vector<Date>& dates, std::ostream& points) {
       values[t] = round_to(x, 0.01);
     }
     const std::string name = id.str();
-    labels_.push_back({name, dates.front(), dates.back(), "hn_rate", "", "DQ2"});
+    labels_.emplace_back(name, dates.front(), dates.back(), "hn_rate", "", "DQ2");
     const auto at = static_cast<std::size_t>(rng_.integer(100, static_cast<int>(n) - 300));
     if (r == 1 || r == 4) {
       values[at] = round_to(values[at] * 100.0, 0.01);
-      labels_.push_back({name, dates[at], dates[at], "rate_bad_print", "DQ201", ""});
+      labels_.emplace_back(name, dates[at], dates[at], "rate_bad_print", "DQ201", "");
       if (values[at] < -5.0 || values[at] > 25.0) {  // the gate's bounds (dorq.toml)
-        labels_.push_back({name, dates[at], dates[at], "rate_out_of_bounds", "DQ108", ""});
+        labels_.emplace_back(name, dates[at], dates[at], "rate_out_of_bounds", "DQ108", "");
       }
     } else if (r == 2 || r == 5) {
       const std::size_t end = at + static_cast<std::size_t>(rng_.integer(30, 150));
       for (std::size_t t = at; t <= end; ++t) {
         values[t] = round_to(values[t] * 0.01, 0.0001);
       }
-      labels_.push_back({name, dates[at], dates[end], "rate_decimal_era", "DQ202", ""});
+      labels_.emplace_back(name, dates[at], dates[end], "rate_decimal_era", "DQ202", "");
     } else if (r == 3) {
       values[at] = 999.0;
-      labels_.push_back({name, dates[at], dates[at], "rate_out_of_bounds", "DQ108", ""});
-      labels_.push_back({name, dates[at], dates[at], "rate_bad_print", "DQ201", ""});
+      labels_.emplace_back(name, dates[at], dates[at], "rate_out_of_bounds", "DQ108", "");
+      labels_.emplace_back(name, dates[at], dates[at], "rate_bad_print", "DQ201", "");
     }
     for (std::size_t t = 0; t < n; ++t) {
       std::ostringstream value;
@@ -762,8 +731,8 @@ void Generator::file_split(const SeriesPlan& plan, Date ex, SplitShares ratio) {
 }
 
 void Generator::split_hard_negative(const SeriesPlan& plan, std::size_t t, const char* kind) {
-  labels_.push_back({plan.id, plan.bars[t].date, plan.bars[t].date, kind, "", "DQ2"});
-  labels_.push_back({plan.id, plan.bars[t].date, plan.bars[t].date, kind, "", "DQ70"});
+  labels_.emplace_back(plan.id, plan.bars[t].date, plan.bars[t].date, kind, "", "DQ2");
+  labels_.emplace_back(plan.id, plan.bars[t].date, plan.bars[t].date, kind, "", "DQ70");
 }
 
 // A bar of a tradable series with a split ratio for its price (forward above $25,
@@ -889,8 +858,8 @@ void Generator::dividends(Pool& liquid) {
     }
     Action& dividend = actions_.at(row);
     dividend.amount = done < 3 ? dividend.amount * 100.0 : round_to(dividend.amount * 400.0, 0.01);
-    labels_.push_back({dividend.series, dividend.ex_date, dividend.ex_date,
-                       done < 3 ? "dividend_slip" : "dividend_above_price", "DQ705", ""});
+    labels_.emplace_back(dividend.series, dividend.ex_date, dividend.ex_date,
+                         done < 3 ? "dividend_slip" : "dividend_above_price", "DQ705", "");
   }
 }
 
@@ -936,8 +905,8 @@ void Generator::inject_family_split(Pool& liquid) {
     apply_split(*plan, t, 0.5);
     label(*plan, t, t, "family_split", "DQ203");
   }
-  labels_.push_back({"*", family.front()->bars[t].date, family.front()->bars[t].date,
-                     "family_split", "DQ601", ""});
+  labels_.emplace_back("*", family.front()->bars[t].date, family.front()->bars[t].date,
+                       "family_split", "DQ601", "");
 }
 
 void Generator::run(const Outputs& out) {
@@ -955,7 +924,7 @@ void Generator::run(const Outputs& out) {
     }
     variance = 0.01 * 0.01 * 0.04 + 0.08 * market[t] * market[t] + 0.88 * variance;
   }
-  labels_.push_back({"*", dates[crash], dates[crash], "hn_crash", "", "DQ2"});
+  labels_.emplace_back("*", dates[crash], dates[crash], "hn_crash", "", "DQ2");
 
   std::vector<SeriesPlan> universe;
   const auto add = [&](const char* prefix, int count, Class cls) {
@@ -1013,17 +982,17 @@ void Generator::run(const Outputs& out) {
           old_dates.begin(),
           old_dates.begin() + rng_.integer(600, static_cast<int>(old_dates.size())));
       simulate(plan, own, std::vector<double>(own.size(), 0.0), own.size());
-      labels_.push_back({plan.id, own.front(), own.back(), "hn_tick", "", "DQ2"});
+      labels_.emplace_back(plan.id, own.front(), own.back(), "hn_tick", "", "DQ2");
       // It stops long before the rest: stale as of the universe's last date.
-      labels_.push_back({plan.id, own.back(), dates.back(), "series_ended", "DQ304", ""});
+      labels_.emplace_back(plan.id, own.back(), dates.back(), "series_ended", "DQ304", "");
     } else {
       simulate(plan, dates, market, crash);
     }
     if (plan.cls == Class::kPenny) {
-      labels_.push_back({plan.id, dates.front(), dates.back(), "hn_tick", "", "DQ2"});
+      labels_.emplace_back(plan.id, dates.front(), dates.back(), "hn_tick", "", "DQ2");
     }
     if (plan.cls == Class::kThin) {
-      labels_.push_back({plan.id, dates.front(), dates.back(), "hn_thin", "", "DQ20"});
+      labels_.emplace_back(plan.id, dates.front(), dates.back(), "hn_thin", "", "DQ20");
     }
   }
   inject(universe);
@@ -1117,6 +1086,12 @@ struct Result {
   std::string code;
   std::string severity;
   std::string message;
+  // A statement finding's period, version and item, from the CSV's statement
+  // columns; empty when the finding names none.
+  std::string statement;
+  std::string period_type;
+  std::string version;
+  std::string item;
 };
 
 std::vector<std::vector<std::string>> read_csv(const std::string& path) {
@@ -1152,8 +1127,29 @@ Date date_of(const std::string& text) {
   return *date;
 }
 
+// A statements label's period, version and item, for people: " income quarter v1
+// revenue". Empty for a bars label.
+std::string scope(const Label& l) {
+  std::string out;
+  for (const std::string* field : {&l.statement, &l.period_type, &l.version, &l.item}) {
+    if (!field->empty()) {
+      out += (field == &l.version ? " v" : " ") + *field;
+    }
+  }
+  return out;
+}
+
+// A label's statement field against a result's: either may cover every value.
+bool same(const std::string& label, const std::string& result) {
+  return label.empty() || result.empty() || label == result;
+}
+
 bool overlaps(const Result& r, const Label& l, int slack_days) {
   if (l.series != "*" && l.series != r.series) {
+    return false;
+  }
+  if (!same(l.statement, r.statement) || !same(l.period_type, r.period_type) ||
+      !same(l.version, r.version) || !same(l.item, r.item)) {
     return false;
   }
   if (l.series == "*" && !l.expect.empty() && !r.series.empty()) {
@@ -1201,15 +1197,40 @@ std::vector<Gate> read_gates(const std::string& path) {
   return gates;
 }
 
+// A column's index, or nullopt when the header lacks it.
+std::optional<std::size_t> optional_column(const std::vector<std::string>& header,
+                                           std::string_view name) {
+  const auto it = std::find(header.begin(), header.end(), name);
+  if (it == header.end()) {
+    return std::nullopt;
+  }
+  return static_cast<std::size_t>(it - header.begin());
+}
+
+// A cell of an optional column, or empty.
+std::string cell_of(const std::vector<std::string>& row, std::optional<std::size_t> col) {
+  return col && *col < row.size() ? row[*col] : std::string{};
+}
+
 std::vector<Label> read_labels(const std::string& path) {
   std::vector<Label> labels;
   const auto rows = read_csv(path);
   const auto& h = rows.at(0);
+  // A statements universe's labels name the period, version and item they cover.
+  const auto statement = optional_column(h, "statement");
+  const auto period_type = optional_column(h, "period_type");
+  const auto version = optional_column(h, "version_no");
+  const auto item = optional_column(h, "item");
   for (std::size_t i = 1; i < rows.size(); ++i) {
     const auto& row = rows[i];
-    labels.push_back({row.at(column(h, "series")), date_of(row.at(column(h, "first"))),
-                      date_of(row.at(column(h, "last"))), row.at(column(h, "kind")),
-                      row.at(column(h, "expect")), row.at(column(h, "codes"))});
+    Label label(row.at(column(h, "series")), date_of(row.at(column(h, "first"))),
+                date_of(row.at(column(h, "last"))), row.at(column(h, "kind")),
+                row.at(column(h, "expect")), row.at(column(h, "codes")));
+    label.statement = cell_of(row, statement);
+    label.period_type = cell_of(row, period_type);
+    label.version = cell_of(row, version);
+    label.item = cell_of(row, item);
+    labels.push_back(std::move(label));
   }
   return labels;
 }
@@ -1223,9 +1244,18 @@ std::vector<Result> read_results(const std::string& path) {
     return results;
   }
   const auto& h = rows.at(0);
+  // A statements run's CSV has these after the message.
+  const auto statement = optional_column(h, "statement");
+  const auto period_type = optional_column(h, "period_type");
+  const auto version = optional_column(h, "version_no");
+  const auto item = optional_column(h, "item");
   for (std::size_t i = 1; i < rows.size(); ++i) {
     const auto& row = rows[i];
     Result r;
+    r.statement = cell_of(row, statement);
+    r.period_type = cell_of(row, period_type);
+    r.version = cell_of(row, version);
+    r.item = cell_of(row, item);
     r.severity = row.at(column(h, "severity"));
     if (r.severity == "info") {
       continue;
@@ -1305,7 +1335,7 @@ class Tally {
       c.found += found ? 1 : 0;
       if (!found && narrate(code)) {
         std::cout << "missed (" << l.kind << "): " << l.series << " " << l.first.to_string() << ".."
-                  << l.last.to_string() << " " << l.expect << "\n";
+                  << l.last.to_string() << scope(l) << " " << l.expect << "\n";
       }
     }
   }
@@ -1390,8 +1420,8 @@ class Tally {
   }
 
   std::optional<double> metric(const Gate& gate) {
-    if (gate.metric == "max") {  // a hard-negative kind
-      return hard_hits_[gate.code];
+    if (gate.metric == "max") {  // a code's reports, or a hard-negative kind's
+      return gate.code.starts_with("DQ") ? by_code_[gate.code].reported : hard_hits_[gate.code];
     }
     const Counts& c = by_code_[gate.code];
     if (gate.metric == "precision") {
@@ -1436,6 +1466,8 @@ int score(const std::string& labels_path, const std::string& results_path,
 
 int usage() {
   std::cerr << "usage: dorq-synth generate [--seed N] --out DIR\n"
+               "       dorq-synth statements [--seed N] --out DIR\n"
+               "       dorq-synth verify-statements --dir DIR --config F\n"
                "       dorq-synth score --labels F --results F [--gates F] [--verbose]\n"
                "       dorq-synth bench --copies K [--seed N] --out FILE\n";
   return 2;
@@ -1474,6 +1506,22 @@ int main(int argc, char** argv) {
       std::ofstream market(std::filesystem::path(*out) / "market.csv", std::ios::binary);
       Generator(seed).run({bars, points, labels, labels_jsonl, actions, meta, market});
       return 0;
+    }
+    if (args[1] == "statements") {
+      const auto out = value("--out");
+      if (!out) {
+        return usage();
+      }
+      synth::generate_statements(std::stoull(value("--seed").value_or("1")), *out);
+      return 0;
+    }
+    if (args[1] == "verify-statements") {
+      const auto dir = value("--dir");
+      const auto config = value("--config");
+      if (!dir || !config) {
+        return usage();
+      }
+      return synth::verify_statements(*dir, *config) == 0 ? 0 : 1;
     }
     if (args[1] == "bench") {
       // K universes' bars in one file, the series of copy i named "<i>_<id>": a

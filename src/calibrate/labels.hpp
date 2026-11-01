@@ -10,6 +10,7 @@
 
 #include "dorq/date.hpp"
 #include "dorq/series.hpp"
+#include "dorq/statement.hpp"
 
 namespace dorq {
 
@@ -52,7 +53,20 @@ struct Label {
   // A cross-sectional label (series "*") about a cohort: its members' ids. It
   // matches a DQ601 row whose members overlap them.
   std::vector<std::string> members;
+  // A label about financial statements: the statement, period type, version and
+  // line item it covers, each unset where it covers every one. Its `first` and
+  // `last` are then fiscal dates.
+  std::optional<Statement> statement;
+  std::optional<PeriodType> period_type;
+  std::optional<std::int32_t> version;
+  std::string item;
   std::uint32_t line = 0;  // in the labels file
+
+  // Whether the label names a statement, period type, version or item: one about
+  // statements, which the price model does not judge.
+  [[nodiscard]] bool about_statements() const noexcept {
+    return statement.has_value() || period_type.has_value() || version.has_value() || !item.empty();
+  }
 };
 
 // An ISO 8601 date or timestamp ("2026-10-14", "2026-10-14T17:15:47Z",
@@ -64,7 +78,8 @@ struct Label {
 //   {"series":"AKR","first":"2020-03-02","last":"2020-03-02","class":"data_error",
 //    "expect":"DQ202","kind":"scale_era","source":"operator_override","note":"..."}
 // `date` stands for first and last; `last` defaults to `first`. `remove` is a
-// comma-separated list of dates. Blank lines are skipped. Throws InputError
+// comma-separated list of dates. A statements label adds `statement`,
+// `period_type`, `version_no` and `item`. Blank lines are skipped. Throws InputError
 // naming the line.
 [[nodiscard]] std::vector<Label> read_labels(std::istream& in, const std::string& source);
 

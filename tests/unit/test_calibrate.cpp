@@ -1,5 +1,6 @@
 // M6: labels, --restore, [calibration], config include, dorq calibrate.
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -8,6 +9,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -18,6 +20,7 @@
 #include "config/config.hpp"
 #include "dorq/calendar.hpp"
 #include "dorq/date.hpp"
+#include "dorq/statement.hpp"
 #include "io/input_error.hpp"
 #include "price/model.hpp"
 #include "test_support.hpp"
@@ -366,6 +369,40 @@ TEST_CASE("dorq calibrate: fits the labels, writes priors.toml that dorq check r
   CHECK(check.status == 0);
   CHECK(contains(check.out, "DQ201"));
 
+  // A label about statements is counted, but is not about price moves, even on a
+  // series the bars have.
+  const auto counts = [](std::string out) {
+    out.insert(0, "\n");  // the summary line may open the output
+    const auto at = out.find("\nlabels: ");
+    std::array<int, 3> n{-1, -1, -1};
+    if (at != std::string::npos) {
+      // "labels: 12 (5 about price moves, 3 matched)"
+      std::istringstream in(out.substr(at + std::string_view{"\nlabels: "}.size()));
+      char paren = 0;
+      std::string about;
+      std::string price;
+      std::string moves;
+      in >> n[0] >> paren >> n[1] >> about >> price >> moves >> n[2];
+    }
+    return n;
+  };
+  const std::string statement_labels = path("statement-labels.jsonl");
+  write_file(statement_labels, u.labels + R"({"series":"LIQ01","first":"2015-01-02",)"
+                                          R"("last":"2030-01-01","class":"data_error",)"
+                                          R"("statement":"income"})"
+                                          "\n");
+  const std::string statement_priors = path("statement-priors.toml");
+  const Result with_statements = run_in(
+      dir.path(), {"calibrate", bars.c_str(), "--labels", statement_labels.c_str(), "--out",
+                   statement_priors.c_str(), "--isolated", "--threads", "2", "--clean-unlabelled"});
+  REQUIRE(with_statements.status == 0);
+  const auto before = counts(fit.out);
+  const auto after = counts(with_statements.out);
+  CHECK(before[0] >= 0);
+  CHECK(after[0] == before[0] + 1);
+  CHECK(after[1] == before[1]);
+  CHECK(after[2] == before[2]);
+
   const Result no_labels = run_in(dir.path(), {"calibrate", bars.c_str(), "--isolated"});
   CHECK(no_labels.status == 2);
   const Result bad_labels =
@@ -429,6 +466,42 @@ TEST_CASE("labels: decided_at, applies_until, verified and a cohort's members") 
   CHECK(contains(label_error(R"({"series":"A","date":"2020-01-02","class":"data_error",)"
                              R"("verified":"maybe"})"),
                  "verified \"maybe\" is not true or false"));
+}
+
+TEST_CASE("labels: a statements label's statement, period type, version and item") {
+  const auto labels =
+      labels_of(R"({"series":"IND01","date":"2020-06-30","class":"data_error","expect":"DQ912",)"
+                R"("statement":"income","period_type":"quarter","version_no":2,"item":"revenue"})"
+                "\n"
+                R"({"series":"IND01","date":"2020-06-30","class":"data_error",)"
+                R"("statement":"core.balance_sheet","identity":"balance_sheet"})"
+                "\n"
+                R"({"series":"IND01","date":"2020-06-30","class":"data_error"})"
+                "\n");
+  REQUIRE(labels.size() == 3);
+  CHECK(labels[0].statement == std::optional<dorq::Statement>{dorq::Statement::kIncome});
+  CHECK(labels[0].period_type == std::optional<dorq::PeriodType>{dorq::PeriodType::kQuarter});
+  CHECK(labels[0].version == std::optional<std::int32_t>{2});
+  CHECK(labels[0].item == "revenue");
+  CHECK(labels[0].about_statements());
+  // fafnir's table names are read too; an unset field covers every value.
+  CHECK(labels[1].statement == std::optional<dorq::Statement>{dorq::Statement::kBalanceSheet});
+  CHECK_FALSE(labels[1].period_type.has_value());
+  CHECK_FALSE(labels[1].version.has_value());
+  CHECK(labels[1].about_statements());
+  CHECK_FALSE(labels[2].about_statements());
+
+  const auto with = [](const std::string& field) {
+    return label_error(R"({"series":"A","date":"2020-01-02","class":"data_error",)" + field + "}");
+  };
+  CHECK(contains(with(R"("statement":"ledger")"),
+                 "statement \"ledger\" is not income, balance_sheet or cash_flow"));
+  CHECK(contains(with(R"("period_type":"monthly")"),
+                 "period_type \"monthly\" is not quarter or annual"));
+  for (const char* version : {"0", "1.5", "\"x\""}) {
+    CHECK(
+        contains(with(std::string{R"("version_no":)"} + version), "is not a whole number from 1"));
+  }
 }
 
 TEST_CASE("parse_timestamp: ISO 8601 dates and times, in seconds since 1970 UTC") {

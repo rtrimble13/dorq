@@ -1,0 +1,8 @@
+series,label,source,date,end_date,line,code,check,severity,p_error,classification,message,statement,period_type,fiscal_year,fiscal_period,version_no,item
+IND01,,statements.csv,2020-06-30,,,DQ912,check,error,1,data_error,the labelled item,income,quarter,,,1,revenue
+IND01,,statements.csv,2020-06-30,,,DQ912,check,error,1,data_error,another item,income,quarter,,,1,cost_of_revenue
+IND01,,statements.csv,2020-06-30,,,DQ912,check,error,1,data_error,the year and not the quarter,income,annual,,,1,revenue
+IND01,,statements.csv,2020-06-30,,,DQ932,check,error,1,data_error,the labelled version,balance_sheet,quarter,,,2,
+IND01,,statements.csv,2020-06-30,,,DQ903,check,warn,1,data_error,another version,balance_sheet,quarter,,,1,
+IND02,,statements.csv,2019-06-30,,,DQ911,check,warn,1,data_error,a reclassification,cash_flow,quarter,,,1,capital_expenditure
+IND02,,statements.csv,2019-06-30,,,DQ911,check,warn,1,data_error,another statement,income,quarter,,,1,revenue
