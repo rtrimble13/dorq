@@ -23,21 +23,13 @@ jobs:
             os: ubuntu-24.04
             cc: gcc-13
             cxx: g++-13
-          - platform: macos-arm64
-            os: macos-14
-            cc: clang
-            cxx: clang++
     env:
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Ninja (Linux)
-        if: runner.os == 'Linux'
+      - name: Install Ninja
         run: sudo apt-get update && sudo apt-get install -y ninja-build
-      - name: Install Ninja (macOS)
-        if: runner.os == 'macOS'
-        run: brew install ninja
 
       - name: Configure, build, test
         run: cmake --workflow --preset release
@@ -71,20 +63,10 @@ jobs:
           cmake --install build/release --prefix "staging/${name}"
           # Owned by root in the archive, not by the runner's uid: tar run as root
           # keeps the recorded owner, and on a host that uid is whichever local
-          # account has it, which could then replace the binary. GNU tar on Linux,
-          # bsdtar on macOS.
-          if [[ "${RUNNER_OS}" == "Linux" ]]; then
-            owner=(--owner=0 --group=0 --numeric-owner)
-          else
-            owner=(--uid 0 --gid 0)
-          fi
-          tar "${owner[@]}" -C staging -czf "${name}.tar.gz" "${name}"
+          # account has it, which could then replace the binary.
+          tar --owner=0 --group=0 --numeric-owner -C staging -czf "${name}.tar.gz" "${name}"
           tar -tvzf "${name}.tar.gz"
-          if [[ "${RUNNER_OS}" == "Linux" ]]; then
-            ldd "staging/${name}/bin/dorq"
-          else
-            otool -L "staging/${name}/bin/dorq"
-          fi
+          ldd "staging/${name}/bin/dorq"
           echo "ARCHIVE=${name}.tar.gz" >> "${GITHUB_ENV}"
 
       - uses: actions/upload-artifact@v4

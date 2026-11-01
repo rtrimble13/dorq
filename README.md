@@ -202,12 +202,11 @@ skipped, while the run checks everything else
 ### Release binaries
 
 Each [release](https://github.com/rtrimble13/dorq/releases) publishes the following
-archives, plus a `SHA256SUMS` file:
+archive, plus a `SHA256SUMS` file:
 
 | Archive | Runs on |
 |---|---|
 | `dorq-<version>-linux-x86_64.tar.gz` | Linux x86-64 with glibc 2.39 or newer (Ubuntu 24.04+). The C++ runtime is linked in |
-| `dorq-<version>-macos-arm64.tar.gz` | macOS on Apple silicon |
 
 ```bash
 version=0.11.0
