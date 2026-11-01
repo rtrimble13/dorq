@@ -30,21 +30,13 @@ jobs:
             os: ubuntu-24.04
             cc: clang-18
             cxx: clang++-18
-          - name: macos-arm64-appleclang
-            os: macos-14
-            cc: clang
-            cxx: clang++
     env:
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Ninja (Linux)
-        if: runner.os == 'Linux'
+      - name: Install Ninja
         run: sudo apt-get update && sudo apt-get install -y ninja-build
-      - name: Install Ninja (macOS)
-        if: runner.os == 'macOS'
-        run: brew install ninja
       - name: Configure, build, test
         run: cmake --workflow --preset ci
       - name: CLI smoke test

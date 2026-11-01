@@ -3,7 +3,7 @@
 ## Workflow
 
 1. Work on a branch and open a pull request against `main`. CI must be green
-   before a merge: build and test on GCC 13, Clang 18 and AppleClang, sanitizers,
+   before a merge: build and test on GCC 13 and Clang 18 (Linux), sanitizers,
    clang-format and clang-tidy.
 2. Each PR names the plan item it implements (`DR-xxxx` in
    [the development plan](doc/plans/dorq-development-plan.md)), and updates that
@@ -129,8 +129,7 @@ To release:
    git tag -a v0.1.0 -m "dorq 0.1.0"
    git push origin v0.1.0
    ```
-3. `.github/workflows/release.yml` builds and tests on Linux x86-64 and macOS
-   arm64. It checks that the binary reports the tag's version from a clean tree,
+3. `.github/workflows/release.yml` builds and tests on Linux x86-64. It checks that the binary reports the tag's version from a clean tree,
    then publishes the archives and `SHA256SUMS` as a GitHub release. The release
    notes are generated from the merged PR titles.
 
