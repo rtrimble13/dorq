@@ -69,9 +69,8 @@ const std::vector<std::string>& key_rows() {
       "ZZCHAIN,balance_sheet,quarter,2010-09-30,2010,Q3,1,2010-11-01,2011-03-01,,,,,,5,,,",
       "ZZCHAIN,balance_sheet,quarter,2010-09-30,2010,Q3,2,2011-03-01,2011-04-01,,,,,,5,,,",
       // One version: open is a chain; closed is not.
-      "ONE,income,annual,2010-12-31,2010,FY,1,2011-02-20,,filed,2011-02-20,1,,,,,,",
-      "ONE,balance_sheet,annual,2010-12-31,2010,FY,1,2011-02-20,2012-01-01,filed,2011-02-20,,,,"
-      "5,,,",
+      "O1,income,annual,2010-12-31,2010,FY,1,2011-02-20,,filed,2011-02-20,1,,,,,,",
+      "O1,balance_sheet,annual,2010-12-31,,FY,1,2011-02-20,2012-01-01,filed,2011-02-20,,,,5,,,",
       // A row twice; known before the period ended; filed on another day; filed
       // with no filing date.
       "ROWS,income,quarter,2011-03-31,2011,Q1,1,2011-05-01,,,,1,,,,,,",

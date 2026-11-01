@@ -233,6 +233,8 @@ generated data.
     those move its revenue, cost and SG&A by up to 4%, and its totals with them.
   - A restatement is known from the next 10-K (35%), from the backfill day
     2026-10-20 (50%, so that one load day holds many), or from a night after it.
+    Its version is `observed`, as fafnir's constraints require of every version
+    after the first.
   - `loaded_at` is the backfill day for every row known by then.
 
 ### Faults and hard negatives

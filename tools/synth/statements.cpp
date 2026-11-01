@@ -1383,7 +1383,9 @@ void Universe::late_filings() {
 }
 
 // When a restatement became known: the next 10-K's filing, which restated its
-// comparatives, or a load that found it (the backfill, or a night after).
+// comparatives, or a load that found it (the backfill, or a night after). A
+// version after the first is always observed, never filed, as fafnir's
+// constraints have it (version_no = 1 OR knowledge_source = 'observed').
 Date Universe::restatement_date(const Company& c, std::size_t year_end, KnowledgeSource& source,
                                 std::optional<Date>& filing) {
   const double u = rng_.uniform();
@@ -1391,13 +1393,11 @@ Date Universe::restatement_date(const Company& c, std::size_t year_end, Knowledg
   while (next < c.quarters.size() && !c.quarters[next].year_end) {
     ++next;
   }
-  if (u < 0.35 && next < c.quarters.size() && c.source[next] == KnowledgeSource::kFiled) {
-    source = KnowledgeSource::kFiled;
-    filing = c.filed[next];
-    return c.filed[next];
-  }
   source = KnowledgeSource::kObserved;
   filing = std::nullopt;
+  if (u < 0.35 && next < c.quarters.size() && c.source[next] == KnowledgeSource::kFiled) {
+    return c.filed[next];
+  }
   if (u < 0.85) {
     return backfill_day();
   }

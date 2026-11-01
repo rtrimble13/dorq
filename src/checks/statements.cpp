@@ -43,8 +43,11 @@ StatementPeriod period_of(const Series& s, std::size_t i, bool with_version) {
 // The newer of a row's known_from and loaded_on: what --since judges it by.
 Date known_of(const Series& s, std::size_t i) {
   const StatementRows& st = s.statements;
-  const Date known = st.known_from[i];
-  return st.loaded_on[i] && *st.loaded_on[i] > known ? *st.loaded_on[i] : known;
+  Date known = st.known_from[i];
+  if (const std::optional<Date>& loaded = st.loaded_on[i]) {
+    known = std::max(known, *loaded);
+  }
+  return known;
 }
 
 Violation finding(const CheckInfo& info, const Series& s, std::size_t i, bool with_version) {
@@ -95,6 +98,20 @@ bool same_period(const Series& s, std::size_t a, std::size_t b) {
   const StatementRows& st = s.statements;
   return s.date[a] == s.date[b] && st.statement[a] == st.statement[b] &&
          st.period_type[a] == st.period_type[b];
+}
+
+// A broken link of a chain: "v1 is known to 2010-09-01 and v2 from 2010-10-01: a
+// gap".
+std::string link_text(const std::string& name, Date to, const std::string& next, Date next_from) {
+  std::string text = name;
+  text += " is known to ";
+  text += to.to_string();
+  text += " and ";
+  text += next;
+  text += " from ";
+  text += next_from.to_string();
+  text += to < next_from ? ": a gap" : ": an overlap";
+  return text;
 }
 
 // One version's rows: what is wrong with each, and that there is more than one.
@@ -179,13 +196,14 @@ void judge_chain(const CheckInfo& info, const Series& s, std::vector<std::size_t
     const std::string next = version_text(st.version[versions[k + 1]]);
     const Date next_from = st.known_from[versions[k + 1]];
     if (!to) {
-      breaks.push_back(name + " is open, but " + next + " is known from " + next_from.to_string());
-    } else if (*to < next_from) {
-      breaks.push_back(name + " is known to " + to->to_string() + " and " + next + " from " +
-                       next_from.to_string() + ": a gap");
-    } else if (next_from < *to) {
-      breaks.push_back(name + " is known to " + to->to_string() + " and " + next + " from " +
-                       next_from.to_string() + ": an overlap");
+      std::string text = name;
+      text += " is open, but ";
+      text += next;
+      text += " is known from ";
+      text += next_from.to_string();
+      breaks.push_back(std::move(text));
+    } else if (*to != next_from) {
+      breaks.push_back(link_text(name, *to, next, next_from));
     } else {
       continue;
     }
