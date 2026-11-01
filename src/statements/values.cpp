@@ -10,8 +10,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <limits>
 #include <map>
+#include <numbers>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -26,13 +28,16 @@
 namespace dorq {
 
 ValueHypothesis ValueFinding::error() const noexcept {
-  std::size_t best = 1;
-  for (std::size_t h = 2; h < posterior.size(); ++h) {
-    if (posterior.at(h) > posterior.at(best)) {
-      best = h;
-    }
+  const double bad = posterior[1];
+  const double unit = posterior[2];
+  const double sign = posterior[3];
+  if (unit > bad && unit >= sign) {
+    return ValueHypothesis::kUnitError;
   }
-  return static_cast<ValueHypothesis>(best);
+  if (sign > bad && sign > unit) {
+    return ValueHypothesis::kSignError;
+  }
+  return ValueHypothesis::kBadValue;
 }
 
 namespace {
@@ -129,7 +134,8 @@ std::vector<Line> lines_of(const Series& s, const std::vector<std::size_t>& view
     }
     if (line.type == PeriodType::kQuarter) {
       for (std::size_t p = 1; p < n; ++p) {
-        for (std::size_t q = p; q-- > 0 && q + 7 > p;) {
+        for (std::size_t back = 1; back <= std::min<std::size_t>(p, 6); ++back) {
+          const std::size_t q = p - back;
           const int gap = s.date[line.rows[p]].days() - s.date[line.rows[q]].days();
           if (gap > 380) {
             break;
@@ -560,6 +566,15 @@ struct Candidates {
   }
 };
 
+double first_finite(std::initializer_list<double> values) {
+  for (const double v : values) {
+    if (std::isfinite(v)) {
+      return v;
+    }
+  }
+  return kNaN;
+}
+
 void predict(const Line& line, Track& t, std::size_t p, const std::vector<double>& z) {
   const std::vector<double>& full = t.z;  // before and after read the values as stored
   const std::ptrdiff_t pv = line.prev[p];
@@ -587,10 +602,8 @@ void predict(const Line& line, Track& t, std::size_t p, const std::vector<double
     }
     const double b1 = at(full, yb) + at(full, pv) - at(full, step(line.prev, yb));
     const double a1 = at(full, ya) + at(full, nx) - at(full, step(line.next, ya));
-    t.before[p] = std::isfinite(b1)             ? b1
-                  : std::isfinite(at(full, yb)) ? at(full, yb)
-                                                : at(full, pv);
-    t.after[p] = std::isfinite(a1) ? a1 : std::isfinite(at(full, ya)) ? at(full, ya) : at(full, nx);
+    t.before[p] = first_finite({b1, at(full, yb), at(full, pv)});
+    t.after[p] = first_finite({a1, at(full, ya), at(full, nx)});
   } else {
     add(at(z, step(line.prev, pv)));
     add(at(z, pv));
@@ -1072,7 +1085,7 @@ std::optional<ValueFinding> judge(const ViewContext& vc, const Line& line,
   f.power = sc.power;
   f.score = std::fabs(r) / sigma;
   f.provisional = line.next[p] == kNone;
-  f.notable = std::fabs(std::log(std::fabs(ratio))) >= std::log(2.0) && ratio > 0.0 &&
+  f.notable = std::fabs(std::log(std::fabs(ratio))) >= std::numbers::ln2 && ratio > 0.0 &&
               f.score >= 8.0 && large < 0.05;
   switch (f.error()) {
     case ValueHypothesis::kUnitError:

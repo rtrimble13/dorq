@@ -123,9 +123,15 @@ std::string company(const std::string& id, const Edit& edit = {}, int quarters =
       if (edit) {
         edit(q, s, v);
       }
-      text += head + s + ",quarter" + tail;
-      for (std::size_t k = 0; k < v.size(); ++k) {
-        text += "," + (std::isnan(v.at(k)) ? std::string{} : whole(v.at(k)));
+      text += head;
+      text += s;
+      text += ",quarter";
+      text += tail;
+      for (const double x : v) {
+        text += ',';
+        if (!std::isnan(x)) {
+          text += whole(x);
+        }
       }
       text += "\n";
     }
@@ -170,7 +176,7 @@ Result check(const TempDir& dir, const std::string& csv, bool items = true,
                              "--format", "jsonl", "--exit-zero", file.c_str()});
 }
 
-const std::string kIncomeQ = R"({"statement":"income","period_type":"quarter",)";
+constexpr const char* kIncomeQ = R"({"statement":"income","period_type":"quarter",)";
 
 }  // namespace
 
@@ -205,7 +211,8 @@ TEST_CASE("DQ912: a value, a row and a run of quarters at a power of ten, each r
   const std::vector<std::string> expected{
       R"(ERA {"statement":"income","period_type":"quarter","fiscal_date":"2011-06-30","version_no":1,"scope":"era"})",
       R"(ROW {"statement":"balance_sheet","period_type":"quarter","fiscal_date":"2013-06-30","version_no":1,"scope":"row"})",
-      "VALUE " + kIncomeQ + R"("fiscal_date":"2012-09-30","version_no":1,"item":"revenue"})",
+      std::string{"VALUE "} + kIncomeQ +
+          R"("fiscal_date":"2012-09-30","version_no":1,"item":"revenue"})",
   };
   CHECK(reports_of(r.out, "DQ912") == expected);
   CHECK(reports_of(r.out, "DQ911").empty());
@@ -248,7 +255,7 @@ TEST_CASE("DQ911 and DQ913: one value off, and one sign flipped, with the eviden
   INFO(r.err);
   REQUIRE(r.status == 0);
   CHECK(reports_of(r.out, "DQ911") ==
-        std::vector<std::string>{"BAD " + kIncomeQ +
+        std::vector<std::string>{std::string{"BAD "} + kIncomeQ +
                                  R"("fiscal_date":"2012-09-30","version_no":1,"item":"revenue"})"});
   CHECK(
       reports_of(r.out, "DQ913") ==
@@ -311,7 +318,7 @@ TEST_CASE("the value model: the newest period is provisional, and versions are o
   });
   // A x1000 in version 1 that version 2 fixes: one report, on version 1, which the
   // first-reported view still holds.
-  std::string fixed = company("FIXED", [](int q, const std::string& s, Values& v) {
+  const std::string fixed = company("FIXED", [](int q, const std::string& s, Values& v) {
     if (q == 12 && s == "income") {
       v[0] *= 1000.0;
     }

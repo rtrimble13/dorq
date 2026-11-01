@@ -541,9 +541,13 @@ void read_statement_priors(const toml::table& table, const std::string& where,
     const std::string path = key_path("statements.priors", key);
     if (key == "bad_value" || key == "unit_error" || key == "sign_error") {
       const double p = read_double(node, where, path, 1e-6, 0.5);
-      (key == "bad_value"    ? priors.bad_value
-       : key == "unit_error" ? priors.unit_error
-                             : priors.sign_error) = p;
+      double* target = &priors.sign_error;
+      if (key == "bad_value") {
+        target = &priors.bad_value;
+      } else if (key == "unit_error") {
+        target = &priors.unit_error;
+      }
+      *target = p;
       if (priors.bad_value + priors.unit_error + priors.sign_error >= 0.95) {
         fail(where, node,
              "\"statements.priors\": bad_value, unit_error and sign_error must sum to "
