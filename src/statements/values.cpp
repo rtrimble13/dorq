@@ -543,14 +543,32 @@ std::ptrdiff_t step(const std::vector<std::ptrdiff_t>& link, std::ptrdiff_t p) {
 // it alone. A quarterly flow is predicted from the same quarter a year either side,
 // moved by the change since in the adjacent quarters (seasonality); any other line
 // from the two periods either side.
+// Up to four predictions of one value, and their middle.
+struct Candidates {
+  std::array<double, 4> values{};
+  std::size_t size = 0;
+  [[nodiscard]] double middle() {
+    if (size == 0) {
+      return kNaN;
+    }
+    for (std::size_t i = 1; i < size; ++i) {  // insertion sort: four at most
+      for (std::size_t j = i; j > 0 && values.at(j - 1) > values.at(j); --j) {
+        std::swap(values.at(j - 1), values.at(j));
+      }
+    }
+    const std::size_t mid = size / 2;
+    return size % 2 == 1 ? values.at(mid) : 0.5 * (values.at(mid - 1) + values.at(mid));
+  }
+};
+
 void predict(const Line& line, Track& t, std::size_t p, const std::vector<double>& z) {
   const std::vector<double>& full = t.z;  // before and after read the values as stored
   const std::ptrdiff_t pv = line.prev[p];
   const std::ptrdiff_t nx = line.next[p];
-  std::vector<double> c;
+  Candidates c;
   const auto add = [&c](double v) {
     if (std::isfinite(v)) {
-      c.push_back(v);
+      c.values.at(c.size++) = v;
     }
   };
   if (line.seasonal()) {
@@ -560,11 +578,11 @@ void predict(const Line& line, Track& t, std::size_t p, const std::vector<double
     add(at(z, ya) + at(z, nx) - at(z, step(line.next, ya)));
     add(at(z, yb) + at(z, nx) - at(z, step(line.next, yb)));
     add(at(z, ya) + at(z, pv) - at(z, step(line.prev, ya)));
-    if (c.empty()) {
+    if (c.size == 0) {
       add(at(z, yb));
       add(at(z, ya));
     }
-    if (c.empty()) {
+    if (c.size == 0) {
       add(at(z, pv));
       add(at(z, nx));
     }
@@ -580,7 +598,18 @@ void predict(const Line& line, Track& t, std::size_t p, const std::vector<double
     t.before[p] = at(full, pv);
     t.after[p] = at(full, nx);
   }
-  t.pred[p] = middle(std::move(c));
+  t.pred[p] = c.middle();
+}
+
+// The middle of `values`, by selection: reorders them.
+double select_middle(std::vector<double>& values) {
+  const std::size_t n = values.size();
+  const auto mid = values.begin() + static_cast<std::ptrdiff_t>(n / 2);
+  std::nth_element(values.begin(), mid, values.end());
+  if (n % 2 == 1) {
+    return *mid;
+  }
+  return 0.5 * (*mid + *std::max_element(values.begin(), mid));
 }
 
 // The local scale of the residuals: their spread over the periods either side,
@@ -599,11 +628,11 @@ void scale(Track& t, const std::vector<double>& r, double prior, double weight) 
     }
     double mad = 0.0;
     if (!near.empty()) {
-      const double m = middle(near);
+      const double m = select_middle(near);
       for (double& v : near) {
         v = std::fabs(v - m);
       }
-      mad = 1.4826 * middle(near);
+      mad = 1.4826 * select_middle(near);
     }
     const auto m = static_cast<double>(near.size());
     t.sigma[p] = std::max(prior, std::sqrt((m * mad * mad + weight * prior * prior) / (m + weight)));
@@ -1041,6 +1070,8 @@ std::optional<ValueFinding> judge(const ViewContext& vc, const Line& line,
   f.power = sc.power;
   f.score = std::fabs(r) / sigma;
   f.provisional = line.next[p] == kNone;
+  f.notable = std::fabs(std::log(std::fabs(ratio))) >= std::log(2.0) && ratio > 0.0 &&
+              f.score >= 8.0 && large < 0.05;
   switch (f.error()) {
     case ValueHypothesis::kUnitError:
       f.repaired = x / pow10(sc.power);
@@ -1077,11 +1108,17 @@ ValueFinding era_finding(const Line& line, const Era& e) {
   return f;
 }
 
-void analyze_view(const ViewContext& vc, const std::vector<std::size_t>& view,
-                  std::vector<ValueFinding>& out) {
+// Judges a view's lines; a line `judged` already holds the same rows of is left
+// out (each line of the as-first-reported view that no restatement changed).
+std::vector<Line> analyze_view(const ViewContext& vc, const std::vector<std::size_t>& view,
+                               const std::vector<Line>& judged, std::vector<ValueFinding>& out) {
   const Series& s = vc.series;
   const StatementRows& st = s.statements;
-  const std::vector<Line> lines = lines_of(s, view, vc.settings);
+  std::vector<Line> lines = lines_of(s, view, vc.settings);
+  std::erase_if(lines, [&judged](const Line& line) {
+    return std::any_of(judged.begin(), judged.end(),
+                       [&line](const Line& j) { return j.rows == line.rows; });
+  });
   std::vector<double> levels;  // each line's median log10 magnitude
   for (const Line& line : lines) {
     std::vector<double> l;
@@ -1145,6 +1182,7 @@ void analyze_view(const ViewContext& vc, const std::vector<std::size_t>& view,
       }
     }
   }
+  return lines;
 }
 
 }  // namespace
@@ -1160,24 +1198,52 @@ StatementValueAnalysis analyze_statement_values(const Series& series, const Stat
   const std::vector<ItemInfo> info = item_info(st, items);
   const std::vector<IdentityTerms> identities = identity_terms(st, settings);
   // A value both views share is one finding, kept with the higher p_error.
-  std::map<std::tuple<std::size_t, std::size_t, int>, std::size_t> seen;
+  // Keyed by period, item and scope, and kept apart where the value differs: a
+  // value a restatement left as it was is one finding, on the in-force version.
+  std::map<std::tuple<std::int32_t, int, int, std::size_t, int>, std::vector<std::size_t>> seen;
+  std::vector<Line> judged;  // the in-force view's lines
+  std::vector<bool> shared(st.size(), false);  // rows of lines both views hold alike
   for (const bool in_force : {true, false}) {
     const std::vector<std::size_t>& view = in_force ? views.in_force : views.first_reported;
     const std::array<Years, 3> years = years_of(st, view);
     const ViewContext vc{series, settings, info, identities, years, items != nullptr};
     std::vector<ValueFinding> found;
-    analyze_view(vc, view, found);
+    if (in_force) {
+      judged = analyze_view(vc, view, {}, found);
+    } else {
+      const std::vector<Line> own = analyze_view(vc, view, judged, found);
+      for (const Line& line : judged) {
+        if (std::none_of(own.begin(), own.end(),
+                         [&line](const Line& o) { return o.statement == line.statement &&
+                                                         o.type == line.type; })) {
+          for (const std::size_t r : line.rows) {
+            shared[r] = true;
+          }
+        }
+      }
+      for (ValueFinding& f : analysis.findings) {
+        f.first_reported = f.first_reported || shared[f.row];
+      }
+    }
     for (ValueFinding& f : found) {
       (in_force ? f.in_force : f.first_reported) = true;
-      const auto key = std::make_tuple(f.row, f.item, static_cast<int>(f.scope));
-      const auto [it, fresh] = seen.emplace(key, analysis.findings.size());
-      if (fresh) {
+      const auto key = std::make_tuple(series.date[f.row].days(),
+                                       static_cast<int>(st.statement[f.row]),
+                                       static_cast<int>(st.period_type[f.row]), f.item,
+                                       static_cast<int>(f.scope));
+      std::vector<std::size_t>& same = seen[key];
+      const auto match = std::find_if(same.begin(), same.end(), [&](std::size_t k) {
+        const ValueFinding& o = analysis.findings[k];
+        return o.row == f.row || (o.value == f.value && o.rows == f.rows && o.power == f.power);
+      });
+      if (match == same.end()) {
+        same.push_back(analysis.findings.size());
         analysis.findings.push_back(std::move(f));
         continue;
       }
-      ValueFinding& kept = analysis.findings[it->second];
+      ValueFinding& kept = analysis.findings[*match];
       const bool both_in_force = kept.in_force || f.in_force;
-      if (f.p_error() > kept.p_error()) {
+      if (f.p_error() > kept.p_error() && kept.row == f.row) {
         kept = std::move(f);
       }
       kept.in_force = both_in_force;

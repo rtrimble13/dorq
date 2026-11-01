@@ -112,6 +112,9 @@ void report(const CheckInfo& info, const SeriesContext& context, std::vector<Vio
       continue;
     }
     const bool large_change = code == "DQ919";
+    if (large_change && !f.notable) {
+      continue;  // a real change of the size the item often makes: nothing to review
+    }
     const double p_error = f.p_error();
     std::optional<Severity> severity =
         large_change ? Severity::kInfo : context.thresholds.for_probability(p_error);

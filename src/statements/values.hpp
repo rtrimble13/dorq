@@ -45,6 +45,9 @@ struct ValueFinding {
   double score = 0.0;     // |residual| / scale, on the asinh scale
   bool provisional = false;  // the newest period of its line: judged with nothing after it
   bool open = false;         // an era with one step only: which side is wrong is a guess
+  // A change large for its item: at least double or half the expected value, far
+  // out, on an item whose values rarely stray. DQ919 reports these alone.
+  bool notable = false;
   bool in_force = false;     // flagged in the in-force view
   bool first_reported = false;
   std::vector<Evidence> evidence;
