@@ -256,6 +256,15 @@ void stamp_items_digest(Config& config, const std::string& items, const fs::path
 // does not list is a typo, or a column that is not read (exit 2).
 void validate_statement_items(const Config& config, const Context& context,
                               const std::string& items) {
+  // explained_by names identities, which must be there whatever the items.
+  for (const auto& [name, explaining] : config.statements.explained_by) {
+    const auto& identities = config.statements.identities;
+    if (std::none_of(identities.begin(), identities.end(),
+                     [&name](const Identity& identity) { return identity.name == name; })) {
+      throw ConfigError("statements.explained_by names the identity \"" + name +
+                        "\", which statements.identities does not define");
+    }
+  }
   if (!context.have_items) {
     return;
   }

@@ -8,10 +8,17 @@ coverage_floor = "1998-01-01"
 nonnegative = ["revenue", "total_assets"]
 never_absent = ["revenue"]
 bounds = ["total_current_assets <= total_assets"]
+cash_tie = ["cash_and_equivalents", "net_change_in_cash"]
+null_is_zero = ["fx_effect_on_cash"]
+restricted_cash_from = "2018-01-01"
+restricted_cash_share = 0.1
 
 [statements.identities]
 balance_sheet = "total_assets = total_liabilities + total_equity_parent"
 "odd name" = "-a + b = c - d"
+
+[statements.explained_by]
+balance_sheet = ["net_income_noncontrolling"]
 
 [profiles.statements]
 match = { kind = "statements" }

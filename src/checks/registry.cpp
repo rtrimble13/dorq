@@ -90,14 +90,17 @@ std::span<const Check* const> all_checks() {
   static const MarketDay kMarketDay;
   static const StatementKey kStatementKey;
   static const ImpossibleValue kImpossibleValue;
-  static const std::array<const Check*, 35> kChecks = {
+  static const IdentityBreak kIdentityBreak;
+  static const PeriodTie kPeriodTie;
+  static const std::array<const Check*, 37> kChecks = {
       &kOhlcBounds,     &kNonPositive,     &kDuplicateDate, &kMissingField,   &kNonSession,
       &kPrecisionShift, &kZeroRange,       &kOutOfBounds,   &kBadContextRow,  &kBadPrint,
       &kScaleShift,     &kUnreportedSplit, &kCloseMismatch, &kHistorySegment, &kDateShift,
       &kLargeMove,      &kMissingRun,      &kSparse,        &kCohort,         &kStale,
       &kFrequencyGap,   &kVolumeShift,     &kVolumeSpike,   &kZeroVolumeMove, &kRepeatedPrice,
       &kCarryBar,       &kCohortMove,      &kMarketDay,     &kSplitMisdated,  &kSplitNoJump,
-      &kSplitRatio,     &kSplitDouble,     &kDividend,      &kStatementKey,   &kImpossibleValue};
+      &kSplitRatio,     &kSplitDouble,     &kDividend,      &kStatementKey,   &kImpossibleValue,
+      &kIdentityBreak,  &kPeriodTie};
   return kChecks;
 }
 

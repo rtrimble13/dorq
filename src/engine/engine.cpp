@@ -220,6 +220,7 @@ Engine::Processed Engine::process(Work& work) const {
       .meta = meta,
       .statements = views ? &*views : nullptr,
       .statement_settings = &config_.statements,
+      .items = context_.have_items ? &context_.items : nullptr,
   };
   for (const Check* check : settings.checks) {
     check->run(context, result.violations);

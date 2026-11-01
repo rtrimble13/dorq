@@ -16,7 +16,8 @@ add_executable(
   unit/test_context.cpp
   unit/test_calibrate.cpp
   unit/test_statements.cpp
-  unit/test_statement_checks.cpp)
+  unit/test_statement_checks.cpp
+  unit/test_identity_checks.cpp)
 target_include_directories(dorq_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(dorq_tests PRIVATE dorq_lib doctest::doctest_with_main)
 dorq_configure_target(dorq_tests)

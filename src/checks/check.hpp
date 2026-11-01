@@ -44,6 +44,8 @@ struct SeriesContext {
   // The [statements] settings (doc/statements.md): global, as no profile changes
   // them.
   const StatementSettings* statement_settings = nullptr;
+  // The line items --items lists (their statement and class), or nullptr without it.
+  const std::vector<LineItem>* items = nullptr;
 
   // The exchange tick from --meta, if given.
   [[nodiscard]] std::optional<double> meta_tick() const noexcept {

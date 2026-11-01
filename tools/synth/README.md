@@ -289,6 +289,21 @@ non-negative items or bounds is DQ902's too:
 - when DQ902 reports another item, that item gets a label of its own, of the same
   kind. A total at ×0.001 puts each component above it.
 
+DQ903 and DQ904 are marked the same way:
+
+- **DQ903.** A fault that moves a row's identity gap beyond its tolerance (the
+  larger of 0.5% of its largest term and 1M) adds DQ903 to `expect`. A primary
+  identity fault's `item` is the term it drops or doubles, which DQ903 names: an
+  identity's name is never an item.
+- **DQ904.** A fault that breaks the cash tie or a year's quarter sum in force
+  (with DQ904's tolerances, restricted cash's from 2018 included) adds DQ904 where
+  its label covers the row DQ904 reports. Where DQ904 reports another row (the
+  cash flow after a balance sheet's cash, the year of a quarter), that row gets a
+  consequence label expecting DQ904.
+
+Restricted cash is 1–4% of the cash balance and moves a little each quarter, so
+that its change stays within the 10% that DQ904 allows from 2018.
+
 A label's `first` and `last` are fiscal dates. `labels.csv` adds the columns
 `statement`, `period_type`, `version_no`, `item` and `identity`; an empty one covers
 every value. `labels.jsonl` has the same fields ([doc/labels.md](../../doc/labels.md)).
@@ -327,6 +342,9 @@ bounds:
 - no row dorq cannot use: `DQ104 max 0`;
 - no context row it cannot use: `DQ109 max 0`;
 - DQ901 and DQ902 (DR-0904), which are deterministic, at precision and recall 1.0;
+- DQ903 (DR-0905) at precision and recall 0.9, and DQ904 at precision 0.9. DQ904's
+  recall is not gated: its consequence labels cover rows other faults break
+  without its reporting each one;
 - no report at warn on any hard negative.
 
 It also runs dorq with `priors/fafnir-statements.toml`, so that file names only

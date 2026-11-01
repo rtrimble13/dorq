@@ -90,6 +90,14 @@ DQ901 precision 1.0
 DQ901 recall 1.0
 DQ902 precision 1.0
 DQ902 recall 1.0
+# Identities and ties (DR-0905). DQ903 reports a field error naming its field, so a
+# report naming another is false: precision 0.9 holds both the issue's bars, at
+# warn on the field errors and the field named. DQ904 reports only on ties a fault
+# breaks; its recall is not held, as a fault's tie can be reported on any of its
+# rows and each gets a label.
+DQ903 precision 0.9
+DQ903 recall 0.9
+DQ904 precision 0.9
 # Real events and real data, which no statement check may report at warn.
 hn_acquisition max 0
 hn_writedown max 0
