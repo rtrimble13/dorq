@@ -32,23 +32,23 @@ inline constexpr std::size_t kNoItem = std::numeric_limits<std::size_t>::max();
 
 struct ValueFinding {
   ValueScope scope = ValueScope::kValue;
-  std::size_t row = 0;         // the row (an era's first)
-  std::size_t last_row = 0;    // an era's last row; `row` otherwise
-  std::size_t item = kNoItem;  // index into StatementRows::items; kNoItem for rows
-  std::size_t rows = 1;        // the rows an era spans
-  std::size_t items = 1;       // the items that moved together (a row or an era)
+  std::size_t row = 0;                // the row (an era's first)
+  std::size_t last_row = 0;           // an era's last row; `row` otherwise
+  std::size_t item = kNoItem;         // index into StatementRows::items; kNoItem for rows
+  std::size_t rows = 1;               // the rows an era spans
+  std::size_t items = 1;              // the items that moved together (a row or an era)
   std::array<double, 4> posterior{};  // by ValueHypothesis
-  double value = 0.0;     // the stored value
-  double expected = 0.0;  // what the periods around it predict
-  double repaired = 0.0;  // the value under the winning error hypothesis
-  int power = 0;          // a unit error: stored = repaired x 10^power
-  double score = 0.0;     // |residual| / scale, on the asinh scale
-  bool provisional = false;  // the newest period of its line: judged with nothing after it
-  bool open = false;         // an era with one step only: which side is wrong is a guess
+  double value = 0.0;                 // the stored value
+  double expected = 0.0;              // what the periods around it predict
+  double repaired = 0.0;              // the value under the winning error hypothesis
+  int power = 0;                      // a unit error: stored = repaired x 10^power
+  double score = 0.0;                 // |residual| / scale, on the asinh scale
+  bool provisional = false;           // the newest period of its line: judged with nothing after it
+  bool open = false;                  // an era with one step only: which side is wrong is a guess
   // A change large for its item: at least double or half the expected value, far
   // out, on an item whose values rarely stray. DQ919 reports these alone.
   bool notable = false;
-  bool in_force = false;     // flagged in the in-force view
+  bool in_force = false;  // flagged in the in-force view
   bool first_reported = false;
   std::vector<Evidence> evidence;
 

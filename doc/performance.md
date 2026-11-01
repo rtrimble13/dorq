@@ -75,6 +75,28 @@ about 115 MB a second, a little faster per byte than bars. Memory stays at a few
 series, since a security's statements are a few hundred rows. The statement checks
 (DR-0904 onward) add their own cost, measured with each.
 
+## Statements (DR-0906)
+
+The statement value model (DQ911 to DQ919) is the first statement check whose cost
+grows with every value. Measured the same way: 20,000 synthetic securities of 300
+rows each, three statements over twenty years of quarters and years, but with each
+row filling only its own statement's 13 to 26 items, as fafnir's export does
+(1.8 GB). Each item is a seasonal, growing series with 3% noise, so the model judges
+every value and finds none to report.
+
+| Run | Rows | Series | Threads | Time | Peak memory |
+|---|---|---|---|---|---|
+| The generator alone, to `/dev/null` | 6.0M | 20,000 | | 11.5 s | |
+| Piped into `dorq --select DQ104`: the reader | 6.0M | 20,000 | 4 | 18.6 s | 11 MB |
+| Piped into `dorq --select DQ91`: the value model | 6.0M | 20,000 | 4 | **35.1 s** | 12 MB |
+| The same, on one thread | 6.0M | 20,000 | 1 | 118.1 s | 11 MB |
+
+The same 4-core machine and `release` build (2026-11-01). The model adds about
+17 seconds on four threads, inside the plan's two minutes with the reader. It
+judges both views, and a line the two views hold alike once; its cost is the
+predictions and the local scale of each value, a few passes each where outliers
+are found.
+
 ## The profile
 
 The profile is a callgrind run on one copy (230,000 rows, one thread), before

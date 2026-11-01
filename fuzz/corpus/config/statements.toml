@@ -20,6 +20,14 @@ balance_sheet = "total_assets = total_liabilities + total_equity_parent"
 [statements.explained_by]
 balance_sheet = ["net_income_noncontrolling"]
 
+[statements.priors]
+bad_value = 0.001
+unit_error = 0.0002
+sign_error = 0.0002
+flow_scale = 0.08
+stock_scale = 0.05
+prior_weight = 6
+
 [profiles.statements]
 match = { kind = "statements" }
 ignore = ["DQ104"]

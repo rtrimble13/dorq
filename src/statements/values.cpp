@@ -38,15 +38,15 @@ ValueHypothesis ValueFinding::error() const noexcept {
 namespace {
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
-constexpr double kNu = 5.0;    // the predictive's degrees of freedom: tails heavier than normal
+constexpr double kNu = 5.0;     // the predictive's degrees of freedom: tails heavier than normal
 constexpr double kTail = 1e-3;  // screening: a predictive tail probability below this
 constexpr double kRatio = 5.0;  // screening: this far from both neighbours
 // A step between two periods at a power of ten, to within this in log10 (a factor of
 // two either way), is a unit step.
 constexpr double kPowerTolerance = 0.3;
 constexpr std::array<int, 4> kPowers{3, -3, 6, -6};
-constexpr double kBadScale = 1.0;  // a bad value's spread around the prediction (asinh scale)
-constexpr double kUnusual = 4.0;   // |residual| / scale: another item that moved too
+constexpr double kBadScale = 1.0;       // a bad value's spread around the prediction (asinh scale)
+constexpr double kUnusual = 4.0;        // |residual| / scale: another item that moved too
 constexpr std::ptrdiff_t kWindow = 12;  // periods either side of the local scale
 constexpr std::size_t kMinValues = 4;   // an item judged in a line has this many values
 constexpr double kOutlier = 5.0;  // |residual| / scale: left out of the next pass's predictions
@@ -56,10 +56,10 @@ constexpr std::size_t kNear = 5;  // positions either side an outlier must be th
 // fits them.
 constexpr double kMovesWithOthers = 3.0;  // other items of the row moved too: a real event
 constexpr double kMovesAlone = 1.0;
-constexpr double kRowMoved = 8.0;  // against a single wrong value
-constexpr double kSubtotalMoves = 6.0;  // a subtotal of the row moved by the same amount
-constexpr double kHolds = 4.0;    // the level holds in the next period: a real step
-constexpr double kReverts = 1.0;  // the next period goes back
+constexpr double kRowMoved = 8.0;        // against a single wrong value
+constexpr double kSubtotalMoves = 6.0;   // a subtotal of the row moved by the same amount
+constexpr double kHolds = 4.0;           // the level holds in the next period: a real step
+constexpr double kReverts = 1.0;         // the next period goes back
 constexpr double kIdentityRepair = 4.0;  // an identity fails, and holds with the repair
 constexpr double kIdentityHolds = 6.0;   // an identity holds with the stored value
 constexpr double kQuarterRepair = 3.0;   // the year's quarters sum to it once repaired
@@ -339,9 +339,9 @@ struct Step {
 
 // Pairs each step with the next one back. A step with none is an era to the
 // line's end or from its start: the side `before_wrong` names, or the shorter.
-std::vector<Era> pair_steps(const std::vector<Step>& steps, std::size_t n, std::size_t item,
-                            const std::function<std::optional<bool>(std::size_t)>& before_wrong =
-                                {}) {
+std::vector<Era> pair_steps(
+    const std::vector<Step>& steps, std::size_t n, std::size_t item,
+    const std::function<std::optional<bool>(std::size_t)>& before_wrong = {}) {
   std::vector<Era> eras;
   for (std::size_t i = 0; i < steps.size();) {
     const Step& a = steps[i];
@@ -432,8 +432,7 @@ double tracks_level(const std::vector<Track>& tracks, std::size_t from, std::siz
 
 // `other_level` is the company's other statements' median log10 magnitude: with one
 // step and no step back, the side further from it is the wrong one.
-std::vector<Era> row_eras(const Line& line, const std::vector<Track>& tracks,
-                          double other_level) {
+std::vector<Era> row_eras(const Line& line, const std::vector<Track>& tracks, double other_level) {
   std::vector<Step> steps;
   std::vector<Step> weak;
   for (std::size_t p = 1; p < line.size(); ++p) {
@@ -588,7 +587,9 @@ void predict(const Line& line, Track& t, std::size_t p, const std::vector<double
     }
     const double b1 = at(full, yb) + at(full, pv) - at(full, step(line.prev, yb));
     const double a1 = at(full, ya) + at(full, nx) - at(full, step(line.next, ya));
-    t.before[p] = std::isfinite(b1) ? b1 : std::isfinite(at(full, yb)) ? at(full, yb) : at(full, pv);
+    t.before[p] = std::isfinite(b1)             ? b1
+                  : std::isfinite(at(full, yb)) ? at(full, yb)
+                                                : at(full, pv);
     t.after[p] = std::isfinite(a1) ? a1 : std::isfinite(at(full, ya)) ? at(full, ya) : at(full, nx);
   } else {
     add(at(z, step(line.prev, pv)));
@@ -635,7 +636,8 @@ void scale(Track& t, const std::vector<double>& r, double prior, double weight) 
       mad = 1.4826 * select_middle(near);
     }
     const auto m = static_cast<double>(near.size());
-    t.sigma[p] = std::max(prior, std::sqrt((m * mad * mad + weight * prior * prior) / (m + weight)));
+    t.sigma[p] =
+        std::max(prior, std::sqrt((m * mad * mad + weight * prior * prior) / (m + weight)));
   }
 }
 
@@ -886,7 +888,8 @@ std::vector<double> implied_values(const ViewContext& vc, const Track& t, std::s
     if (it == terms.items.end()) {
       continue;
     }
-    const std::optional<Gap> g = identity_gap(vc.series.statements, terms, vc.settings, i, t.item, x);
+    const std::optional<Gap> g =
+        identity_gap(vc.series.statements, terms, vc.settings, i, t.item, x);
     if (g && !g->holds()) {
       out.push_back(x - g->gap / terms.signs[static_cast<std::size_t>(it - terms.items.begin())]);
     }
@@ -908,9 +911,8 @@ void quarter_sum(const ViewContext& vc, const Track& t, std::size_t i, double x,
     return;
   }
   const std::array<std::pair<ValueHypothesis, double>, 3> repairs{
-      {{ValueHypothesis::kBadValue, x - stored->gap * (st.period_type[i] == PeriodType::kAnnual
-                                                           ? -1.0
-                                                           : 1.0)},
+      {{ValueHypothesis::kBadValue,
+        x - stored->gap * (st.period_type[i] == PeriodType::kAnnual ? -1.0 : 1.0)},
        {ValueHypothesis::kUnitError, x / pow10(sc.power)},
        {ValueHypothesis::kSignError, -x}}};
   for (const auto& [h, v] : repairs) {
@@ -970,8 +972,8 @@ bool screened(const Line& line, const Track& t, std::size_t p, bool signs) {
   if (usable(before) && usable(after)) {
     const double a = x / before;
     const double b = x / after;
-    if ((a >= kRatio && b >= kRatio) || (a > 0.0 && a <= 1.0 / kRatio && b > 0.0 &&
-                                          b <= 1.0 / kRatio)) {
+    if ((a >= kRatio && b >= kRatio) ||
+        (a > 0.0 && a <= 1.0 / kRatio && b > 0.0 && b <= 1.0 / kRatio)) {
       return true;
     }
     if (signs && std::signbit(before) == std::signbit(after) &&
@@ -1031,8 +1033,8 @@ std::optional<ValueFinding> judge(const ViewContext& vc, const Line& line,
   const std::vector<double> implied = implied_values(vc, t, line.rows[p], x);
   for (const int k : kPowers) {
     const bool near_expected = ratio > 0.0 && std::fabs(magnitude - k) < kPowerTolerance;
-    const bool near_usual = (ratio <= 0.0 || std::fabs(expected) < t.s) &&
-                            std::fabs(usual - k) < kPowerTolerance;
+    const bool near_usual =
+        (ratio <= 0.0 || std::fabs(expected) < t.s) && std::fabs(usual - k) < kPowerTolerance;
     const bool near_identity = std::any_of(implied.begin(), implied.end(), [&](double v) {
       return usable(v) && std::fabs(v - x / pow10(k)) <= 0.05 * std::fabs(v);
     });
@@ -1100,9 +1102,9 @@ ValueFinding era_finding(const Line& line, const Era& e) {
   const double p = e.open ? kOpenEra : kPairedEra;
   f.posterior = {1.0 - p, 0.0, p, 0.0};
   f.provisional = e.last == line.size();
-  const std::string note = e.item == kNoItem ? std::to_string(e.items) + " of " +
-                                                   std::to_string(e.present) + " items"
-                                             : std::string{};
+  const std::string note =
+      e.item == kNoItem ? std::to_string(e.items) + " of " + std::to_string(e.present) + " items"
+                        : std::string{};
   f.evidence.push_back({e.open ? "unit_step" : "unit_steps", static_cast<std::int64_t>(e.power),
                         std::log(p / (1.0 - p)), note});
   return f;
@@ -1201,7 +1203,7 @@ StatementValueAnalysis analyze_statement_values(const Series& series, const Stat
   // Keyed by period, item and scope, and kept apart where the value differs: a
   // value a restatement left as it was is one finding, on the in-force version.
   std::map<std::tuple<std::int32_t, int, int, std::size_t, int>, std::vector<std::size_t>> seen;
-  std::vector<Line> judged;  // the in-force view's lines
+  std::vector<Line> judged;                    // the in-force view's lines
   std::vector<bool> shared(st.size(), false);  // rows of lines both views hold alike
   for (const bool in_force : {true, false}) {
     const std::vector<std::size_t>& view = in_force ? views.in_force : views.first_reported;
@@ -1213,9 +1215,9 @@ StatementValueAnalysis analyze_statement_values(const Series& series, const Stat
     } else {
       const std::vector<Line> own = analyze_view(vc, view, judged, found);
       for (const Line& line : judged) {
-        if (std::none_of(own.begin(), own.end(),
-                         [&line](const Line& o) { return o.statement == line.statement &&
-                                                         o.type == line.type; })) {
+        if (std::none_of(own.begin(), own.end(), [&line](const Line& o) {
+              return o.statement == line.statement && o.type == line.type;
+            })) {
           for (const std::size_t r : line.rows) {
             shared[r] = true;
           }
@@ -1227,10 +1229,9 @@ StatementValueAnalysis analyze_statement_values(const Series& series, const Stat
     }
     for (ValueFinding& f : found) {
       (in_force ? f.in_force : f.first_reported) = true;
-      const auto key = std::make_tuple(series.date[f.row].days(),
-                                       static_cast<int>(st.statement[f.row]),
-                                       static_cast<int>(st.period_type[f.row]), f.item,
-                                       static_cast<int>(f.scope));
+      const auto key = std::make_tuple(
+          series.date[f.row].days(), static_cast<int>(st.statement[f.row]),
+          static_cast<int>(st.period_type[f.row]), f.item, static_cast<int>(f.scope));
       std::vector<std::size_t>& same = seen[key];
       const auto match = std::find_if(same.begin(), same.end(), [&](std::size_t k) {
         const ValueFinding& o = analysis.findings[k];

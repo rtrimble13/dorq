@@ -140,6 +140,14 @@ cash_flow = "net_change_in_cash = net_cash_operating + net_cash_investing + net_
 
 [statements.explained_by]     # DQ903: items that explain an identity's gap
 balance_sheet = ["net_income_noncontrolling"]
+
+[statements.priors]           # the value model's defaults (DQ911 to DQ919), for DR-0911 to fit
+bad_value = 0.001             # the prior that any one value is wrong in each way
+unit_error = 0.0002
+sign_error = 0.0002
+flow_scale = 0.08             # the class prior on a period's move (asinh scale): flows
+stock_scale = 0.05            # and stocks
+prior_weight = 6              # in periods, against the item's own residuals
 ```
 
 - An identity is item names joined by `+` and `-`, with one `=` between the two
@@ -175,6 +183,7 @@ balance_sheet = ["net_income_noncontrolling"]
 | DQ902 | every version: the `nonnegative` items and `bounds` above |
 | DQ903 | every version: each identity, and why it fails where it does |
 | DQ904 | the periods in force: the change in cash (`cash_tie`), and a year's quarters against the year (`--items`' flows) |
+| DQ911, DQ912, DQ913, DQ919 | both views, in force and as first reported: each money item over time (the value model, below) |
 | the other DQ9xx | only on statements, as the plan adds them |
 | DQ104 | on every kind: a field that cannot be used |
 | DQ109 | on every context file, `--items` included |
@@ -203,6 +212,49 @@ the later period's cash flow; and, for each flow item `--items` lists, a fiscal
 year's four quarters against its one year. It names the row out of line: one
 balance sheet's cash where two ties break and cancel, a quarter, or the year
 ([DQ904](checks/DQ904.md)).
+
+## The value model
+
+DQ911 bad-value, DQ912 unit-error, DQ913 sign-error and DQ919 large-change read
+each money item (a flow or a stock in `--items`; every item without it) of each
+statement over time, quarters and years apart, in both views. A value both views
+hold alike is one finding; a version 1 that a restatement put right is judged
+in the first-reported view, and reported on version 1.
+
+- **The scale.** An item is read as `z = asinh(v / s)`, `s` the median magnitude
+  of its non-zero values in the line: close to a log for large values, and safe
+  for zeros and signs.
+- **The prediction.** A quarterly flow is predicted from the same quarter a year
+  before and after, moved by the change since in the adjacent quarters
+  (seasonality); any other line from the two periods either side. Each prediction
+  leaves out the values the last pass found far from theirs, so that one wrong
+  value does not make its neighbours look wrong.
+- **The scale of a move.** The spread of the item's residuals over the twelve
+  periods either side, shrunk to the class prior (`flow_scale`, `stock_scale`,
+  half again for years) by `prior_weight`, and never below it.
+- **Rows and eras first.** A step at a power of ten between two periods that most
+  of a row's money items take, and a step back, is a row or a run of rows stored
+  at that power: reported once (DQ912), and put right before anything else is
+  judged.
+- **Screening.** A value is a candidate when its predictive tail probability is
+  below 1e-3, when it is five times or a fifth of both neighbours, or, for an item
+  with a sign, when its sign differs from both. A zero, and a value next to one,
+  are left to DQ915 (DR-0907).
+- **The hypotheses.** `real_change`, `bad_value`, `unit_error` and `sign_error`.
+  A real change is mostly small, and as large as an error as often as the item's
+  own values stray that far; an error's repair (the value divided by its power of
+  ten, negated, or the value an identity needs) is judged by the same real-change
+  model. The priors are `[statements.priors]`.
+- **The evidence.** Identities that hold as stored or once repaired; the year's
+  quarters against the year; the row's other items moving with it, or by the same
+  factor; a subtotal moving by the same amount; the level holding, or going back;
+  the item's sign history ([DQ911](checks/DQ911.md) lists them).
+- **The code** is the likeliest error's, at the severity its `p_error` gives;
+  where a real change is likeliest, DQ919 at info for a change large for its item,
+  or nothing. The newest period of a line is provisional, and at most warn.
+
+On 6M synthetic rows, fafnir's history's size, the model adds about 17 seconds to
+a run on four threads ([performance.md](performance.md#statements-dr-0906)).
 
 ## Output
 

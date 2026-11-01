@@ -517,7 +517,7 @@ Sizes as in the development plan: S ≈ ½ day, M ≈ 1 to 2 days, L ≈ 3 to 5 
 | [DR-0903](https://github.com/rtrimble13/dorq/issues/17) | dorq | dorq-synth statements: companies, faults, hard negatives, gate | L | 0901 | ✅ PR #29 |
 | [DR-0904](https://github.com/rtrimble13/dorq/issues/18) | dorq | DQ901 statement-key, DQ902 impossible-value | M | 0902 | ✅ PR #30 |
 | [DR-0905](https://github.com/rtrimble13/dorq/issues/19) | dorq | DQ903 identity-break, DQ904 period-tie; SF1's identities in `priors/fafnir-statements.toml`; v0.11.0 | L | 0903, 0904 | ✅ PR #31 |
-| [DR-0906](https://github.com/rtrimble13/dorq/issues/20) | dorq | The statement value model: DQ911 bad-value, DQ912 unit-error, DQ913 sign-error, DQ919 large-change | L | 0905 | ⬜ |
+| [DR-0906](https://github.com/rtrimble13/dorq/issues/20) | dorq | The statement value model: DQ911 bad-value, DQ912 unit-error, DQ913 sign-error, DQ919 large-change | L | 0905 | ✅ PR #33 |
 | [DR-0907](https://github.com/rtrimble13/dorq/issues/21) | dorq | Quarterly structure: DQ914 copied-period, DQ915 absent-as-zero, DQ916 cumulative-quarters | M | 0906 | ⬜ |
 | [DR-0908](https://github.com/rtrimble13/dorq/issues/22) | dorq | Share terms: DQ921 share-terms-step, DQ922 share-count-mismatch; v0.12.0 | M | 0906 | ⬜ |
 | [DR-0909](https://github.com/rtrimble13/dorq/issues/23) | dorq | The knowledge timeline and revisions: DQ931, DQ932, DQ951, and the cross-section's hooks for statements (moved here from DR-0901, which had no check to use them) | L | 0906 | ⬜ |

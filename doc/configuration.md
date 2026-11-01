@@ -162,6 +162,14 @@ restricted_cash_share = 0.1          # up to this share of the balance
 [statements.identities]  # name = "item = item + item - item"
 
 [statements.explained_by]  # DQ903: identity name = [items that explain its gap]
+
+[statements.priors]   # the value model (DQ911 to DQ919): see doc/statements.md
+bad_value = 0.001     # the prior that any one value is wrong in each way
+unit_error = 0.0002
+sign_error = 0.0002
+flow_scale = 0.08     # the class prior on a period's move (asinh scale)
+stock_scale = 0.05
+prior_weight = 6
 ```
 
 Lists can also be written as one comma-separated string (`ignore = "DQ106, DQ107"`).

@@ -2,6 +2,8 @@
 // statement value model's findings (statements/values.cpp), one code each, as the
 // price model's are (doc/checks/DQ911.md to DQ919.md).
 
+#include "statements/values.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -16,7 +18,6 @@
 #include "config/config.hpp"
 #include "dorq/series.hpp"
 #include "dorq/statement.hpp"
-#include "statements/values.hpp"
 
 namespace dorq {
 namespace {
@@ -67,8 +68,8 @@ std::string message_of(std::string_view code, const Series& s, const ValueFindin
     const char* periods = st.period_type[f.row] == PeriodType::kAnnual ? " years" : " quarters";
     std::string text = (f.item == kNoItem ? std::string{"the money items of "} : item + " for ") +
                        std::to_string(f.rows) + periods + ", " + s.date[f.row].to_string() +
-                       " to " + s.date[f.last_row].to_string() + ", are at " +
-                       power_text(f.power) + " against the periods either side";
+                       " to " + s.date[f.last_row].to_string() + ", are at " + power_text(f.power) +
+                       " against the periods either side";
     if (f.item == kNoItem) {
       text += " (" + std::to_string(f.items) + " items)";
     }
@@ -194,8 +195,9 @@ const CheckInfo& BadValue::info() const noexcept {
   static const CheckInfo kInfo{
       .code = "DQ911",
       .name = "bad-value",
-      .summary = "one period's value off an item's series, which the periods around it and the "
-                 "row's identities do not bear out",
+      .summary =
+          "one period's value off an item's series, which the periods around it and the "
+          "row's identities do not bear out",
       .default_severity = Severity::kWarn,
       .applies = Applies::kStatements,
   };
@@ -210,8 +212,9 @@ const CheckInfo& UnitError::info() const noexcept {
   static const CheckInfo kInfo{
       .code = "DQ912",
       .name = "unit-error",
-      .summary = "a value, a whole row or a run of periods stored at a power of ten (x1000, "
-                 "x0.001, x10^6)",
+      .summary =
+          "a value, a whole row or a run of periods stored at a power of ten (x1000, "
+          "x0.001, x10^6)",
       .default_severity = Severity::kWarn,
       .applies = Applies::kStatements,
   };
@@ -226,8 +229,9 @@ const CheckInfo& SignError::info() const noexcept {
   static const CheckInfo kInfo{
       .code = "DQ913",
       .name = "sign-error",
-      .summary = "a value whose sign is flipped against the item's convention and its own "
-                 "history (--items)",
+      .summary =
+          "a value whose sign is flipped against the item's convention and its own "
+          "history (--items)",
       .default_severity = Severity::kWarn,
       .applies = Applies::kStatements,
   };
@@ -242,8 +246,9 @@ const CheckInfo& LargeChange::info() const noexcept {
   static const CheckInfo kInfo{
       .code = "DQ919",
       .name = "large-change",
-      .summary = "a large change the evidence calls real (an acquisition, a write-down), kept "
-                 "for review at info",
+      .summary =
+          "a large change the evidence calls real (an acquisition, a write-down), kept "
+          "for review at info",
       .default_severity = Severity::kInfo,
       .applies = Applies::kStatements,
   };

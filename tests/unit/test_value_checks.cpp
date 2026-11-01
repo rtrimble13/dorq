@@ -108,8 +108,8 @@ std::string company(const std::string& id, const Edit& edit = {}, int quarters =
     const double capex = -5e7 * (1.0 + 0.01 * t) * (1.0 + 0.02 * std::sin(t));
     const std::string end = quarter_end(q);
     const std::string head = id + ",";
-    const std::string tail = "," + end + "," + end.substr(0, 4) + ",Q" + std::to_string(q % 4 + 1) +
-                             ",1,2020-01-01,,,";
+    const std::string tail =
+        "," + end + "," + end.substr(0, 4) + ",Q" + std::to_string(q % 4 + 1) + ",1,2020-01-01,,,";
     for (const char* statement : {"income", "cash_flow", "balance_sheet"}) {
       Values v{kNaN, kNaN, kNaN, kNaN, kNaN, kNaN, kNaN};
       const std::string s = statement;
@@ -157,14 +157,14 @@ Result check(const TempDir& dir, const std::string& csv, bool items = true,
   const std::string items_file = (dir.path() / "items.csv").string();
   const std::string config = (dir.path() / "st.toml").string();
   if (items && !extra.empty()) {
-    return run_in(dir.path(), {"--config", config.c_str(), "--items", items_file.c_str(),
-                               "--select", "DQ91", "--show-info", "--format", "jsonl",
-                               "--exit-zero", extra.c_str(), file.c_str()});
+    return run_in(dir.path(),
+                  {"--config", config.c_str(), "--items", items_file.c_str(), "--select", "DQ91",
+                   "--show-info", "--format", "jsonl", "--exit-zero", extra.c_str(), file.c_str()});
   }
   if (items) {
-    return run_in(dir.path(), {"--config", config.c_str(), "--items", items_file.c_str(),
-                               "--select", "DQ91", "--show-info", "--format", "jsonl",
-                               "--exit-zero", file.c_str()});
+    return run_in(dir.path(),
+                  {"--config", config.c_str(), "--items", items_file.c_str(), "--select", "DQ91",
+                   "--show-info", "--format", "jsonl", "--exit-zero", file.c_str()});
   }
   return run_in(dir.path(), {"--config", config.c_str(), "--select", "DQ91", "--show-info",
                              "--format", "jsonl", "--exit-zero", file.c_str()});
@@ -215,10 +215,13 @@ TEST_CASE("DQ912: a value, a row and a run of quarters at a power of ten, each r
   CHECK(contains(value, "revenue is"));
   CHECK(contains(value, ": stored at x1000"));
   CHECK(contains(value, R"("power":3)"));
-  CHECK(contains(value, R"("suggested_action":{"kind":"check_filing","item":"revenue","fiscal_date":"2012-09-30")"));
+  CHECK(contains(
+      value,
+      R"("suggested_action":{"kind":"check_filing","item":"revenue","fiscal_date":"2012-09-30")"));
   CHECK(contains(value, R"("classification":"data_error")"));
   const std::string row = report(r.out, "DQ912", "ROW");
-  CHECK(contains(row, "the row's money items are at x0.001 against the periods around it (3 items)"));
+  CHECK(
+      contains(row, "the row's money items are at x0.001 against the periods around it (3 items)"));
   const std::string era = report(r.out, "DQ912", "ERA");
   CHECK(contains(era, "the money items of 4 quarters, 2011-06-30 to 2012-03-31, are at x1000"));
   CHECK(contains(era, R"("end_date":"2012-03-31")"));
@@ -247,9 +250,10 @@ TEST_CASE("DQ911 and DQ913: one value off, and one sign flipped, with the eviden
   CHECK(reports_of(r.out, "DQ911") ==
         std::vector<std::string>{"BAD " + kIncomeQ +
                                  R"("fiscal_date":"2012-09-30","version_no":1,"item":"revenue"})"});
-  CHECK(reports_of(r.out, "DQ913") ==
-        std::vector<std::string>{
-            R"(SIGN {"statement":"cash_flow","period_type":"quarter","fiscal_date":"2013-09-30","version_no":1,"item":"capital_expenditure"})"});
+  CHECK(
+      reports_of(r.out, "DQ913") ==
+      std::vector<std::string>{
+          R"(SIGN {"statement":"cash_flow","period_type":"quarter","fiscal_date":"2013-09-30","version_no":1,"item":"capital_expenditure"})"});
   const std::string bad = report(r.out, "DQ911", "BAD");
   CHECK(contains(bad, "times): one value off the periods around it"));
   CHECK(contains(bad, R"("feature":"identity_repair","value":"gross_profit")"));
@@ -348,9 +352,8 @@ TEST_CASE("the value model: the newest period is provisional, and versions are o
   CHECK(contains(newest, R"("provisional":true)"));
   CHECK_FALSE(contains(newest, R"("severity":"error")"));
   const std::vector<std::string> fixed_reports = reports_of(r.out, "DQ912");
-  CHECK(std::count_if(fixed_reports.begin(), fixed_reports.end(), [](const std::string& k) {
-          return contains(k, "FIXED");
-        }) == 1);
+  CHECK(std::count_if(fixed_reports.begin(), fixed_reports.end(),
+                      [](const std::string& k) { return contains(k, "FIXED"); }) == 1);
   CHECK(contains(report(r.out, "DQ912", "FIXED"),
                  R"("fiscal_date":")" + q13 + R"(","version_no":1,"item":"revenue"})"));
   CHECK(contains(report(r.out, "DQ912", "FIXED"), R"("views":"first_reported")"));
@@ -409,10 +412,10 @@ prior_weight = 8
   CHECK(contains(dorq::to_toml(dorq::Config{}), "[statements.priors]"));  // config show
   CHECK(dorq::config_hash(dorq::Config{}) == "803c581d98ba409a");
   CHECK(dorq::config_hash(config) != dorq::config_hash(dorq::Config{}));
-  for (const char* bad : {"[statements.priors]\nbad_value = 0.6\n",
-                          "[statements.priors]\nbad_value = 0.4\nunit_error = 0.4\nsign_error = 0.2\n",
-                          "[statements.priors]\nflow_scale = 0\n",
-                          "[statements.priors]\nreal_change = 0.5\n"}) {
+  for (const char* bad :
+       {"[statements.priors]\nbad_value = 0.6\n",
+        "[statements.priors]\nbad_value = 0.4\nunit_error = 0.4\nsign_error = 0.2\n",
+        "[statements.priors]\nflow_scale = 0\n", "[statements.priors]\nreal_change = 0.5\n"}) {
     CAPTURE(bad);
     CHECK_THROWS_AS((void)dorq::parse_config(bad, "bad.toml", false), dorq::ConfigError);
   }
