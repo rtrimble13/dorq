@@ -513,7 +513,7 @@ Sizes as in the development plan: S ≈ ½ day, M ≈ 1 to 2 days, L ≈ 3 to 5 
 |---|---|---|---|---|---|
 | [DR-0900](https://github.com/rtrimble13/dorq/issues/14) | dorq | Tracking issue for M9 | | | ⬜ |
 | [DR-0901](https://github.com/rtrimble13/dorq/issues/15) | dorq | ADR 0005; the statements input kind: reader, data model, `--items`, `[statements]` config, engine path, `--since` and `--as-of` | L | | ✅ PR #27 |
-| [DR-0902](https://github.com/rtrimble13/dorq/issues/16) | dorq | Statement findings in every output format: keys, `record_key`, per-finding `table_name`, text lines | M | 0901 | ⬜ |
+| [DR-0902](https://github.com/rtrimble13/dorq/issues/16) | dorq | Statement findings in every output format: keys, `record_key`, per-finding `table_name`, text lines | M | 0901 | ✅ PR #28 |
 | [DR-0903](https://github.com/rtrimble13/dorq/issues/17) | dorq | dorq-synth statements: companies, faults, hard negatives, gate | L | 0901 | ⬜ |
 | [DR-0904](https://github.com/rtrimble13/dorq/issues/18) | dorq | DQ901 statement-key, DQ902 impossible-value | M | 0902 | ⬜ |
 | [DR-0905](https://github.com/rtrimble13/dorq/issues/19) | dorq | DQ903 identity-break, DQ904 period-tie; SF1's identities in `priors/fafnir-statements.toml`; v0.11.0 | L | 0903, 0904 | ⬜ |

@@ -427,6 +427,7 @@ int run_check(const CheckOptions& options, CLI::App& cmd, Io& io) {
   writer_options.version = std::string{kVersion};
   writer_options.config_hash = config_hash(config);
   writer_options.fafnir_table = config.fafnir_table;
+  writer_options.fafnir_statement_tables = config.fafnir_statement_tables;
   writer_options.show_evidence = options.show_evidence;
   const std::unique_ptr<Writer> writer = make_writer(config.format, io.out, writer_options);
   Report report(*writer);

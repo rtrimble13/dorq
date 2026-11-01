@@ -135,6 +135,11 @@ exchange = "NASDAQ"   # which exchange to take from a multi-exchange file
 [fafnir]
 table_name = "core.daily_price"
 
+[fafnir.tables]          # a statement finding's table_name, by statement (doc/output.md)
+income = "core.income_statement"
+balance_sheet = "core.balance_sheet"
+cash_flow = "core.cash_flow_statement"
+
 [calibration]         # written by `dorq calibrate` (doc/calibration.md)
 version = "2026-10"   # names the fit; shown by `dorq config show`
 p_error_map = [[0.02, 0.01], [0.5, 0.3], [0.97, 0.99]]  # raw -> calibrated p_error
@@ -242,8 +247,9 @@ covers:
 - a reference calendar by its content, not its path, so the same sessions read
   from another directory hash the same;
 - the `--items` file by its content, in the same way;
-- `[statements]`, but only where it differs from its defaults: the release that
-  added it (DR-0901) left every existing hash as it was.
+- `[statements]` and `[fafnir.tables]`, but only where they differ from their
+  defaults: the releases that added them (DR-0901, DR-0902) left every existing
+  hash as it was.
 
 It does not cover:
 

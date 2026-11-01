@@ -185,6 +185,22 @@ std::optional<SignConvention> parse_sign_convention(std::string_view text) {
   return std::nullopt;
 }
 
+std::string StatementPeriod::label() const {
+  std::string out;
+  if (fiscal_period == FiscalPeriod::kUnknown) {
+    out = to_string(period_type);
+  } else if (fiscal_period != FiscalPeriod::kFY) {
+    out = to_string(fiscal_period);
+  }
+  if (fiscal_year > 0) {
+    out += out.empty() ? "FY" : " FY";
+    out += std::to_string(fiscal_year);
+  } else if (fiscal_period == FiscalPeriod::kFY) {
+    out = "FY";
+  }
+  return out;
+}
+
 const std::vector<double>* StatementRows::item(std::string_view name) const noexcept {
   for (std::size_t i = 0; i < item_names.size(); ++i) {
     if (item_names[i] == name) {

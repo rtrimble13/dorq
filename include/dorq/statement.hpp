@@ -48,6 +48,21 @@ enum class SignConvention : std::uint8_t { kPositiveIsInflow, kPositiveIsOutflow
 [[nodiscard]] std::string_view to_string(SignConvention sign) noexcept;
 [[nodiscard]] std::optional<SignConvention> parse_sign_convention(std::string_view text);
 
+// Where a statement finding sits (DR-0902): one statement of one period, and the
+// version when the finding is about one. Its fiscal date is the finding's date.
+struct StatementPeriod {
+  Statement statement = Statement::kIncome;
+  PeriodType period_type = PeriodType::kQuarter;
+  std::int32_t fiscal_year = 0;  // 0 when unknown
+  FiscalPeriod fiscal_period = FiscalPeriod::kUnknown;
+  std::optional<std::int32_t> version;  // nullopt: about the period, not one version
+
+  // For people: "Q3 FY2020", "FY2020", or the period type where the labels are
+  // unknown ("quarter").
+  [[nodiscard]] std::string label() const;
+  bool operator==(const StatementPeriod&) const = default;
+};
+
 // A statements series' rows, as columns beside Series::date (the fiscal date: the
 // period's end), Series::close (the raw close on or before known_from, when the
 // input has one) and Series::line. Sorted with the series by fiscal date, then

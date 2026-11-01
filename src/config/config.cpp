@@ -482,6 +482,19 @@ void read_fafnir(const toml::table& table, const std::string& where, Config& con
     const std::string path = key_path("fafnir", sub_node.str());
     if (sub_node.str() == "table_name") {
       config.fafnir_table = read_string(value, where, path);
+    } else if (sub_node.str() == "tables") {
+      for (const auto& [statement_node, table_node] : read_table(value, where, path)) {
+        const std::string table_path = key_path(path, statement_node.str());
+        const auto statement = parse_statement(statement_node.str());
+        if (!statement || to_string(*statement) != statement_node.str()) {
+          fail(where, table_node,
+               "unknown key \"" + table_path +
+                   "\" (the statements are income, balance_sheet "
+                   "and cash_flow)");
+        }
+        config.fafnir_statement_tables.at(static_cast<std::size_t>(*statement)) =
+            read_string(table_node, where, table_path);
+      }
     } else {
       fail(where, value, "unknown key \"" + path + "\"");
     }
@@ -970,7 +983,10 @@ void append_statements(std::string& out, const StatementSettings& settings) {
   }
 }
 
-std::string render(const Config& config, bool with_statements);
+// The settings as TOML. With `all_sections` false, the sections added since
+// v0.10.0 ([statements], [fafnir.tables]) are left out where they hold their
+// defaults: what config_hash covers.
+std::string render(const Config& config, bool all_sections);
 
 // The settings that decide what is reported (config_hash): the effective
 // configuration as TOML, with the keys that only change presentation, speed or
@@ -987,7 +1003,7 @@ std::string canonical(const Config& config) {
   if (!copy.calendar_digest.empty()) {
     copy.calendar_file = "content:" + copy.calendar_digest;
   }
-  std::string out = render(copy, copy.statements != StatementSettings{});
+  std::string out = render(copy, false);
   if (!copy.items_digest.empty()) {
     out += "\n# --items content: " + copy.items_digest + "\n";
   }
@@ -1457,7 +1473,7 @@ Config load_config(const fs::path& path) {
 
 namespace {
 
-std::string render(const Config& config, bool with_statements) {
+std::string render(const Config& config, bool all_sections) {
   std::string out;
   out += "select = ";
   append_toml_list(out, config.select);
@@ -1520,6 +1536,15 @@ std::string render(const Config& config, bool with_statements) {
   out += "\n[fafnir]\ntable_name = ";
   append_toml_string(out, config.fafnir_table);
   out += "\n";
+  if (all_sections || config.fafnir_statement_tables != Config{}.fafnir_statement_tables) {
+    out += "\n[fafnir.tables]\n";
+    for (std::size_t i = 0; i < config.fafnir_statement_tables.size(); ++i) {
+      out += to_string(static_cast<Statement>(i));
+      out += " = ";
+      append_toml_string(out, config.fafnir_statement_tables.at(i));
+      out += "\n";
+    }
+  }
 
   if (!config.calibration_version.empty() || !config.price.p_error_map.empty()) {
     out += "\n[calibration]\nversion = ";
@@ -1532,7 +1557,7 @@ std::string render(const Config& config, bool with_statements) {
     out += "]\n";
   }
 
-  if (with_statements) {
+  if (all_sections || config.statements != StatementSettings{}) {
     append_statements(out, config.statements);
   }
 

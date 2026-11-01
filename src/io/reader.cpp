@@ -516,12 +516,14 @@ void SeriesAssembler::add_statement_row(Series& series, std::span<const std::str
     report(Field::kPeriodType, type_text, true);
   }
   std::int32_t version = 1;
+  bool version_read = true;
   if (mapping_.has(Field::kVersion)) {
     const std::string_view text = field_cell(Field::kVersion);
     const std::optional<std::int32_t> parsed = parse_whole(text);
     if (parsed && *parsed >= 1) {
       version = *parsed;
     } else {
+      version_read = false;
       report(Field::kVersion, text, true);
     }
   }
@@ -602,11 +604,21 @@ void SeriesAssembler::add_statement_row(Series& series, std::span<const std::str
   if (known && loaded_on && *loaded_on > *known) {
     known = loaded_on;
   }
+  // A report on the row names its period as far as it could be read (DR-0902).
+  std::optional<StatementPeriod> period;
+  if (statement && period_type) {
+    period = StatementPeriod{.statement = *statement,
+                             .period_type = *period_type,
+                             .fiscal_year = fiscal_year,
+                             .fiscal_period = fiscal_period,
+                             .version = version_read ? std::optional{version} : std::nullopt};
+  }
   bool skipped = false;
   for (FieldIssue& issue : issues) {
     issue.has_date = fiscal_date.has_value();
     issue.date = fiscal_date.value_or(Date{});
     issue.known = known;
+    issue.period = period;
     skipped = skipped || issue.skips_row;
     series.issues.push_back(std::move(issue));
   }
