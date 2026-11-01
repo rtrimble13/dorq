@@ -305,6 +305,17 @@ struct StatementSettings {
   std::pair<int, int> quarter_spacing = {56, 126};   // days between consecutive quarter ends
   std::pair<int, int> year_spacing = {300, 430};     // and year ends
   Date coverage_floor = Date::from_ymd(1998, 1, 1);  // no period is expected before this
+  // DQ903: by identity name (sorted), the items whose non-zero value in a period
+  // explains that identity's gap there, as noncontrolling interests' income explains
+  // the balance sheet's.
+  std::vector<std::pair<std::string, std::vector<std::string>>> explained_by;
+  // DQ904's cash tie: the balance sheet's cash and the cash flow's net change in
+  // it, or empty for none.
+  std::vector<std::string> cash_tie;
+  // From this day the cash flow's cash includes restricted cash (ASU 2016-18) and
+  // the balance sheet's need not: a gap within this share of the balance is that.
+  Date restricted_cash_from = Date::from_ymd(2018, 1, 1);
+  double restricted_cash_share = 0.10;
 
   // Each line item the settings name, with where: ("identities.balance_sheet",
   // "total_assets"), for checking them against --items.

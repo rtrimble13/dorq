@@ -583,13 +583,31 @@ void read_statements(const toml::table& table, const std::string& where, Config&
       settings.quarter_spacing = read_spacing(node, where, path);
     } else if (key == "year_spacing") {
       settings.year_spacing = read_spacing(node, where, path);
-    } else if (key == "coverage_floor") {
+    } else if (key == "coverage_floor" || key == "restricted_cash_from") {
       const std::string text = read_string(node, where, path);
       const auto date = parse_date(text);
       if (!date) {
         fail(where, node, "\"" + path + "\" must be a date (YYYY-MM-DD)");
       }
-      settings.coverage_floor = *date;
+      (key == "coverage_floor" ? settings.coverage_floor : settings.restricted_cash_from) = *date;
+    } else if (key == "restricted_cash_share") {
+      settings.restricted_cash_share = read_double(node, where, path, 0.0, 1.0);
+    } else if (key == "cash_tie") {
+      settings.cash_tie = read_string_list(node, where, path);
+      if (!settings.cash_tie.empty() && settings.cash_tie.size() != 2) {
+        fail(where, node,
+             "\"" + path + "\" must name two items: the balance sheet's cash and the cash flow's "
+             "net change in it");
+      }
+    } else if (key == "explained_by") {
+      // By identity name, as identities are: a file adds to those it includes.
+      for (const auto& [name_node, items] : read_table(node, where, path)) {
+        const std::string name{name_node.str()};
+        std::erase_if(settings.explained_by, [&name](const auto& old) { return old.first == name; });
+        settings.explained_by.emplace_back(name,
+                                           read_string_list(items, where, key_path(path, name)));
+      }
+      std::sort(settings.explained_by.begin(), settings.explained_by.end());
     } else {
       fail(where, node, "unknown key \"" + path + "\"");
     }
@@ -961,6 +979,10 @@ void append_statements(std::string& out, const StatementSettings& settings) {
   out += "\nyear_spacing = [" + std::to_string(settings.year_spacing.first) + ", " +
          std::to_string(settings.year_spacing.second) + "]";
   out += "\ncoverage_floor = \"" + settings.coverage_floor.to_string() + "\"";
+  out += "\nrestricted_cash_from = \"" + settings.restricted_cash_from.to_string() + "\"";
+  out += "\nrestricted_cash_share = " + format_number(settings.restricted_cash_share);
+  out += "\ncash_tie = ";
+  append_toml_list(out, settings.cash_tie);
   out += "\nnonnegative = ";
   append_toml_list(out, settings.nonnegative);
   out += "\nnever_absent = ";
@@ -978,6 +1000,14 @@ void append_statements(std::string& out, const StatementSettings& settings) {
     for (const Identity& identity : settings.identities) {
       out += toml_key(identity.name) + " = ";
       append_toml_string(out, identity.to_string());
+      out += "\n";
+    }
+  }
+  if (!settings.explained_by.empty()) {
+    out += "\n[statements.explained_by]\n";
+    for (const auto& [name, items] : settings.explained_by) {
+      out += toml_key(name) + " = ";
+      append_toml_list(out, items);
       out += "\n";
     }
   }
@@ -1314,6 +1344,14 @@ std::vector<std::pair<std::string, std::string>> StatementSettings::named_items(
   for (const ItemBound& bound : bounds) {
     out.emplace_back("bounds", bound.lesser);
     out.emplace_back("bounds", bound.greater);
+  }
+  for (const auto& [name, items] : explained_by) {
+    for (const std::string& item : items) {
+      out.emplace_back("explained_by." + name, item);
+    }
+  }
+  for (const std::string& item : cash_tie) {
+    out.emplace_back("cash_tie", item);
   }
   return out;
 }

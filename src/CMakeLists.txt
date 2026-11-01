@@ -26,7 +26,9 @@ add_library(
   checks/integrity.cpp
   checks/price.cpp
   checks/registry.cpp
+  checks/identities.cpp
   checks/stale.cpp
+  checks/statement_rows.cpp
   checks/statements.cpp
   checks/volume.cpp
   cli/app.cpp

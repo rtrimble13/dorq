@@ -525,6 +525,33 @@ void first_versions(Company& c) {
   }
 }
 
+// DQ903's tolerance for an equation on a row: the larger of 0.5% of its largest
+// term and 1M (tools/synth/statements.toml's identity_share and tie_floor).
+double identity_tolerance(const Row& row, const Equation& eq) {
+  double scale = std::abs(row.values.at(eq.total));
+  for (const auto& [term, sign] : eq.terms) {
+    scale = std::max(scale, std::abs(row.values.at(term)));
+  }
+  return std::max(0.005 * scale, 1e6);
+}
+
+// Whether an equation fails on a row beyond that tolerance; false where a term is
+// NULL, as DQ903 does not judge it then.
+bool identity_breaks_on(const Row& row, const Equation& eq) {
+  double gap = row.values.at(eq.total);
+  if (std::isnan(gap)) {
+    return false;
+  }
+  for (const auto& [term, sign] : eq.terms) {
+    const double x = row.values.at(term);
+    if (std::isnan(x)) {
+      return false;
+    }
+    gap -= sign * x;
+  }
+  return std::abs(gap) > identity_tolerance(row, eq);
+}
+
 // ---------------------------------------------------------------------------
 // Labels
 
@@ -550,6 +577,28 @@ struct Label {
   std::string item;
   std::string identity;  // a structural gap: the identity or tie it breaks
 };
+
+// Whether a label covers one of its company's rows: its dates, and its statement,
+// period type and version where it names them.
+bool covers(const Company& c, const Label& label, const Row& row) {
+  const Date end = c.quarters[row.quarter].end;
+  return !row.removed && label.series == c.id && label.first <= end && end <= label.last &&
+         (!label.statement || *label.statement == row.statement) &&
+         (!label.type || *label.type == row.type) &&
+         (!label.version || *label.version == row.version);
+}
+
+// An equation's gap on a set of values, or nullopt where a term is NULL.
+std::optional<double> equation_gap(const Values& values, const Equation& eq) {
+  double gap = values.at(eq.total);
+  for (const auto& [term, sign] : eq.terms) {
+    gap -= sign * values.at(term);
+  }
+  if (std::isnan(gap)) {
+    return std::nullopt;
+  }
+  return gap;
+}
 
 // A fiscal year's last month: December 65% of the time, else September, June or
 // March.
@@ -782,7 +831,8 @@ void Simulation::open_books() {
   b.other_cl = r(level * p_.other_cl_ratio);
   b.nci_equity = c_.nci ? r(level * rng_.uniform(0.2, 0.8)) : 0.0;
   b.temporary = c_.temporary_equity ? r(level * rng_.uniform(0.1, 0.4)) : 0.0;
-  b.restricted = c_.restricted_cash ? r(level * rng_.uniform(0.03, 0.12)) : 0.0;
+  // Restricted cash: a few per cent of what the company holds (Apple's is about 4%).
+  b.restricted = c_.restricted_cash ? r(level * rng_.uniform(0.01, 0.04)) : 0.0;
   b.aoci = r(level * 0.05 * rng_.normal());
   if (pre_) {  // no goodwill, tax balances, long-term investments or debt
     b.ppe = r(level * rng_.uniform(0.2, 0.6));
@@ -921,7 +971,7 @@ Books Simulation::roll(std::size_t t, const Values& v) {
   next.invnc = r(b_.invnc * lognormal(0.08));
   next.loans = r(b_.loans * p_.grow_q * lognormal(0.02));
   next.deposits = r(b_.deposits * p_.grow_q * lognormal(0.02));
-  next.restricted = r(b_.restricted * lognormal(0.1));
+  next.restricted = r(b_.restricted * lognormal(0.05));
   next.other_ca = r(scale * p_.other_ca_ratio * lognormal(0.05));
   next.other_cl = r(scale * p_.other_cl_ratio * lognormal(0.05));
   return next;
@@ -1109,6 +1159,8 @@ class Universe {
   void key_faults();
   void impossible_values();
   void mark_impossible();
+  void mark_identities();
+  void mark_ties();
   Company* company(const std::string& id);
 
   Rng rng_;
@@ -1785,13 +1837,17 @@ void Universe::identity_breaks() {
         static_cast<std::size_t>(rng_.integer(0, static_cast<int>(eq.terms.size()) - 1)));
     const double total = row.values.at(eq.total);
     const double value = row.values.at(term);
+    // Well beyond DQ903's tolerance, so that the gap is the term's.
     if (std::isnan(total) || std::isnan(value) ||
-        std::abs(value) < std::max(0.05 * std::abs(total), 100.0 * c.unit) || !reserve(c, t, t)) {
+        std::abs(value) < std::max(0.05 * std::abs(total), 3.0 * identity_tolerance(row, eq)) ||
+        !reserve(c, t, t)) {
       continue;
     }
     const bool doubled = done % 2 == 1;
     row.values.at(eq.total) += (doubled ? 1.0 : -1.0) * sign * value;
-    label_row(c, row, doubled ? "identity_doubled_field" : "identity_dropped_field", "DQ903");
+    // The gap equals the term: the field DQ903 should name.
+    label_row(c, row, doubled ? "identity_doubled_field" : "identity_dropped_field", "DQ903",
+              std::string{info(term).column});
     ++done;
   }
 }
@@ -2140,6 +2196,176 @@ void Universe::mark_impossible() {
   }
 }
 
+// A fault that leaves an identity failing on its row is DQ903's too: the row's gap
+// is not the one the company files with (a structural gap) but the fault's.
+void Universe::mark_identities() {
+  for (Label& label : labels_) {
+    Company* c = company(label.series);
+    if (label.expect.empty() || label.expect.find("DQ903") != std::string::npos || c == nullptr) {
+      continue;
+    }
+    bool breaks = false;
+    for (const Row& row : c->rows) {
+      if (!covers(*c, label, row)) {
+        continue;
+      }
+      const Values clean = row.type == PeriodType::kQuarter ? c->values[row.quarter]
+                                                            : annual_values(*c, row.quarter);
+      for (const Equation& eq : equations()) {
+        const std::optional<double> gap = equation_gap(row.values, eq);
+        const std::optional<double> was = equation_gap(clean, eq);
+        breaks = breaks || (gap && was && identity_breaks_on(row, eq) &&
+                            std::abs(*gap - *was) > identity_tolerance(row, eq));
+      }
+    }
+    if (breaks) {
+      label.expect += "|DQ903";
+    }
+  }
+}
+
+// The rows in force of a company: each period's highest open version, as dorq's
+// in-force view has them with no --as-of.
+std::map<std::tuple<Statement, PeriodType, std::size_t>, const Row*> rows_in_force(
+    const Company& c) {
+  std::map<std::tuple<Statement, PeriodType, std::size_t>, std::vector<const Row*>> versions;
+  for (const Row& row : c.rows) {
+    if (!row.removed) {
+      versions[{row.statement, row.type, row.quarter}].push_back(&row);
+    }
+  }
+  std::map<std::tuple<Statement, PeriodType, std::size_t>, const Row*> in_force;
+  for (auto& [key, rows] : versions) {
+    std::sort(rows.begin(), rows.end(),
+              [](const Row* a, const Row* b) { return a->version < b->version; });
+    for (std::size_t k = 0; k < rows.size(); ++k) {
+      const bool closed = rows[k]->known_to.has_value() || (k + 1 < rows.size() && !rows[k]->open);
+      if (!closed) {
+        in_force[key] = rows[k];
+      }
+    }
+  }
+  return in_force;
+}
+
+// The ties DQ904 judges that fail on a company's rows in force, as the rows of
+// each: two balance sheets and a cash flow, or a year's quarters and the year.
+std::vector<std::vector<const Row*>> broken_ties(const Company& c) {
+  const auto in_force = rows_in_force(c);
+  const auto row_at = [&in_force](Statement s, PeriodType type, std::size_t q) -> const Row* {
+    const auto it = in_force.find({s, type, q});
+    return it == in_force.end() ? nullptr : it->second;
+  };
+  std::vector<std::vector<const Row*>> broken;
+  for (const PeriodType type : {PeriodType::kQuarter, PeriodType::kAnnual}) {
+    const auto [low, high] = type == PeriodType::kQuarter ? std::pair{56, 126} : std::pair{300, 430};
+    const Row* before = nullptr;
+    for (std::size_t q = 0; q < c.quarters.size(); ++q) {
+      const Row* sheet = row_at(kBal, type, q);
+      if (sheet == nullptr) {
+        continue;
+      }
+      const Row* flow = row_at(kCfs, type, q);
+      if (before != nullptr && flow != nullptr) {
+        const Date end = c.quarters[q].end;
+        const int spacing = end.days() - c.quarters[before->quarter].end.days();
+        const double a = before->values[kCash];
+        const double b = sheet->values[kCash];
+        const double gap = (b - a) - flow->values[kNetChangeInCash];
+        const double share = end >= restricted_cash_rule() ? 0.10 : 0.02;
+        if (spacing >= low && spacing <= high &&
+            std::abs(gap) > std::max(share * std::max(std::abs(a), std::abs(b)), 1e6)) {
+          broken.push_back({before, sheet, flow});
+        }
+      }
+      before = sheet;
+    }
+  }
+  for (const Statement s : {kInc, kCfs}) {
+    std::map<int, std::pair<std::vector<const Row*>, std::vector<const Row*>>> years;
+    for (const auto& [key, row] : in_force) {
+      if (std::get<0>(key) == s) {
+        auto& [quarters, annual] = years[c.quarters[row->quarter].fiscal_year];
+        (row->type == PeriodType::kQuarter ? quarters : annual).push_back(row);
+      }
+    }
+    for (const auto& [year, rows] : years) {
+      const auto& [quarters, annual] = rows;
+      if (quarters.size() != 4 || annual.size() != 1) {
+        continue;
+      }
+      for (std::size_t item = 0; item < kItemCount; ++item) {
+        if (info(item).statement != s || info(item).item_class != ItemClass::kFlow) {
+          continue;
+        }
+        double sum = 0.0;
+        double scale = std::abs(annual.front()->values.at(item));
+        for (const Row* quarter : quarters) {
+          sum += quarter->values.at(item);
+          scale = std::max(scale, std::abs(quarter->values.at(item)));
+        }
+        const double gap = sum - annual.front()->values.at(item);
+        if (!std::isnan(gap) && std::abs(gap) > std::max(0.005 * scale, 1e6)) {
+          std::vector<const Row*> involved = quarters;
+          involved.push_back(annual.front());
+          broken.push_back(std::move(involved));
+          break;
+        }
+      }
+    }
+  }
+  return broken;
+}
+
+// A fault that breaks a tie DQ904 judges is DQ904's too. DQ904 reports the tie on
+// one of its rows, which may be another than the fault's (the cash flow after a
+// balance sheet era begins, the year of a quarter at the wrong scale): those rows
+// get a label of their own, of the fault's kind.
+void Universe::mark_ties() {
+  std::vector<Label> added;
+  std::vector<std::tuple<std::string, Statement, PeriodType, std::size_t, int>> seen;
+  for (const Company& c : companies_) {
+    for (const std::vector<const Row*>& rows : broken_ties(c)) {
+      std::vector<std::size_t> faults;
+      for (std::size_t k = 0; k < labels_.size(); ++k) {
+        const Label& label = labels_[k];
+        if (!label.expect.empty() && std::any_of(rows.begin(), rows.end(), [&](const Row* row) {
+              return covers(c, label, *row);
+            })) {
+          faults.push_back(k);
+        }
+      }
+      if (faults.empty()) {
+        continue;
+      }
+      for (const std::size_t k : faults) {
+        if (labels_[k].expect.find("DQ904") == std::string::npos) {
+          labels_[k].expect += "|DQ904";
+        }
+      }
+      for (const Row* row : rows) {
+        const bool labelled = std::any_of(faults.begin(), faults.end(), [&](std::size_t k) {
+          return covers(c, labels_[k], *row);
+        });
+        const auto key = std::tuple{c.id, row->statement, row->type, row->quarter, row->version};
+        if (labelled || std::find(seen.begin(), seen.end(), key) != seen.end()) {
+          continue;
+        }
+        seen.push_back(key);
+        Label label{c.id, c.quarters[row->quarter].end, c.quarters[row->quarter].end,
+                    labels_[faults.front()].kind, "DQ904", ""};
+        label.statement = row->statement;
+        label.type = row->type;
+        label.version = row->version;
+        added.push_back(std::move(label));
+      }
+    }
+  }
+  for (Label& label : added) {
+    labels_.push_back(std::move(label));
+  }
+}
+
 void Universe::faults() {
   unit_errors();
   sign_flips();
@@ -2154,6 +2380,8 @@ void Universe::faults() {
   impossible_values();
   restated_at_scale();
   mark_impossible();
+  mark_identities();
+  mark_ties();
 }
 
 // Labels that cover a whole series, or a span of one.

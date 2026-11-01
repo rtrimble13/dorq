@@ -24,4 +24,18 @@ class ImpossibleValue final : public Check {
   void run(const SeriesContext& context, std::vector<Violation>& out) const override;
 };
 
+// DQ903 (identities.cpp)
+class IdentityBreak final : public Check {
+ public:
+  [[nodiscard]] const CheckInfo& info() const noexcept override;
+  void run(const SeriesContext& context, std::vector<Violation>& out) const override;
+};
+
+// DQ904 (identities.cpp)
+class PeriodTie final : public Check {
+ public:
+  [[nodiscard]] const CheckInfo& info() const noexcept override;
+  void run(const SeriesContext& context, std::vector<Violation>& out) const override;
+};
+
 }  // namespace dorq

@@ -150,10 +150,12 @@ std::string period_text(const StatementPeriod& period) {
   return out;
 }
 
-// The value of a statement finding's item or identity key field, or empty.
+// A finding's line item, from its record_key: the CSV's `item` column. An
+// identity's name is not an item: an identity's finding has one only when it names
+// the field (DQ903).
 std::string item_of(const Violation& v) {
   for (const DetailField& field : v.key) {
-    if (field.key == "item" || field.key == "identity") {
+    if (field.key == "item") {
       if (const auto* text = std::get_if<std::string>(&field.value)) {
         return *text;
       }

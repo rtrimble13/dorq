@@ -10,6 +10,7 @@ nonnegative = [
   "weighted_average_shares", "weighted_average_shares_diluted", "shares_outstanding",
 ]
 never_absent = ["revenue", "net_income", "total_assets", "total_liabilities", "net_change_in_cash"]
+cash_tie = ["cash_and_equivalents", "net_change_in_cash"]  # DQ904
 bounds = [
   "total_current_assets <= total_assets",
   "cash_and_equivalents <= total_assets",
@@ -30,3 +31,7 @@ ebit = "ebit = income_before_tax + interest_expense"
 net_income = "net_income = consolidated_income - net_income_noncontrolling"
 net_income_common = "net_income_common = net_income - preferred_dividends"
 cash_flow = "net_change_in_cash = net_cash_operating + net_cash_investing + net_cash_financing + fx_effect_on_cash"
+
+# DQ903: what explains the balance sheet's gap, where it is reported.
+[statements.explained_by]
+balance_sheet = ["net_income_noncontrolling"]
