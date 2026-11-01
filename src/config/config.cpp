@@ -561,6 +561,8 @@ void read_statements(const toml::table& table, const std::string& where, Config&
       settings.nonnegative = read_string_list(node, where, path);
     } else if (key == "never_absent") {
       settings.never_absent = read_string_list(node, where, path);
+    } else if (key == "null_is_zero") {
+      settings.null_is_zero = read_string_list(node, where, path);
     } else if (key == "bounds") {
       settings.bounds.clear();
       for (const std::string& text : read_string_list(node, where, path)) {
@@ -596,14 +598,16 @@ void read_statements(const toml::table& table, const std::string& where, Config&
       settings.cash_tie = read_string_list(node, where, path);
       if (!settings.cash_tie.empty() && settings.cash_tie.size() != 2) {
         fail(where, node,
-             "\"" + path + "\" must name two items: the balance sheet's cash and the cash flow's "
-             "net change in it");
+             "\"" + path +
+                 "\" must name two items: the balance sheet's cash and the cash flow's "
+                 "net change in it");
       }
     } else if (key == "explained_by") {
       // By identity name, as identities are: a file adds to those it includes.
       for (const auto& [name_node, items] : read_table(node, where, path)) {
         const std::string name{name_node.str()};
-        std::erase_if(settings.explained_by, [&name](const auto& old) { return old.first == name; });
+        std::erase_if(settings.explained_by,
+                      [&name](const auto& old) { return old.first == name; });
         settings.explained_by.emplace_back(name,
                                            read_string_list(items, where, key_path(path, name)));
       }
@@ -987,6 +991,8 @@ void append_statements(std::string& out, const StatementSettings& settings) {
   append_toml_list(out, settings.nonnegative);
   out += "\nnever_absent = ";
   append_toml_list(out, settings.never_absent);
+  out += "\nnull_is_zero = ";
+  append_toml_list(out, settings.null_is_zero);
   std::vector<std::string> bounds;
   bounds.reserve(settings.bounds.size());
   for (const ItemBound& bound : settings.bounds) {
@@ -1340,6 +1346,9 @@ std::vector<std::pair<std::string, std::string>> StatementSettings::named_items(
   }
   for (const std::string& item : never_absent) {
     out.emplace_back("never_absent", item);
+  }
+  for (const std::string& item : null_is_zero) {
+    out.emplace_back("null_is_zero", item);
   }
   for (const ItemBound& bound : bounds) {
     out.emplace_back("bounds", bound.lesser);

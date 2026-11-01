@@ -1,7 +1,5 @@
 #include "checks/statements.hpp"
 
-#include "checks/statement_rows.hpp"
-
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -15,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "checks/statement_rows.hpp"
 #include "config/config.hpp"
 #include "dorq/date.hpp"
 #include "dorq/number.hpp"

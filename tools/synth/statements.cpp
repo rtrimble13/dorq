@@ -2258,7 +2258,8 @@ std::vector<std::vector<const Row*>> broken_ties(const Company& c) {
   };
   std::vector<std::vector<const Row*>> broken;
   for (const PeriodType type : {PeriodType::kQuarter, PeriodType::kAnnual}) {
-    const auto [low, high] = type == PeriodType::kQuarter ? std::pair{56, 126} : std::pair{300, 430};
+    const auto [low, high] =
+        type == PeriodType::kQuarter ? std::pair{56, 126} : std::pair{300, 430};
     const Row* before = nullptr;
     for (std::size_t q = 0; q < c.quarters.size(); ++q) {
       const Row* sheet = row_at(kBal, type, q);
@@ -2352,8 +2353,12 @@ void Universe::mark_ties() {
           continue;
         }
         seen.push_back(key);
-        Label label{c.id, c.quarters[row->quarter].end, c.quarters[row->quarter].end,
-                    labels_[faults.front()].kind, "DQ904", ""};
+        Label label{c.id,
+                    c.quarters[row->quarter].end,
+                    c.quarters[row->quarter].end,
+                    labels_[faults.front()].kind,
+                    "DQ904",
+                    ""};
         label.statement = row->statement;
         label.type = row->type;
         label.version = row->version;

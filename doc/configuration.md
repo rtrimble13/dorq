@@ -153,9 +153,15 @@ year_spacing = [300, 430]
 coverage_floor = "1998-01-01"
 nonnegative = []      # items that cannot be negative
 never_absent = []     # items a reporting company always carries
+null_is_zero = []     # items an identity reads as 0 where NULL
 bounds = []           # "item <= item"
+cash_tie = []         # DQ904: [cash item, its change on the cash flow], or none
+restricted_cash_from = "2018-01-01"  # the cash flow includes restricted cash from here,
+restricted_cash_share = 0.1          # up to this share of the balance
 
 [statements.identities]  # name = "item = item + item - item"
+
+[statements.explained_by]  # DQ903: identity name = [items that explain its gap]
 ```
 
 Lists can also be written as one comma-separated string (`ignore = "DQ106, DQ107"`).

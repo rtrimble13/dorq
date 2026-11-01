@@ -33,13 +33,17 @@ namespace {
 // and the log Bayes factors of the evidence for them. dorq's defaults, until
 // DR-0911 fits them to fafnir's labels.
 enum class Gap : std::uint8_t { kStructural, kReclassification, kFieldError, kUnexplained };
-constexpr std::array<std::string_view, 4> kGapNames{"structural", "reclassification",
-                                                    "field_error", "unexplained"};
+constexpr std::array<std::string_view, 4> kGapNames{"structural", "reclassification", "field_error",
+                                                    "unexplained"};
 constexpr std::array<double, 4> kPrior{-1.4, -3.0, -1.05, -1.05};
 constexpr double kPersistent = 4.0;      // the gap is the neighbouring periods' gap
 constexpr double kNotPersistent = -2.0;  // ... it is not
-constexpr double kExplained = 3.0;       // an explained_by item is reported in the period
-constexpr double kMatch = 4.0;           // the gap is a term, twice one, or one at a power of ten
+// The identity fails in every neighbouring period too, by another amount: "a gap in
+// every period is the company's structure" (fafnir's playbook), as a SPAC's
+// temporary equity is, or minority interest before 2010.
+constexpr double kNeighboursBreak = 3.0;
+constexpr double kExplained = 3.0;  // an explained_by item is reported in the period
+constexpr double kMatch = 4.0;      // the gap is a term, twice one, or one at a power of ten
 constexpr double kNoMatch = -4.0;
 constexpr double kOtherHolds = 6.0;  // another version holds, with the same total
 constexpr double kNoOtherHolds = -4.0;
@@ -59,6 +63,7 @@ struct Terms {
   std::vector<const std::vector<double>*> columns;
   std::vector<double> signs;  // +1 on the left, -1 on the right, negated for a "-" term
   std::vector<bool> left;
+  std::vector<bool> zero_if_null;  // [statements] null_is_zero: a NULL is 0
   std::vector<const std::string*> names;
   std::vector<const std::vector<double>*> explaining;  // explained_by columns
   std::vector<const std::string*> explaining_names;
@@ -77,6 +82,9 @@ std::optional<Terms> terms_of(const Series& s, const Identity& identity,
       terms.columns.push_back(column);
       terms.signs.push_back((left ? 1.0 : -1.0) * (term.negative ? -1.0 : 1.0));
       terms.left.push_back(left);
+      terms.zero_if_null.push_back(std::find(settings.null_is_zero.begin(),
+                                             settings.null_is_zero.end(),
+                                             term.item) != settings.null_is_zero.end());
       terms.names.push_back(&term.item);
     }
   }
@@ -106,9 +114,12 @@ Judged judge_row(const Terms& terms, std::size_t i, const StatementSettings& set
   Judged j;
   double scale = 0.0;
   for (std::size_t k = 0; k < terms.columns.size(); ++k) {
-    const double x = (*terms.columns[k])[i];
+    double x = (*terms.columns[k])[i];
     if (std::isnan(x)) {
-      return Judged{};
+      if (!terms.zero_if_null[k]) {
+        return Judged{};
+      }
+      x = 0.0;
     }
     j.gap += terms.signs[k] * x;
     if (terms.left[k]) {
@@ -190,20 +201,23 @@ Pattern pattern(double m, double c, double x) {
 // leaves this gap to rounding, and whose value put right sits with the same item in
 // the neighbouring periods better than it does now. For a term dropped from the
 // total, or counted twice, the gap is the term itself, of either sign.
-std::optional<Match> field_match(const Terms& terms, const Judged& j, std::size_t i,
-                                 double excess, const std::vector<std::size_t>& neighbours) {
+std::optional<Match> field_match(const Terms& terms, const Judged& j, std::size_t i, double excess,
+                                 const std::vector<std::size_t>& neighbours) {
   std::optional<Match> best;
   for (std::size_t k = 0; k < terms.columns.size(); ++k) {
     const std::vector<double>& column = *terms.columns[k];
     const double x = column[i];
+    if (std::isnan(x)) {
+      continue;  // a null_is_zero term read as 0: no stored value to be wrong
+    }
     std::vector<double> around;
     for (const std::size_t r : neighbours) {
       if (!std::isnan(column[r])) {
         around.push_back(column[r]);
       }
     }
-    const double usual = around.size() >= 2 ? median(around)
-                                            : std::numeric_limits<double>::quiet_NaN();
+    const double usual =
+        around.size() >= 2 ? median(around) : std::numeric_limits<double>::quiet_NaN();
     for (const double m : kMultiples) {
       // The total is no term of itself: the gap equals it when the other side is
       // missing, which names nothing.
@@ -260,6 +274,8 @@ std::string match_text(const std::string& item, double multiple) {
 // The evidence about one gap.
 struct GapEvidence {
   bool persistent = false;
+  std::string_view side = "around";        // where it persists: around, before or after
+  bool neighbours_break = false;           // not persistent, but every neighbour fails too
   const std::string* explained = nullptr;  // the explained_by item reported
   std::optional<Match> match;
   bool other_holds = false;
@@ -274,14 +290,38 @@ GapEvidence gather(const Series& s, const Terms& terms, const std::vector<Judged
   GapEvidence e;
   const std::vector<std::size_t> neighbours = neighbours_of(s, line, i);
   std::vector<double> gaps;
+  std::size_t breaking = 0;
   for (const std::size_t r : neighbours) {
     gaps.push_back(judged[r].gap);
+    if (std::fabs(judged[r].gap) > judged[r].tolerance) {
+      ++breaking;
+    }
   }
   e.neighbours = gaps.size();
   e.baseline = gaps.size() >= 2 ? median(gaps) : 0.0;
   const double excess = j.gap - e.baseline;
-  e.persistent = gaps.size() >= 2 && std::fabs(e.baseline) > j.tolerance &&
-                 std::fabs(excess) <= std::max(j.tolerance, 0.25 * std::fabs(j.gap));
+  const double band = std::max(j.tolerance, 0.25 * std::fabs(j.gap));
+  e.persistent =
+      gaps.size() >= 2 && std::fabs(e.baseline) > j.tolerance && std::fabs(excess) <= band;
+  // Or on one side: the gap starts here and carries on (a SPAC's first quarters,
+  // an acquisition's), or carries on to here and stops.
+  for (const bool before : {true, false}) {
+    std::size_t same = 0;
+    std::size_t count = 0;
+    for (const std::size_t r : neighbours) {
+      if ((s.date[r] < s.date[i]) == before) {
+        ++count;
+        if (std::fabs(judged[r].gap - j.gap) <= band) {
+          ++same;
+        }
+      }
+    }
+    if (!e.persistent && count == 2 && same == 2) {
+      e.persistent = true;
+      e.side = before ? "before" : "after";
+    }
+  }
+  e.neighbours_break = !e.persistent && gaps.size() >= 2 && breaking == gaps.size();
   const auto [first, last] = same_date(s, i);
   for (std::size_t r = first; r < last; ++r) {
     if (st.period_type[r] != st.period_type[i]) {
@@ -309,6 +349,10 @@ std::array<double, 4> posterior(const GapEvidence& e) {
   std::array<double, 4> score = kPrior;
   const auto at = [&score](Gap g) -> double& { return score.at(static_cast<std::size_t>(g)); };
   at(Gap::kStructural) += e.persistent ? kPersistent : kNotPersistent;
+  if (e.neighbours_break) {
+    at(Gap::kStructural) += kNeighboursBreak;
+    at(Gap::kUnexplained) -= 1.0;
+  }
   if (e.explained != nullptr) {
     at(Gap::kStructural) += kExplained;
     at(Gap::kUnexplained) -= kExplained;
@@ -348,13 +392,18 @@ Violation report_gap(const CheckInfo& info, const SeriesContext& context, const 
   v.severity = filing_fact ? Severity::kInfo
                            : context.thresholds.for_probability(p_error).value_or(Severity::kInfo);
   const std::string& name = terms.identity->name;
-  std::string message = name + " is off by " + amount_text(j.gap) + " (tolerance " +
-                        amount_text(j.tolerance) + "): ";
+  std::string message =
+      name + " is off by " + amount_text(j.gap) + " (tolerance " + amount_text(j.tolerance) + "): ";
   switch (best) {
     case Gap::kStructural:
-      message += "as in the periods around it";
-      if (e.explained != nullptr) {
-        message += ", with " + *e.explained + " reported";
+      if (e.persistent || e.neighbours_break) {
+        message += e.persistent ? "as in the periods " + std::string{e.side} + " it"
+                                : "it fails in the periods around it too";
+        if (e.explained != nullptr) {
+          message += ", with " + *e.explained + " reported";
+        }
+      } else {
+        message += *e.explained + " is reported in the period";  // the only way here
       }
       break;
     case Gap::kReclassification:
@@ -380,14 +429,21 @@ Violation report_gap(const CheckInfo& info, const SeriesContext& context, const 
     const std::string& field = *terms.names[e.match->term];
     v.key.push_back({"item", field});
     v.detail.push_back({"field", field});
-    v.suggested_action = SuggestedAction{
-        "check_item", {{"item", field}}, "check " + field + ": " + match_text(field, e.match->multiple)};
+    v.suggested_action =
+        SuggestedAction{"check_item",
+                        {{"item", field}},
+                        "check " + field + ": " + match_text(field, e.match->multiple)};
   }
   for (std::size_t h = 0; h < p.size(); ++h) {
     v.hypotheses.push_back({kGapNames.at(h), p.at(h)});
   }
-  v.evidence.push_back({"persistent", e.persistent, e.persistent ? kPersistent : kNotPersistent,
-                        e.neighbours >= 2 ? "the neighbouring periods' gap" : "too few neighbours"});
+  v.evidence.push_back(
+      {"persistent", e.persistent, e.persistent ? kPersistent : kNotPersistent,
+       e.neighbours >= 2 ? "the neighbouring periods' gap" : "too few neighbours"});
+  if (e.neighbours_break) {
+    v.evidence.push_back(
+        {"neighbours_break", true, kNeighboursBreak, "every neighbouring period fails"});
+  }
   if (e.explained != nullptr) {
     v.evidence.push_back({"explained_by", *e.explained, kExplained, ""});
   }
@@ -453,8 +509,9 @@ struct CashTie {
 };
 
 std::vector<CashTie> cash_ties(const SeriesContext& context, const std::vector<std::size_t>& sheets,
-                               const std::vector<std::size_t>& flows, const std::vector<double>& cash,
-                               const std::vector<double>& change, PeriodType type) {
+                               const std::vector<std::size_t>& flows,
+                               const std::vector<double>& cash, const std::vector<double>& change,
+                               PeriodType type) {
   const Series& s = context.series;
   const StatementSettings& settings = *context.statement_settings;
   const auto [low, high] =
@@ -516,16 +573,16 @@ void judge_cash(const CheckInfo& info, const SeriesContext& context, std::vector
       if (!tie.broken) {
         continue;
       }
-      const bool pair = k + 1 < ties.size() && ties[k + 1].broken &&
-                        ties[k + 1].before == tie.after &&
-                        std::fabs(tie.gap + ties[k + 1].gap) <=
-                            std::min(tie.tolerance, ties[k + 1].tolerance);
+      const bool pair =
+          k + 1 < ties.size() && ties[k + 1].broken && ties[k + 1].before == tie.after &&
+          std::fabs(tie.gap + ties[k + 1].gap) <= std::min(tie.tolerance, ties[k + 1].tolerance);
       if (pair) {
         Violation v = tie_finding(info, context, tie.after, 0.95);
         v.known = std::max({known_of(s, tie.before), known_of(s, tie.after), known_of(s, tie.flow),
                             known_of(s, ties[k + 1].flow)});
-        v.message = settings.cash_tie.at(0) + " is out of line with the cash flows either side: " +
-                    "off by " + amount_text(tie.gap) + ", then by " + amount_text(ties[k + 1].gap);
+        v.message = settings.cash_tie.at(0) +
+                    " is out of line with the cash flows either side: " + "off by " +
+                    amount_text(tie.gap) + ", then by " + amount_text(ties[k + 1].gap);
         v.key.push_back({"tie", std::string{"cash"}});
         v.key.push_back({"item", settings.cash_tie.at(0)});
         v.detail.push_back({"item", settings.cash_tie.at(0)});
@@ -541,8 +598,8 @@ void judge_cash(const CheckInfo& info, const SeriesContext& context, std::vector
       v.known = std::max({known_of(s, tie.before), known_of(s, tie.after), known_of(s, tie.flow)});
       v.message = "the change in " + settings.cash_tie.at(0) + " since " +
                   s.date[tie.before].to_string() + " is not " + settings.cash_tie.at(1) +
-                  ": off by " + amount_text(tie.gap) + " (tolerance " +
-                  amount_text(tie.tolerance) + ")";
+                  ": off by " + amount_text(tie.gap) + " (tolerance " + amount_text(tie.tolerance) +
+                  ")";
       v.key.push_back({"tie", std::string{"cash"}});
       v.detail.push_back({"previous_fiscal_date", s.date[tie.before].to_string()});
       v.detail.push_back({"gap", tie.gap});
@@ -595,7 +652,7 @@ std::optional<SumGap> quarter_gap(const std::vector<double>& column,
     }
     const double m = median(others);
     const double unit = std::max(std::fabs(m), g.tolerance);
-    score.at(k) = std::fabs(q.at(k) - g.gap - m) / unit;     // quarter k put right
+    score.at(k) = std::fabs(q.at(k) - g.gap - m) / unit;                 // quarter k put right
     score.at(4) = std::max(score.at(4), std::fabs(q.at(k) - m) / unit);  // the year wrong
   }
   const auto best = std::min_element(score.begin(), score.end());
@@ -655,9 +712,10 @@ void judge_quarter_sums(const CheckInfo& info, const SeriesContext& context,
         continue;
       }
       // The item that breaks the most, relative to its tolerance, names the row.
-      const SumGap& lead = *std::max_element(gaps.begin(), gaps.end(), [](const auto& a, const auto& b) {
-        return std::fabs(a.gap) / a.tolerance < std::fabs(b.gap) / b.tolerance;
-      });
+      const SumGap& lead =
+          *std::max_element(gaps.begin(), gaps.end(), [](const auto& a, const auto& b) {
+            return std::fabs(a.gap) / a.tolerance < std::fabs(b.gap) / b.tolerance;
+          });
       const std::size_t row = lead.target == 4 ? annual.front() : q.at(lead.target);
       std::vector<std::string> items;
       for (const SumGap& g : gaps) {
@@ -674,8 +732,9 @@ void judge_quarter_sums(const CheckInfo& info, const SeriesContext& context,
       }
       v.known = known;
       const std::string& lead_item = (*context.items)[lead.item].column;
-      std::string message = "the quarters of FY" + std::to_string(fiscal_year) + " do not sum to the year: " +
-                            lead_item + " by " + amount_text(lead.gap);
+      std::string message = "the quarters of FY" + std::to_string(fiscal_year) +
+                            " do not sum to the year: " + lead_item + " by " +
+                            amount_text(lead.gap);
       if (items.size() > 1) {
         message += ", and " + std::to_string(items.size() - 1) + " more items";
       }

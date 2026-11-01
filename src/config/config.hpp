@@ -298,6 +298,7 @@ struct StatementSettings {
   std::vector<Identity> identities;       // sorted by name
   std::vector<std::string> nonnegative;   // items that cannot be negative
   std::vector<std::string> never_absent;  // items a reporting company always carries
+  std::vector<std::string> null_is_zero;  // items an identity reads as 0 where NULL
   std::vector<ItemBound> bounds;          // items at most others
   double identity_share = 0.005;          // an identity holds within this share of its scale
   double tie_floor = 1e6;                 // or within this much of the reporting currency

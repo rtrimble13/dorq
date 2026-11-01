@@ -1,9 +1,13 @@
 -- Each candidate identity's pass rate on fafnir's current versions (DR-0905, plan
--- §4.2), with DQ903's tolerance: the larger of 0.5% of the largest term and 1M of
--- the reporting currency. Aggregates only: post the result on
--- rtrimble13/dorq#19. An identity that holds on 100% of rows holds by
--- construction (SF1 computes it) and is dropped from priors/fafnir-statements.toml;
--- one below 99% is investigated before it ships at warn.
+-- section 4.2), with DQ903's tolerance: the larger of 0.5% of the largest term and
+-- 1M of the reporting currency. A NULL fx_effect_on_cash is 0 ([statements]
+-- null_is_zero), as in fafnir's cash_flow_tie; any other NULL term leaves the row
+-- unjudged. Aggregates only: post the result on rtrimble13/dorq#19.
+--
+-- An identity that holds on 100% of rows holds by construction (SF1 computes it)
+-- and is left out of priors/fafnir-statements.toml; one below 99% is investigated
+-- before it ships at warn. All eleven candidates are here, the three left out
+-- included, so that the host can confirm the sample they were left out on.
 --
 --   psql "$FAFNIR_DB" -f scripts/fafnir-identity-pass-rates.sql
 WITH rates AS (
@@ -68,10 +72,10 @@ SELECT 'net_income_common' AS identity, 'core.income_statement' AS table_name, c
  WHERE superseded_at IS NULL AND net_income_common IS NOT NULL AND net_income IS NOT NULL AND preferred_dividends IS NOT NULL
 UNION ALL
 SELECT 'cash_flow' AS identity, 'core.cash_flow_statement' AS table_name, count(*) AS judged,
-       count(*) FILTER (WHERE abs(net_change_in_cash - net_cash_operating - net_cash_investing - net_cash_financing - fx_effect_on_cash)
-                        <= greatest(0.005 * greatest(abs(net_change_in_cash), abs(net_cash_operating), abs(net_cash_investing), abs(net_cash_financing), abs(fx_effect_on_cash)), 1000000)) AS held
+       count(*) FILTER (WHERE abs(net_change_in_cash - net_cash_operating - net_cash_investing - net_cash_financing - coalesce(fx_effect_on_cash, 0))
+                        <= greatest(0.005 * greatest(abs(net_change_in_cash), abs(net_cash_operating), abs(net_cash_investing), abs(net_cash_financing), abs(coalesce(fx_effect_on_cash, 0))), 1000000)) AS held
   FROM core.cash_flow_statement
- WHERE superseded_at IS NULL AND net_change_in_cash IS NOT NULL AND net_cash_operating IS NOT NULL AND net_cash_investing IS NOT NULL AND net_cash_financing IS NOT NULL AND fx_effect_on_cash IS NOT NULL
+ WHERE superseded_at IS NULL AND net_change_in_cash IS NOT NULL AND net_cash_operating IS NOT NULL AND net_cash_investing IS NOT NULL AND net_cash_financing IS NOT NULL
 )
 SELECT identity, table_name, judged, held, judged - held AS failed,
        round(100.0 * held / nullif(judged, 0), 3) AS pass_rate_pct

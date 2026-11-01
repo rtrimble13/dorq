@@ -46,7 +46,8 @@ Lines and JSON arrays, and reports in five formats. It runs:
   the line items ([doc/statements.md](doc/statements.md)). The statement checks
   (DQ9xx) arrive item by item ([the plan](doc/plans/dorq-fundamentals-plan.md)).
   So far DQ104 reports the rows and values that cannot be used, DQ901 versions
-  that collide or do not chain, and DQ902 values that cannot be right.
+  that collide or do not chain, DQ902 values that cannot be right, DQ903
+  identities that fail and why, and DQ904 ties across periods that fail.
 
 `dorq calibrate` fits the price model's priors and its `p_error` map to labelled
 history: fafnir's own repair decisions ([doc/calibration.md](doc/calibration.md),
@@ -171,6 +172,8 @@ including the `fafnir` format that maps onto `ops.data_quality_flag`.
 | [DQ602](doc/checks/DQ602.md) | market-day | info: a day the market reference moved far beyond its range (`--market`) |
 | [DQ901](doc/checks/DQ901.md) | statement-key | statements: two rows for one version, versions that do not chain, or a knowledge date before the period's end or apart from its filing |
 | [DQ902](doc/checks/DQ902.md) | impossible-value | statements: a negative where none can be, or a component above its total (`[statements] nonnegative`, `bounds`) |
+| [DQ903](doc/checks/DQ903.md) | identity-break | statements: an identity that fails beyond tolerance, weighed as the company's structure, a reclassification, a field error (named) or unexplained (`[statements.identities]`) |
+| [DQ904](doc/checks/DQ904.md) | period-tie | statements: the change in cash against the cash flow (`[statements] cash_tie`), or a year's four quarters against the year (`--items`) |
 | [DQ701](doc/checks/DQ701.md) | split-misdated | a split on file the bars show a few sessions away (`--actions`) |
 | [DQ702](doc/checks/DQ702.md) | split-without-jump | a split on file the bars do not show: not real, already applied, or a duplicate row |
 | [DQ703](doc/checks/DQ703.md) | split-ratio-mismatch | a split on file at the wrong ratio (often inverted) |
@@ -207,7 +210,7 @@ archives, plus a `SHA256SUMS` file:
 | `dorq-<version>-macos-arm64.tar.gz` | macOS on Apple silicon |
 
 ```bash
-version=0.10.0
+version=0.11.0
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/dorq-${version}-linux-x86_64.tar.gz"
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
@@ -232,7 +235,7 @@ Clang 18+).
 ```bash
 sudo apt-get install -y build-essential cmake ninja-build git
 git clone https://github.com/rtrimble13/dorq.git && cd dorq
-git checkout v0.10.0                       # or stay on main for the latest
+git checkout v0.11.0                       # or stay on main for the latest
 cmake --workflow --preset release          # configure, build, run the tests
 sudo cmake --install build/release --prefix /opt/dorq
 /opt/dorq/bin/dorq version                 # names the commit it was built from

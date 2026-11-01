@@ -94,8 +94,7 @@ std::string sheet(const std::string& id, const std::string& date, const std::str
                   const std::string& liabilities, const std::string& equity,
                   const std::string& version = "1,2013-01-01,") {
   return id + ",balance_sheet,quarter," + date + "," + date.substr(0, 4) + "," + quarter_of(date) +
-         "," + version + ",,," +
-         assets + "," + liabilities + "," + equity + ",\n";
+         "," + version + ",,," + assets + "," + liabilities + "," + equity + ",\n";
 }
 
 // Five quarters that hold (10bn = 6bn + 4bn), but where `odd` replaces one.
@@ -113,22 +112,22 @@ std::string identity_rows() {
   text += five_quarters("FIELD", 2,
                         sheet("FIELD", kQuarters[2], "10000000000", "6000000", "4000000000"));
   // ... and equity with its sign flipped.
-  text +=
-      five_quarters("SIGN", 1, sheet("SIGN", kQuarters[1], "10000000000", "6000000000", "-4000000000"));
+  text += five_quarters("SIGN", 1,
+                        sheet("SIGN", kQuarters[1], "10000000000", "6000000000", "-4000000000"));
   // Structural: the same gap (say, temporary equity) in every quarter.
   for (const char* q : kQuarters) {
     text += sheet("STRUCT", q, "10000000000", "6000000000", "3700000000");
   }
   // One quarter's gap, with noncontrolling interests reported in it.
-  text += five_quarters("NCI", 2, sheet("NCI", kQuarters[2], "10000000000", "6000000000", "3750000000"));
+  text += five_quarters("NCI", 2,
+                        sheet("NCI", kQuarters[2], "10000000000", "6000000000", "3750000000"));
   text += "NCI,income,quarter,2010-09-30,2010,,1,2013-01-01,,,,,,,50000000\n";
   // A reclassification: v1 breaks, and v2, with the same total, holds.
-  text += five_quarters(
-      "RECLASS", 2,
-      sheet("RECLASS", kQuarters[2], "10000000000", "6300000000", "4000000000",
-            "1,2013-01-01,2013-06-01") +
-          sheet("RECLASS", kQuarters[2], "10000000000", "6000000000", "4000000000",
-                "2,2013-06-01,"));
+  text += five_quarters("RECLASS", 2,
+                        sheet("RECLASS", kQuarters[2], "10000000000", "6300000000", "4000000000",
+                              "1,2013-01-01,2013-06-01") +
+                            sheet("RECLASS", kQuarters[2], "10000000000", "6000000000",
+                                  "4000000000", "2,2013-06-01,"));
   // Unexplained: one quarter's gap that no term gives; and a NULL term, not judged.
   text += five_quarters("UNEXPL", 2,
                         sheet("UNEXPL", kQuarters[2], "10000000000", "6000000000", "3700000000"));
@@ -250,8 +249,9 @@ TEST_CASE("DQ903: a gap is weighed as structural, a reclassification, a field er
   write_file(dir.path() / "st.toml", kIdentityConfig);
   const std::string file = (dir.path() / "s.csv").string();
   const std::string config = (dir.path() / "st.toml").string();
-  const Result r = run_in(dir.path(), {"--config", config.c_str(), "--select", "DQ903", "--show-info",
-                                       "--format", "jsonl", "--exit-zero", file.c_str()});
+  const Result r =
+      run_in(dir.path(), {"--config", config.c_str(), "--select", "DQ903", "--show-info",
+                          "--format", "jsonl", "--exit-zero", file.c_str()});
   INFO(r.err);
   REQUIRE(r.status == 0);
   const std::string sheet_key = R"({"statement":"balance_sheet",)" + kQuarter;
@@ -274,8 +274,9 @@ TEST_CASE("DQ903: a gap is weighed as structural, a reclassification, a field er
   // A field error names its field, at the severity its probability gives, with
   // the item to check.
   const std::string field = report(r.out, "DQ903", "FIELD", "2010-09-30");
-  CHECK(contains(field, "balance_sheet is off by 5994000000 (tolerance 50000000): the gap is "
-                        "total_liabilities stored at x0.001"));
+  CHECK(contains(field,
+                 "balance_sheet is off by 5994000000 (tolerance 50000000): the gap is "
+                 "total_liabilities stored at x0.001"));
   CHECK(contains(field, R"("severity":"error")"));
   CHECK(contains(field, R"("classification":"data_error")"));
   CHECK(contains(field, R"("suggested_action":{"kind":"check_item","item":"total_liabilities")"));
@@ -292,7 +293,7 @@ TEST_CASE("DQ903: a gap is weighed as structural, a reclassification, a field er
     CHECK(contains(line, R"("classification":"market_fact")"));
   }
   const std::string nci = report(r.out, "DQ903", "NCI", "2010-09-30");
-  CHECK(contains(nci, "as in the periods around it, with net_income_noncontrolling reported"));
+  CHECK(contains(nci, "net_income_noncontrolling is reported in the period"));
   CHECK(contains(nci, R"("severity":"info")"));
   const std::string reclass = report(r.out, "DQ903", "RECLASS", "2010-09-30");
   CHECK(contains(reclass, "another version holds, with the same total_assets"));
@@ -307,10 +308,11 @@ TEST_CASE("DQ903: a gap is weighed as structural, a reclassification, a field er
   CHECK_FALSE(contains(r.out, "2011-06-30"));
 
   // The text line names the identity and the period's version.
-  const Result text = run_in(dir.path(), {"--config", config.c_str(), "--select", "DQ903",
-                                          "--exit-zero", file.c_str()});
-  CHECK(contains(text.out, "FIELD  2010-09-30 Q3 FY2010 balance_sheet v1  DQ903 error  "
-                           "identity-break  balance_sheet is off by 5994000000"));
+  const Result text = run_in(
+      dir.path(), {"--config", config.c_str(), "--select", "DQ903", "--exit-zero", file.c_str()});
+  CHECK(contains(text.out,
+                 "FIELD  2010-09-30 Q3 FY2010 balance_sheet v1  DQ903 error  "
+                 "identity-break  balance_sheet is off by 5994000000"));
 
   // No identities, nothing to judge.
   const Result none =
@@ -330,8 +332,46 @@ TEST_CASE("DQ903: explained_by must name a configured identity") {
   const std::string config = (dir.path() / "st.toml").string();
   const Result r = run_in(dir.path(), {"--config", config.c_str(), file.c_str()});
   CHECK(r.status == 2);
-  CHECK(contains(r.err, "statements.explained_by names the identity \"balance\", which "
-                        "statements.identities does not define"));
+  CHECK(contains(r.err,
+                 "statements.explained_by names the identity \"balance\", which "
+                 "statements.identities does not define"));
+}
+
+TEST_CASE("DQ903: a null_is_zero term is 0 where NULL, as fafnir's cash flow tie reads it") {
+  const TempDir dir;
+  // No fx effect on file: two years that tie with it read as 0, and one that does
+  // not tie either way.
+  write_file(dir.path() / "s.csv",
+             "security_id,statement,period_type,fiscal_date,fiscal_year,fiscal_period,"
+             "version_no,known_from,net_change_in_cash,net_cash_operating,net_cash_investing,"
+             "net_cash_financing,fx_effect_on_cash\n"
+             "FX,cash_flow,annual,2010-12-31,2010,FY,1,2011-03-01,100000000,500000000,"
+             "-300000000,-100000000,\n"
+             "FX,cash_flow,annual,2011-12-31,2011,FY,1,2012-03-01,90000000,500000000,"
+             "-300000000,-100000000,-10000000\n"
+             "FX,cash_flow,annual,2012-12-31,2012,FY,1,2013-03-01,400000000,500000000,"
+             "-300000000,-100000000,\n");
+  const std::string identity =
+      "[statements.identities]\n"
+      "cash_flow = \"net_change_in_cash = net_cash_operating + net_cash_investing + "
+      "net_cash_financing + fx_effect_on_cash\"\n";
+  write_file(dir.path() / "zero.toml",
+             "[statements]\nnull_is_zero = [\"fx_effect_on_cash\"]\n" + identity);
+  write_file(dir.path() / "plain.toml", identity);
+  const std::string file = (dir.path() / "s.csv").string();
+  const std::string zero = (dir.path() / "zero.toml").string();
+  const std::string plain = (dir.path() / "plain.toml").string();
+  const Result r = run_in(dir.path(), {"--config", zero.c_str(), "--select", "DQ903", "--show-info",
+                                       "--format", "jsonl", "--exit-zero", file.c_str()});
+  INFO(r.err);
+  const std::vector<std::string> got = reports_of(r.out, "DQ903");
+  REQUIRE(got.size() == 1);
+  CHECK(contains(got.front(), R"("fiscal_date":"2012-12-31")"));
+  CHECK(contains(r.out, "cash_flow is off by 300000000"));
+  // Without it, a NULL term leaves the identity unjudged on that row.
+  const Result unjudged = run_in(dir.path(), {"--config", plain.c_str(), "--select", "DQ903",
+                                              "--show-info", "--exit-zero", file.c_str()});
+  CHECK(count_matching(unjudged.out, "DQ903") == 0);
 }
 
 TEST_CASE("DQ904: the cash tie, restricted cash, and a year's quarters against the year") {
@@ -367,8 +407,9 @@ TEST_CASE("DQ904: the cash tie, restricted cash, and a year's quarters against t
                  "the change in cash_and_equivalents since 2010-03-31 is not net_change_in_cash: "
                  "off by -200000000 (tolerance 24000000)"));
   const std::string pair = report(r.out, "DQ904", "PAIR", "2010-06-30");
-  CHECK(contains(pair, "cash_and_equivalents is out of line with the cash flows either side: off "
-                       "by 300000000, then by -300000000"));
+  CHECK(contains(pair,
+                 "cash_and_equivalents is out of line with the cash flows either side: off "
+                 "by 300000000, then by -300000000"));
   CHECK(contains(pair, R"("severity":"error")"));
   // Restricted cash: within 10% of cash from 2018, so only 2017's gap is a break.
   CHECK(contains(report(r.out, "DQ904", "RESTR", "2017-12-31"), "(tolerance 20000000)"));
@@ -377,8 +418,9 @@ TEST_CASE("DQ904: the cash tie, restricted cash, and a year's quarters against t
 
   // The quarter sum names the wrong quarter, or the year.
   const std::string quarter = report(r.out, "DQ904", "QSUM", "2010-09-30");
-  CHECK(contains(quarter, "the quarters of FY2010 do not sum to the year: revenue by 1200000000; "
-                          "this quarter is out of line"));
+  CHECK(contains(quarter,
+                 "the quarters of FY2010 do not sum to the year: revenue by 1200000000; "
+                 "this quarter is out of line"));
   CHECK(contains(quarter, R"("hypotheses":{"quarter_error":0.9,"unexplained":0.1})"));
   CHECK(contains(quarter, R"("year_fiscal_date":"2010-12-31")"));
   CHECK(contains(report(r.out, "DQ904", "QSUM", "2011-12-31"),
@@ -403,6 +445,7 @@ TEST_CASE("statements: explained_by, cash_tie and restricted cash parse and roun
 cash_tie = ["cash_and_equivalents", "net_change_in_cash"]
 restricted_cash_from = "2019-01-01"
 restricted_cash_share = 0.2
+null_is_zero = ["fx_effect_on_cash"]
 [statements.identities]
 balance_sheet = "total_assets = total_liabilities + total_equity_parent"
 net_income = "net_income = consolidated_income - net_income_noncontrolling"
@@ -415,6 +458,7 @@ balance_sheet = ["net_income_noncontrolling", "temporary_equity"]
   CHECK(st.cash_tie == std::vector<std::string>{"cash_and_equivalents", "net_change_in_cash"});
   CHECK(st.restricted_cash_from == dorq::Date::from_ymd(2019, 1, 1));
   CHECK(st.restricted_cash_share == doctest::Approx(0.2));
+  CHECK(st.null_is_zero == std::vector<std::string>{"fx_effect_on_cash"});
   REQUIRE(st.explained_by.size() == 2);
   CHECK(st.explained_by[0].first == "balance_sheet");  // sorted
   CHECK(st.explained_by[0].second ==

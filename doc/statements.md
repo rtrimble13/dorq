@@ -128,23 +128,41 @@ year_spacing = [300, 430]     # and year ends
 coverage_floor = "1998-01-01" # no period is expected before this
 nonnegative = ["revenue", "total_assets"]          # items that cannot be negative
 never_absent = ["revenue", "net_income"]           # items a reporting company always has
+null_is_zero = ["fx_effect_on_cash"]               # items an identity reads as 0 where NULL
 bounds = ["total_current_assets <= total_assets"]  # one item at most another
+cash_tie = ["cash_and_equivalents", "net_change_in_cash"]  # DQ904: cash, and its change
+restricted_cash_from = "2018-01-01"  # from here the cash flow includes restricted cash,
+restricted_cash_share = 0.10         # up to this share of the balance
 
 [statements.identities]       # named equations over items
 balance_sheet = "total_assets = total_liabilities + total_equity_parent"
 cash_flow = "net_change_in_cash = net_cash_operating + net_cash_investing + net_cash_financing"
+
+[statements.explained_by]     # DQ903: items that explain an identity's gap
+balance_sheet = ["net_income_noncontrolling"]
 ```
 
 - An identity is item names joined by `+` and `-`, with one `=` between the two
   sides. A bound is `item <= item`.
-- A file that includes another (`include`) adds identities to the ones it
-  includes, or replaces one of the same name. The lists replace the included
-  file's lists, as every list in the config does.
+- A file that includes another (`include`) adds identities, and `explained_by`
+  entries, to the ones it includes, or replaces one of the same name. The lists
+  replace the included file's lists, as every list in the config does.
+- `null_is_zero` names items an identity reads as 0 where NULL, as fafnir's cash
+  flow tie reads the exchange-rate effect most companies leave out. Any other
+  NULL term leaves the identity unjudged on that row.
+- `explained_by` names, for an identity, the items whose presence in a period
+  explains its gap: noncontrolling interests, which SF1's balance sheet leaves out
+  of `total_equity_parent`. Each entry must name an identity the table defines
+  (exit status 2 otherwise).
+- `cash_tie` is two items or none: the balance sheet's cash, and the cash flow's
+  net change in it. From `restricted_cash_from` (ASU 2016-18), the cash flow
+  reconciles cash and restricted cash, so the tie allows up to
+  `restricted_cash_share` of the balance, where it otherwise allows
+  `cash_tie_share`.
 - With `--items`, every item the table names must be one it lists: another is a
   configuration error (exit status 2). Without `--items` nothing is checked.
 - The lists and identities are empty by default, so dorq names no vendor's items.
-  fafnir's are in `priors/fafnir-statements.toml`: DQ902's lists now, and SF1's
-  identities with DR-0905.
+  fafnir's are in `priors/fafnir-statements.toml`.
 - The table is global: a profile does not change it.
 - `config_hash` covers the table only where it differs from its defaults, so the
   release that added it changed no existing hash.
@@ -155,6 +173,8 @@ cash_flow = "net_change_in_cash = net_cash_operating + net_cash_investing + net_
 |---|---|
 | DQ901 | every version: rows that collide, versions that do not chain, knowledge dates that cannot be right |
 | DQ902 | every version: the `nonnegative` items and `bounds` above |
+| DQ903 | every version: each identity, and why it fails where it does |
+| DQ904 | the periods in force: the change in cash (`cash_tie`), and a year's quarters against the year (`--items`' flows) |
 | the other DQ9xx | only on statements, as the plan adds them |
 | DQ104 | on every kind: a field that cannot be used |
 | DQ109 | on every context file, `--items` included |
@@ -164,6 +184,25 @@ cash_flow = "net_change_in_cash = net_cash_operating + net_cash_investing + net_
 its precision and recall on dorq-synth's statements universe
 ([tools/synth/README.md](../tools/synth/README.md#statements)), whose faults and hard
 negatives follow the plan's §6.
+
+## Identities and ties
+
+An identity holds within the larger of `identity_share` of its largest term and
+`tie_floor`: fafnir's tolerance. DQ903 judges each version's identities, and
+weighs a gap beyond it as the company's structure (the same gap in the periods
+around it, or on one side of it; the identity failing in every period around it;
+or an `explained_by` item reported), a reclassification (another
+version of the period holds, with the same total), a field error (the gap is a
+term, twice one, or one at a thousand or a million times), or unexplained. The
+first two are filing facts, at info; a field error names the field
+([DQ903](checks/DQ903.md)).
+
+DQ904 ties what an identity within one row cannot: the change in cash between
+two balance sheets in force, within `quarter_spacing` or `year_spacing`, against
+the later period's cash flow; and, for each flow item `--items` lists, a fiscal
+year's four quarters against its one year. It names the row out of line: one
+balance sheet's cash where two ties break and cancel, a quarter, or the year
+([DQ904](checks/DQ904.md)).
 
 ## Output
 

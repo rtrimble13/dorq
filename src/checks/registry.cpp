@@ -99,7 +99,8 @@ std::span<const Check* const> all_checks() {
       &kLargeMove,      &kMissingRun,      &kSparse,        &kCohort,         &kStale,
       &kFrequencyGap,   &kVolumeShift,     &kVolumeSpike,   &kZeroVolumeMove, &kRepeatedPrice,
       &kCarryBar,       &kCohortMove,      &kMarketDay,     &kSplitMisdated,  &kSplitNoJump,
-      &kSplitRatio,     &kSplitDouble,     &kDividend,      &kStatementKey,   &kImpossibleValue, &kIdentityBreak, &kPeriodTie};
+      &kSplitRatio,     &kSplitDouble,     &kDividend,      &kStatementKey,   &kImpossibleValue,
+      &kIdentityBreak,  &kPeriodTie};
   return kChecks;
 }
 
