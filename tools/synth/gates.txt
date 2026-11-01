@@ -5,7 +5,7 @@
 #   precision        reported with the right code for an injected fault (at least)
 #   fault_precision  reported on any injected fault (at least)
 #   recall           injected faults reported with the right code (at least)
-#   max              reports on a hard negative of this kind (at most)
+#   max              reports of this code, or on a hard negative of this kind (at most)
 
 # Price action (M3). The milestone's bar: DQ201 and DQ203 at precision 0.9.
 DQ201 precision 0.90
@@ -75,3 +75,24 @@ hn_thin max 3
 hn_split_on_file max 0
 hn_split_between_bars max 0
 hn_rate max 1
+
+# Statements (M9). The gate runs dorq on dorq-synth's statements universe with
+# tools/synth/statements.toml and its items, actions and meta (tests/
+# synth_statements_gate.cmake); each check's plan item adds its own bounds here.
+# Every row reads (no DQ104), and so does every context row (no DQ109), on the bars
+# universe as well.
+DQ104 max 0
+DQ109 max 0
+# Real events and real data, which no statement check may report at warn.
+hn_acquisition max 0
+hn_writedown max 0
+hn_fiscal_year_change max 0
+hn_late_filer max 0
+hn_real_zero max 0
+hn_bank_nulls max 0
+hn_structural_gap max 0
+hn_reclassification max 0
+hn_restatement max 0
+hn_split_on_file max 0
+hn_delisted max 0
+hn_no_statements_expected max 0

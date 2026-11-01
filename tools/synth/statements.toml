@@ -1,0 +1,32 @@
+# The settings the statements gate runs dorq with (tests/synth_statements_gate.cmake),
+# and that `dorq-synth verify-statements` holds on the rows with no fault: the
+# identities, bounds and lists dorq-synth's companies keep by construction. They are
+# SF1's candidates (plan section 4.2) under fafnir's column names.
+[statements]
+nonnegative = [
+  "revenue", "cash_and_equivalents", "investments_total", "receivables", "inventory",
+  "property_plant_equipment_net", "goodwill_and_intangibles", "total_current_assets",
+  "total_assets", "payables", "deposit_liabilities", "total_debt",
+  "weighted_average_shares", "weighted_average_shares_diluted", "shares_outstanding",
+]
+never_absent = ["revenue", "net_income", "total_assets", "total_liabilities", "net_change_in_cash"]
+bounds = [
+  "total_current_assets <= total_assets",
+  "cash_and_equivalents <= total_assets",
+  "goodwill_and_intangibles <= total_assets",
+  "total_current_liabilities <= total_liabilities",
+  "debt_current <= total_debt",
+]
+
+[statements.identities]
+balance_sheet = "total_assets = total_liabilities + total_equity_parent"
+assets_split = "total_assets = total_current_assets + total_noncurrent_assets"
+liabilities_split = "total_liabilities = total_current_liabilities + total_noncurrent_liabilities"
+debt_split = "total_debt = debt_current + debt_noncurrent"
+investments_split = "investments_total = investments_current + investments_noncurrent"
+gross_profit = "gross_profit = revenue - cost_of_revenue"
+operating_income = "operating_income = gross_profit - operating_expenses"
+ebit = "ebit = income_before_tax + interest_expense"
+net_income = "net_income = consolidated_income - net_income_noncontrolling"
+net_income_common = "net_income_common = net_income - preferred_dividends"
+cash_flow = "net_change_in_cash = net_cash_operating + net_cash_investing + net_cash_financing + fx_effect_on_cash"

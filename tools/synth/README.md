@@ -1,8 +1,9 @@
 # dorq-synth
 
 Synthetic market data with labelled faults, and a scorer that measures dorq's
-precision and recall against the labels (plan item DR-0308). It is built with the
-tests, and `ctest -R synth` runs the gate in [gates.txt](gates.txt) on two seeds.
+precision and recall against the labels (plan item DR-0308). Synthetic financial
+statements (DR-0903) [follow](#statements). The tool is built with the tests, and
+`ctest -R synth` runs the gate in [gates.txt](gates.txt) on two seeds.
 
 ```bash
 dorq-synth generate --seed 1 --out /tmp/synth   # bars, points, labels, actions, meta, market
@@ -142,6 +143,183 @@ DQ107 is held to fault precision 0.5 and recall 0.9. It reports 10-20 bars a
 universe: every injected flat bar, other faults that leave a bar flat, and a few
 rare flat days on low-priced names. On the penny and 1/16 series it reports 0-4
 bars, where it reported over a thousand before it learned the price grid.
+
+## Statements
+
+`dorq-synth statements` writes a universe of financial statements, for the DQ9xx
+checks (plan item DR-0903). It draws from its own random stream, so it changes
+nothing in the bars universe of the same seed.
+
+```bash
+dorq-synth statements --seed 1 --out /tmp/st   # statements, items, actions, meta, labels
+dorq-synth verify-statements --dir /tmp/st --config tools/synth/statements.toml
+dorq /tmp/st/statements.csv --items /tmp/st/items.csv --actions /tmp/st/actions.csv \
+     --meta /tmp/st/meta.csv --config tools/synth/statements.toml --exit-zero \
+     --format csv --show-info > /tmp/st/results.csv
+dorq-synth score --labels /tmp/st/labels.csv --results /tmp/st/results.csv \
+                 --gates tools/synth/gates.txt --verbose
+```
+
+The files are in fafnir's shapes:
+
+- `statements.csv`: every version current on fafnir's load timeline, as its export
+  sends them ([doc/statements.md](../../doc/statements.md)). It has the three
+  statements' quarterly and annual rows, and fafnir's 58 line items as columns.
+  Values are whole multiples of $1,000, or of $1M for a company with $1B or more of
+  revenue a quarter. An item off a row's statement is NULL.
+- `items.csv`: fafnir's `ref.statement_line_item`, as exported.
+- `actions.csv`: the splits on file.
+- `meta.csv`: the fields DR-0910 reads: `currency`, `first_trade_date`,
+  `last_trade_date`, `active`, `delisted_date`, `sector`, `industry` and
+  `statements_expected`. It adds two series with no rows: `ETF01` expects no
+  statements, and `MIS01` expects them.
+- `labels.csv` and `labels.jsonl`.
+
+[statements.toml](statements.toml) is the config the gate runs with: SF1's
+candidate identities (plan §4.2), with the bounds and lists that hold on the
+generated data.
+
+### The companies
+
+| Class | Companies | Quarterly revenue | What sets them apart |
+|---|---|---|---|
+| Industrials (`IND`) | 40 | $20M–$5B | fiscal years ending in December (65%), September, June or March. 12% have 52/53-week years, whose periods end on the month's last Saturday. 45% carry R&D, and the rest report 0. Two report in euros. 15% have noncontrolling interests, 8% temporary equity and 15% restricted cash |
+| Banks (`BNK`) | 8 | $50M–$2B | deposits, and no current and noncurrent split and no inventory: NULL, not 0 |
+| Biotechs (`PRE`) | 6 | none | 0 revenue, cost of revenue and inventory. They fund their losses by selling shares, and 40% start selling product some years in |
+
+- **History.** Industrials start in 2001–2004 (60%) or 2005–2014. Banks start in
+  2001–2006 and biotechs in 2008–2016. Every company files to 2026-06-30, except
+  four industrials and a biotech, which delist in their seventh to twelfth year.
+  Three industrials change their fiscal year from December to June or September,
+  in 2009–2018: a short transition year, then the labels start again on the new year.
+- **Flows.** Revenue grows (−3% to 15% a year) and is seasonal. Costs are shares
+  of revenue.
+- **Stocks.** These roll forward. Working capital follows revenue and costs, and
+  property and equipment move by capex and depreciation. The cash flow moves cash,
+  and equity is what is left after liabilities and the noncontrolling and temporary
+  equity.
+- **The identities hold by construction.** Each subtotal is computed from its
+  rounded components. A year's flows are its quarters' sum, and the change in cash
+  is the cash flow's net change. The structural gaps are the exceptions, on
+  purpose:
+  - noncontrolling interests and temporary equity sit outside total liabilities
+    and parent equity;
+  - from 2018 the cash flow's cash includes restricted cash, and the balance
+    sheet's does not.
+- **Shares.** Counts grow by stock compensation and by shares sold, and fall with
+  buybacks.
+  - An industrial returns cash beyond three quarters of revenue as buybacks, a tenth
+    of its market cap a quarter at most.
+  - The market cap is the company's scale at a multiple that wanders and reverts.
+    The `close` column is the market cap over the shares, in that day's terms.
+  - A company splits when its raw price passes $200, half the time: 2:1, 3:1, 3:2
+    or 4:1, at most three times. A biotech below $1 may reverse split.
+  - Each version stores its counts in the terms of its own `known_from`, as fafnir
+    does (its ADR 0018).
+- **Filing.**
+  - Deadlines go by size: 40 or 45 days for a 10-Q, and 60, 75 or 90 for a 10-K.
+    Each issuer files a few days to three weeks inside them.
+  - A year's last quarter and the year itself are known from the 10-K.
+  - Before 2004 there is no filing date: the knowledge date is estimated, 45 or 90
+    days after the period end.
+- **Restatements.**
+  - An industrial has up to three, and the others up to one. Each restates one
+    statement of one fiscal year: its four quarters and the year, as version 2.
+  - A reclassification moves 3–15% between two components and holds the totals:
+    SG&A and R&D, cost of revenue and SG&A, payables and deferred revenue, current
+    and noncurrent debt, a bank's receivables and investments, or operating and
+    investing cash.
+  - Half of an industrial's restatements are of its income statement, and half of
+    those move its revenue, cost and SG&A by up to 4%, and its totals with them.
+  - A restatement is known from the next 10-K (35%), from the backfill day
+    2026-10-20 (50%, so that one load day holds many), or from a night after it.
+  - `loaded_at` is the backfill day for every row known by then.
+
+### Faults and hard negatives
+
+Faults keep their fiscal year and a quarter either side clear of each other, and
+of restatements, splits and the hard negatives that change the data. Each label
+names the statement, period type, version and item it covers, wherever the fault
+has one.
+
+| Kind | Expect | What was done |
+|---|---|---|
+| `unit_value` | DQ912 | 8 values of one row at ×1,000, ×0.001 or ×10⁶ |
+| `unit_row` | DQ912 | 5 quarterly rows with every money item at ×1,000 or ×0.001 |
+| `unit_era` | DQ912 | 4 runs of 4–8 quarters of one statement at ×1,000 or ×0.001 |
+| `sign_flip` | DQ913 | 6 values with a definite sign negated: revenue, a cost, capex, dividends paid, or depreciation |
+| `bad_value` | DQ911 | 8 values multiplied or divided by 1.5–3.5 |
+| `copied_period` | DQ914 | 5 quarters of an income or cash flow statement that repeat the quarter before |
+| `absent_as_zero` | DQ915 | 6 items, reported in the quarters either side, set to 0 |
+| `cumulative_quarters` | DQ916 | 3 fiscal years whose Q2 to Q4 hold the year to date (flows) |
+| `annual_in_quarter` | DQ916 | 3 quarters holding their fiscal year's flows |
+| `identity_dropped_field`, `identity_doubled_field` | DQ903 | 4 totals missing one of their terms, and 4 counting one twice |
+| `split_missing` | DQ921 | 3 splits that are not on file (a context gap) |
+| `counts_wrong_terms` | DQ921 | 3 quarters, the first known after a split on file, whose share counts are left in the old terms |
+| `filing_at_period_end` | DQ931 | 3 periods whose filing date, and `known_from`, is the period end |
+| `amendment_date` | DQ931 | 3 10-Qs dated 20–60 days after the next quarter's filing |
+| `missing_quarter` | DQ941 | 4 quarters missing from all three statements |
+| `restatement_x1000` | DQ932 | 3 restatements whose new version is the old one at ×1,000 |
+| `statements_missing` | DQ943 | `MIS01`, which expects statements and has none |
+| `hn_acquisition` | - | about a fifth of the industrials buy a company with debt: goodwill and assets step, and revenue steps 15–50% for good (DQ9) |
+| `hn_writedown` | - | goodwill written down by 50–90% in a quarter, through operating expenses (DQ9) |
+| `hn_fiscal_year_change` | - | the three changes of fiscal year (DQ9) |
+| `hn_late_filer` | - | 4 10-Qs filed 15–40 days after their deadline (DQ9) |
+| `hn_real_zero` | - | every biotech, all its rows (DQ91) |
+| `hn_bank_nulls` | - | every bank, all its rows (DQ9) |
+| `hn_structural_gap` | - | the noncontrolling and temporary equity outside the balance sheet's identity (`identity` `balance_sheet`), and restricted cash from 2018 (`cash_tie`) (DQ90) |
+| `hn_reclassification`, `hn_restatement` | - | each restatement's year and statement (DQ9) |
+| `hn_split_on_file` | - | every other split, from the last period known before it to the first after (DQ92) |
+| `hn_delisted` | - | each delisted company, from its last period (DQ94) |
+| `hn_no_statements_expected` | - | `ETF01` (DQ94) |
+
+A label's `first` and `last` are fiscal dates. `labels.csv` adds the columns
+`statement`, `period_type`, `version_no`, `item` and `identity`; an empty one covers
+every value. `labels.jsonl` has the same fields ([doc/labels.md](../../doc/labels.md)).
+`identity` names the identity or tie a structural gap breaks, for people and for
+`verify-statements`.
+
+### `verify-statements`
+
+`dorq-synth verify-statements --dir DIR --config F` reads `DIR/statements.csv`
+through dorq's own reader, with `DIR/items.csv`. On every row that no fault label
+covers, it holds:
+
+- each identity, bound and non-negative item of `F`'s `[statements]`, exactly;
+- a fiscal year's quarters against the year, for every flow;
+- the change in cash against the cash flow's net change, quarter to quarter.
+
+It checks the ties in the in-force view and in the as-first-reported view. A
+structural gap excuses the identity or tie it names. It prints how often each rule
+was judged, held, excused and broken. It exits 1 when a rule breaks, when a rule
+holds on no row, or when the input has a row dorq cannot use (DQ104, DQ109).
+
+### The statements gate
+
+`ctest -R synth` runs `synth.statements-seed-1` and `-2`
+([tests/synth_statements_gate.cmake](../../tests/synth_statements_gate.cmake)):
+
+1. it generates the universe twice, and holds every file byte for byte;
+2. it runs `verify-statements`;
+3. it runs dorq on the universe, with all three context files;
+4. it scores dorq's output with `dorq-synth score` and dorq-eval against
+   [gates.txt](gates.txt).
+
+No DQ9xx check has shipped yet, so the gate holds the following, and each check's
+plan item adds its own bounds:
+
+- no row dorq cannot use: `DQ104 max 0`;
+- no context row it cannot use: `DQ109 max 0`;
+- no report at warn on any hard negative.
+
+`max` on a code bounds that code's reports at warn and above. On a hard-negative
+kind, it bounds that kind's hits.
+
+Scoring matches a statement label as it matches a bars label, and also by
+statement, period type, version and item. A field left empty on either the label or
+the finding covers every value. A whole-period finding, which has no version,
+matches each version's label, and an identity's finding, which has no item, matches
+each item's label.
 
 ## A large input: `bench`
 

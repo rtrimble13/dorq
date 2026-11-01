@@ -23,7 +23,7 @@ dorq-eval --labels labels.jsonl --results 2026-10-14.jsonl --results 2026-10-13.
 | `--results F` | `dorq check` output as `csv`, `jsonl` or `fafnir` (told apart by the first character). Use `--show-info` to get the calibration points below warn. Give it more than once to judge several runs |
 | `--input-time T` | When the runs' input was taken (an ISO 8601 date or timestamp). A label whose `applies_until` is not after it is dropped: the data it describes had been repaired |
 | `--complete` | Every fault is labelled, as in dorq-synth. A report that matches no label counts as a false positive. Without this flag it is "unlabelled" and left out of precision |
-| `--gates F` | Bounds to enforce, in the format of `tools/synth/gates.txt`. The exit status is 1 when any bound fails |
+| `--gates F` | Bounds to enforce, in the format of `tools/synth/gates.txt`. `max` bounds a code's reports at warn and above, or a hard-negative kind's hits. The exit status is 1 when any bound fails |
 | `--markdown F`, `--html F` | Where to write the report. Without `--markdown`, the markdown goes to stdout |
 | `--title T` | The report's heading |
 
@@ -37,8 +37,10 @@ judged). The sets are:
 
 - each results file, when there are several;
 - every report, or with several files their **distinct conditions**: one per
-  code, series and `record_key` (a DQ601 row's key includes its ratio), the last
-  file's kept, as fafnir's one-flag-per-condition dedupe keeps one flag;
+  code, series and `record_key` (a DQ601 row's key includes its ratio, and a
+  statement finding's its period, version and item, from the CSV's statement
+  columns as well), the last file's kept, as fafnir's one-flag-per-condition
+  dedupe keeps one flag;
 - the same judged against the **verified labels** only (`verified: true`).
 
 On fafnir's three shadow nights of 2026-10-12..14 and its hand labels, dorq-eval
@@ -59,6 +61,12 @@ The matching follows `dorq-synth score`, so the two tools agree on synthetic dat
 - **Cohort labels** (`*` with `members`) match only a cross-sectional row whose
   `detail.members` overlap the label's. CSV results carry no members, so there a
   cohort label matches the cross-sectional row on its date alone.
+- **Statement labels** also match by statement, period type, version and item
+  ([doc/labels.md](../../doc/labels.md)). A field the label sets must equal the
+  finding's, where the finding has one. So a finding on a whole period (no version)
+  or on an identity (no item) matches each version's or each item's label. CSV
+  results carry these fields in their statement columns. JSON results carry them
+  as fields, with the item in `record_key`.
 - **Recall** counts a fault label as found when a report at warn or above names
   the label's expected code within the slack. The label is credited to the first
   code in `expect`.

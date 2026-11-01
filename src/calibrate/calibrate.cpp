@@ -60,6 +60,11 @@ PricePriors priors_of(const Weights& w, const PricePriors& base) {
 // The hypotheses a label allows, or nullopt for a label about something the
 // price model does not judge (a gap, a volume step, a split on file).
 std::optional<std::array<bool, kCount>> allowed_for(const Label& label) {
+  // A label about statements is not about price moves, even on a series whose
+  // id is a security's, as fafnir's are.
+  if (label.about_statements()) {
+    return std::nullopt;
+  }
   std::array<bool, kCount> a{};
   const auto set = [&a](H h) { a.at(idx(h)) = true; };
   if (label.label_class == LabelClass::kMarketFact) {

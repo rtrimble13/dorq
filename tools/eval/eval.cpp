@@ -35,6 +35,7 @@
 #include "core/text.hpp"
 #include "dorq/date.hpp"
 #include "dorq/number.hpp"
+#include "dorq/statement.hpp"
 #include "io/csv.hpp"
 
 namespace {
@@ -58,7 +59,21 @@ struct Result {
   // What the record_key adds to the date ("ratio=2:1"), from JSON results: two
   // DQ601 rows on one date are two conditions.
   std::string key;
+  // A statement finding's period, version and item; unset when it names none.
+  std::optional<dorq::Statement> statement;
+  std::optional<dorq::PeriodType> period_type;
+  std::optional<std::int32_t> version;
+  std::string item;
 };
+
+// A version_no as dorq writes it, or nullopt.
+std::optional<std::int32_t> version_of(const std::string& text) {
+  const dorq::ParsedNumber n = dorq::parse_number(text);
+  if (n.status != dorq::ParsedNumber::Status::kOk || n.value < 1.0 || n.value > 1e6) {
+    return std::nullopt;
+  }
+  return static_cast<std::int32_t>(n.value);
+}
 
 // ---------------------------------------------------------------------------
 // JSON results: a small parser for the nested records dorq writes.
@@ -321,12 +336,16 @@ std::vector<Result> read_json_results(const std::string& path) {
     if (const Json* detail = r.get("detail"); detail != nullptr) {
       result.members = split_ids(detail->string_or("members"));
     }
+    result.statement = dorq::parse_statement(r.string_or("statement"));
+    result.period_type = dorq::parse_period_type(r.string_or("period_type"));
+    result.version = version_of(r.string_or("version_no"));
     if (const Json* key = record.get("record_key"); key != nullptr) {
       for (std::size_t i = 0; i < key->keys.size(); ++i) {
         if (key->keys[i] != "trade_date") {
           result.key += (result.key.empty() ? "" : ";") + key->keys[i] + "=" + key->values[i].text;
         }
       }
+      result.item = key->string_or("item");
     }
     results.push_back(std::move(result));
   }
@@ -356,6 +375,16 @@ std::vector<Result> read_results(const std::string& path) {
   const std::size_t severity = column(h, "severity");
   const std::size_t p = column(h, "p_error");
   const std::size_t message = column(h, "message");
+  // A statements run's CSV names each finding's period, version and item.
+  const auto optional_column = [&h](std::string_view name) -> std::optional<std::size_t> {
+    const auto it = std::find(h.begin(), h.end(), name);
+    return it == h.end() ? std::nullopt
+                         : std::optional<std::size_t>{static_cast<std::size_t>(it - h.begin())};
+  };
+  const auto statement = optional_column("statement");
+  const auto period_type = optional_column("period_type");
+  const auto version = optional_column("version_no");
+  const auto item = optional_column("item");
   for (std::size_t i = 1; i < rows.size(); ++i) {
     const auto& row = rows[i];
     const auto first = dorq::parse_date(row.at(date));
@@ -371,13 +400,64 @@ std::vector<Result> read_results(const std::string& path) {
     const dorq::ParsedNumber number = dorq::parse_number(row.at(p));
     r.p_error = number.status == dorq::ParsedNumber::Status::kOk ? number.value : 1.0;
     r.message = row.at(message);
+    if (statement) {
+      r.statement = dorq::parse_statement(row.at(*statement));
+      r.period_type = period_type ? dorq::parse_period_type(row.at(*period_type)) : std::nullopt;
+      r.version = version ? version_of(row.at(*version)) : std::nullopt;
+      r.item = item ? row.at(*item) : std::string{};
+      // Two findings on one date are two conditions when their periods differ: the
+      // key a JSON result's record_key gives.
+      r.key = "statement=" + row.at(*statement) +
+              ";period_type=" + (period_type ? row.at(*period_type) : std::string{}) +
+              ";fiscal_date=" + row.at(date);
+      if (version && !row.at(*version).empty()) {
+        r.key += ";version_no=" + row.at(*version);
+      }
+      if (!r.item.empty()) {
+        r.key += ";item=" + r.item;
+      }
+    }
     results.push_back(std::move(r));
   }
   return results;
 }
 
+// A label's statement field against a result's: unset on either side covers
+// every value.
+template <typename T>
+bool same(const std::optional<T>& label, const std::optional<T>& result) {
+  return !label || !result || *label == *result;
+}
+
+bool same_scope(const Result& r, const Label& l) {
+  return same(l.statement, r.statement) && same(l.period_type, r.period_type) &&
+         same(l.version, r.version) && (l.item.empty() || r.item.empty() || l.item == r.item);
+}
+
+// A statements label's period, version and item, for the notes: " income
+// quarter v1 revenue".
+std::string scope(const Label& l) {
+  std::string out;
+  if (l.statement) {
+    out += " " + std::string{dorq::to_string(*l.statement)};
+  }
+  if (l.period_type) {
+    out += " " + std::string{dorq::to_string(*l.period_type)};
+  }
+  if (l.version) {
+    out += " v" + std::to_string(*l.version);
+  }
+  if (!l.item.empty()) {
+    out += " " + l.item;
+  }
+  return out;
+}
+
 bool overlaps(const Result& r, const Label& l, int slack) {
   if (l.series != "*" && l.series != r.series) {
+    return false;
+  }
+  if (!same_scope(r, l)) {
     return false;
   }
   if (l.series == "*" && l.label_class != LabelClass::kMarketFact && !r.series.empty()) {
@@ -614,7 +694,7 @@ Evaluation evaluate(const std::vector<Label>& labels, const std::vector<Result>&
     c.found += found ? 1 : 0;
     if (!found) {
       e.notes.push_back("missed (" + l.kind + "): " + l.series + " " + l.first.to_string() + ".." +
-                        l.last.to_string() + " " + l.expect);
+                        l.last.to_string() + scope(l) + " " + l.expect);
     }
   }
   for (const Bin& b : e.bins) {
@@ -638,8 +718,8 @@ Evaluation evaluate(const std::vector<Label>& labels, const std::vector<Result>&
 }
 
 std::optional<double> metric(Evaluation& e, const Gate& gate) {
-  if (gate.metric == "max") {
-    return e.hard_hits[gate.code];
+  if (gate.metric == "max") {  // a code's reports, or a hard-negative kind's
+    return gate.code.starts_with("DQ") ? e.by_code[gate.code].reported : e.hard_hits[gate.code];
   }
   const Counts& c = e.by_code[gate.code];
   if (gate.metric == "precision") {

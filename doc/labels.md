@@ -35,8 +35,23 @@ Labels are JSON Lines: one flat object per line. Blank lines are skipped.
 | `applies_until` | The label applies only to runs whose input predates this time. A repair's label describes data the repair replaced: after it, dorq's reports on the corrected bars are not about that fault. dorq-eval's `--input-time` drops the labels whose time has passed |
 | `verified` | `true` when a person checked the label bar by bar; `false` for a bulk acceptance. dorq-eval reports precision on every label and on the verified ones. Absent means not verified |
 | `members` | For a cohort label (`series` `*`): the members' ids, comma-separated as DQ601's `detail.members` is. The label matches a DQ601 row whose members overlap them. A market fact with `codes` DQ601 makes a coincidental cohort row false |
+| `statement`, `period_type`, `version_no`, `item` | For a label about financial statements: the statement (`income`, `balance_sheet` or `cash_flow`, or fafnir's table name), the period type (`quarter` or `annual`), the version (a whole number from 1) and the line item it covers. Each is optional: an unset field covers every value. With any of them, `first` and `last` are fiscal dates |
 
 Other keys are ignored, so an exporter can keep extra fields for people.
+
+### Labels about statements
+
+A statements label names what a finding on statements names
+([output.md](output.md)): its statement, period type, version and item, as far as
+the fault has them. dorq-eval and `dorq-synth score` match it as they match a bars
+label, and also by these fields. A finding with no version (one on a whole period)
+or no item (an identity's) matches the label of each. `dorq calibrate` does not use
+these labels: they are not about price moves, even on a security that also has bars.
+
+```json
+{"series":"752016","date":"2024-06-30","class":"data_error","expect":"DQ912","kind":"unit_value","statement":"income","period_type":"quarter","version_no":1,"item":"revenue"}
+{"series":"752016","first":"2019-03-31","last":"2019-12-31","class":"market_fact","codes":"DQ9","kind":"reclassification","statement":"cash_flow"}
+```
 
 ### Kinds fafnir sends
 

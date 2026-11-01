@@ -157,7 +157,10 @@ cash_flow = "net_change_in_cash = net_cash_operating + net_cash_investing + net_
 | DQ109 | on every context file, `--items` included |
 | every other check | not on statements: DQ103 would read a restatement as a duplicate date, and DQ105 a fiscal date on a Sunday as a bar on a closed day |
 
-`dorq list-checks` shows the kinds each check applies to.
+`dorq list-checks` shows the kinds each check applies to. Each DQ9xx check is held to
+its precision and recall on dorq-synth's statements universe
+([tools/synth/README.md](../tools/synth/README.md#statements)), whose faults and hard
+negatives follow the plan's §6.
 
 ## Output
 

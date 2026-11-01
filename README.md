@@ -279,8 +279,8 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 - [Performance](doc/performance.md): throughput, memory, threads and the runtime targets
 - [Checks](doc/checks/): one page per check, also printed by `dorq explain`;
   [DQ201](doc/checks/DQ201.md) describes the price model
-- [dorq-synth](tools/synth/README.md): synthetic data with labelled faults, and the
-  precision and recall gate
+- [dorq-synth](tools/synth/README.md): synthetic bars and statements with labelled
+  faults, and the precision and recall gate
 - [dorq-eval](tools/eval/README.md): precision, recall, reliability diagrams and
   precision@k against labels, as markdown and HTML
 - [Development plan](doc/plans/dorq-development-plan.md): goals, checks, models, milestones

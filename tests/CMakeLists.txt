@@ -80,6 +80,23 @@ dorq_eval_test(
 dorq_eval_test(
   eval-input-time "${EVAL_ARGS}|--input-time|2026-10-14"
   "distinct conditions / warn and above / 6 / 4 / 0.667 / 1 / 1 / 2 / 2 / 0.250 / 0.500")
+# Statement labels match a finding by its statement, period type, version and item
+# as well as its series and date: another item, the year rather than the quarter,
+# another version or another statement is a false positive. JSON Lines and CSV
+# results agree, and the same findings in both are one set of conditions.
+set(STATEMENT_EVAL_ARGS "--labels|${DATA}/eval/statements-labels.jsonl|--complete")
+set(STATEMENT_EVAL_EXPECT
+    "all labels / warn and above / 7 / 7 / 1.000 / 2 / 0 / 5 / 0 / 0.286 / 0.286|DQ912 / 3 / 1 / 0 / 2 / 0 / 0.333 / 0.333 / 1 / 1 / 1.000 / 0.500|DQ932 / 1 / 1 / 0 / 0 / 0 / 1.000 / 1.000 / 1 / 1 / 1.000 / 1.000|hn_reclassification / 1 /"
+)
+foreach(format jsonl csv)
+  dorq_eval_test(eval-statements-${format}
+                 "${STATEMENT_EVAL_ARGS}|--results|${DATA}/eval/statements.${format}"
+                 "${STATEMENT_EVAL_EXPECT}")
+endforeach()
+dorq_eval_test(
+  eval-statements-distinct
+  "${STATEMENT_EVAL_ARGS}|--results|${DATA}/eval/statements.jsonl|--results|${DATA}/eval/statements.csv|--gates|${DATA}/eval/statements-gates.txt"
+  "distinct conditions / warn and above / 7 / 7 / 1.000 / 2 / 0 / 5 / 0 / 0.286 / 0.286|all gates passed")
 
 # The bars output on a dorq-synth universe, held to fixed hashes: work on another
 # series kind (M9's statements) must not change a bars run. The hashes are this
@@ -107,4 +124,19 @@ foreach(seed 1 2)
       "-DCONFIG=${PROJECT_SOURCE_DIR}/tools/synth/dorq.toml"
       "-DOUT=${CMAKE_CURRENT_BINARY_DIR}/synth-${seed}" "-DSEED=${seed}" -P
       "${CMAKE_CURRENT_SOURCE_DIR}/synth_gate.cmake")
+endforeach()
+
+# The statements gate (DR-0903): dorq-synth's statements universe on the same two
+# seeds. The same seed gives the same files; every identity holds on the rows with
+# no fault; dorq reads every row; and the scores meet tools/synth/gates.txt.
+foreach(seed 1 2)
+  add_test(
+    NAME synth.statements-seed-${seed}
+    COMMAND
+      "${CMAKE_COMMAND}" "-DSYNTH=$<TARGET_FILE:dorq-synth>" "-DDORQ=$<TARGET_FILE:dorq>"
+      "-DEVAL=$<TARGET_FILE:dorq-eval>"
+      "-DGATES=${PROJECT_SOURCE_DIR}/tools/synth/gates.txt"
+      "-DCONFIG=${PROJECT_SOURCE_DIR}/tools/synth/statements.toml"
+      "-DOUT=${CMAKE_CURRENT_BINARY_DIR}/statements-${seed}" "-DSEED=${seed}" -P
+      "${CMAKE_CURRENT_SOURCE_DIR}/synth_statements_gate.cmake")
 endforeach()
