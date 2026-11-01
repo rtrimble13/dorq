@@ -27,6 +27,7 @@ add_library(
   checks/price.cpp
   checks/registry.cpp
   checks/stale.cpp
+  checks/statements.cpp
   checks/volume.cpp
   cli/app.cpp
   calibrate/calibrate.cpp

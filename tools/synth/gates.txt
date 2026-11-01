@@ -83,6 +83,13 @@ hn_rate max 1
 # universe as well.
 DQ104 max 0
 DQ109 max 0
+# Integrity and identities (DR-0904): deterministic, so every report is right and
+# every fault is found. DQ902 also counts the rows other faults leave impossible (a
+# total at x0.001 below its components), which their labels name.
+DQ901 precision 1.0
+DQ901 recall 1.0
+DQ902 precision 1.0
+DQ902 recall 1.0
 # Real events and real data, which no statement check may report at warn.
 hn_acquisition max 0
 hn_writedown max 0

@@ -284,6 +284,11 @@ struct Row {
   std::optional<Date> filing_date;
   Values values = blank();  // NULL off its statement
   bool removed = false;     // a missing quarter's: not written
+  int copies = 1;           // a duplicated row's: written twice
+  // A version chain's fault: known_to set apart from the next version's
+  // known_from, or left open.
+  std::optional<Date> known_to;
+  bool open = false;
 };
 
 struct Company {
@@ -1101,6 +1106,10 @@ class Universe {
   void filing_faults();
   void missing_quarters();
   void restated_at_scale();
+  void key_faults();
+  void impossible_values();
+  void mark_impossible();
+  Company* company(const std::string& id);
 
   Rng rng_;
   dorq::Calendar calendar_{dorq::CalendarKind::kXnys};
@@ -1374,7 +1383,9 @@ void Universe::late_filings() {
 }
 
 // When a restatement became known: the next 10-K's filing, which restated its
-// comparatives, or a load that found it (the backfill, or a night after).
+// comparatives, or a load that found it (the backfill, or a night after). A
+// version after the first is always observed, never filed, as fafnir's
+// constraints have it (version_no = 1 OR knowledge_source = 'observed').
 Date Universe::restatement_date(const Company& c, std::size_t year_end, KnowledgeSource& source,
                                 std::optional<Date>& filing) {
   const double u = rng_.uniform();
@@ -1382,13 +1393,11 @@ Date Universe::restatement_date(const Company& c, std::size_t year_end, Knowledg
   while (next < c.quarters.size() && !c.quarters[next].year_end) {
     ++next;
   }
-  if (u < 0.35 && next < c.quarters.size() && c.source[next] == KnowledgeSource::kFiled) {
-    source = KnowledgeSource::kFiled;
-    filing = c.filed[next];
-    return c.filed[next];
-  }
   source = KnowledgeSource::kObserved;
   filing = std::nullopt;
+  if (u < 0.35 && next < c.quarters.size() && c.source[next] == KnowledgeSource::kFiled) {
+    return c.filed[next];
+  }
   if (u < 0.85) {
     return backfill_day();
   }
@@ -1917,6 +1926,220 @@ void Universe::restated_at_scale() {
   }
 }
 
+// DQ901: a row twice, versions that do not chain, and knowledge dates before the
+// period's end or apart from the filing date.
+void Universe::key_faults() {
+  for (int done = 0, tries = 0; done < 3 && tries < 5000; ++tries) {
+    Company& c = any();
+    const std::size_t t = pick_quarter(c);
+    if (t == kNoQuarter || !reserve(c, t, t)) {
+      continue;
+    }
+    const PeriodType type =
+        c.quarters[t].year_end && rng_.chance(0.5) ? PeriodType::kAnnual : PeriodType::kQuarter;
+    Row& row = row_of(c, any_statement(), type, t, 1);
+    row.copies = 2;
+    label_row(c, row, "duplicate_row", "DQ901");
+    ++done;
+  }
+  // On restated periods: a gap or an overlap between two versions, two open, and a
+  // last version closed.
+  static const std::array<const char*, 7> kChains{
+      "chain_gap",      "chain_gap",      "chain_overlap",    "chain_overlap",
+      "chain_two_open", "chain_two_open", "chain_closed_last"};
+  std::vector<std::tuple<std::string, Statement, PeriodType, std::size_t>> used;
+  for (std::size_t f = 0, tries = 0; f < kChains.size() && tries < 5000; ++tries) {
+    Company& c = any();
+    std::vector<Row*> restated;
+    for (Row& row : c.rows) {
+      if (row.version == 2 && !row.removed) {
+        restated.push_back(&row);
+      }
+    }
+    if (restated.empty()) {
+      continue;
+    }
+    Row& later = *restated.at(
+        static_cast<std::size_t>(rng_.integer(0, static_cast<int>(restated.size()) - 1)));
+    Row* first = find_row(c, later.statement, later.type, later.quarter, 1);
+    const auto key = std::tuple{c.id, later.statement, later.type, later.quarter};
+    if (first == nullptr || std::find(used.begin(), used.end(), key) != used.end()) {
+      continue;
+    }
+    const std::string_view kind = kChains.at(f);
+    const int days = rng_.integer(5, 30);
+    if (kind == "chain_gap") {
+      if (plus_days(later.known_from, -days) <= first->known_from) {
+        continue;
+      }
+      first->known_to = plus_days(later.known_from, -days);
+    } else if (kind == "chain_overlap") {
+      first->known_to = plus_days(later.known_from, days);
+    } else if (kind == "chain_two_open") {
+      first->open = true;
+    } else {
+      later.known_to = plus_days(later.known_from, days);
+    }
+    used.push_back(key);
+    Label label{c.id,
+                c.quarters[later.quarter].end,
+                c.quarters[later.quarter].end,
+                std::string{kind},
+                "DQ901",
+                ""};
+    label.statement = later.statement;
+    label.type = later.type;
+    labels_.push_back(std::move(label));
+    ++f;
+  }
+  for (int done = 0, tries = 0; done < 6 && tries < 5000; ++tries) {
+    Company& c = any();
+    const std::size_t t = pick_quarter(c);
+    const bool before = done < 3;
+    if (t == kNoQuarter || !reserve(c, t, t)) {
+      continue;
+    }
+    const Date end = c.quarters[t].end;
+    // Known before the period ends (and filed then); or known days after the filing.
+    const Date known =
+        before ? plus_days(end, -rng_.integer(1, 20)) : plus_days(c.filed[t], rng_.integer(3, 20));
+    for (Row& row : c.rows) {
+      if (row.quarter == t && row.version == 1) {
+        row.known_from = known;
+        if (before) {
+          row.filing_date = known;
+        }
+      }
+    }
+    Label label{c.id,    end, end, before ? "known_before_period" : "filing_date_mismatch",
+                "DQ901", ""};
+    label.version = 1;
+    labels_.push_back(std::move(label));
+    ++done;
+  }
+}
+
+// DQ902: a negative where none can be, and a component above its total.
+void Universe::impossible_values() {
+  static const std::array<Item, 5> kNever{kRevenue, kSharesWeighted, kSharesDiluted, kAssets,
+                                          kSharesOutstanding};
+  for (int done = 0, tries = 0; done < 4 && tries < 5000; ++tries) {
+    Company& c = any();
+    const std::size_t t = pick_quarter(c);
+    const Item item = kNever.at(static_cast<std::size_t>(rng_.integer(0, 4)));
+    if (t == kNoQuarter) {
+      continue;
+    }
+    const PeriodType type =
+        c.quarters[t].year_end && rng_.chance(0.3) ? PeriodType::kAnnual : PeriodType::kQuarter;
+    Row& row = row_of(c, info(item).statement, type, t, 1);
+    double& value = row.values.at(item);
+    const double unit = is_money(item) ? c.unit : 1.0;
+    if (std::isnan(value) || value < 100.0 * unit || !reserve(c, t, t)) {
+      continue;
+    }
+    // Not a clean sign flip (DQ913's): a small negative, as a sentinel or a slip.
+    value = -std::max(unit, std::round(value * rng_.uniform(0.001, 0.2) / unit) * unit);
+    label_row(c, row, "negative_impossible", "DQ902", std::string{info(item).column});
+    ++done;
+  }
+  static const std::array<std::pair<Item, Item>, 4> kParts{{{kCash, kAssets},
+                                                            {kCurrentAssets, kAssets},
+                                                            {kIntangibles, kAssets},
+                                                            {kCurrentLiabilities, kLiabilities}}};
+  for (int done = 0, tries = 0; done < 4 && tries < 5000; ++tries) {
+    Company& c = any();
+    const std::size_t t = pick_quarter(c);
+    const auto& [part, total] = kParts.at(static_cast<std::size_t>(rng_.integer(0, 3)));
+    if (t == kNoQuarter) {
+      continue;
+    }
+    Row& row = row_of(c, kBal, PeriodType::kQuarter, t, 1);
+    const double whole = row.values.at(total);
+    if (std::isnan(row.values.at(part)) || std::isnan(whole) || whole <= 0.0 || !reserve(c, t, t)) {
+      continue;
+    }
+    row.values.at(part) = std::round(whole * rng_.uniform(1.05, 1.6) / c.unit) * c.unit;
+    label_row(c, row, "component_above_total", "DQ902", std::string{info(part).column});
+    ++done;
+  }
+}
+
+Company* Universe::company(const std::string& id) {
+  for (Company& c : companies_) {
+    if (c.id == id) {
+      return &c;
+    }
+  }
+  return nullptr;
+}
+
+// The items a row breaks [statements] nonnegative or bounds on, as DQ902 judges
+// them: tools/synth/statements.toml's lists.
+std::vector<Item> impossible_items(const Row& row) {
+  static const std::array<Item, 15> kNonnegative{
+      kRevenue,  kCash,        kInvestments,    kReceivables,   kInventory,
+      kPpe,      kIntangibles, kCurrentAssets,  kAssets,        kPayables,
+      kDeposits, kDebt,        kSharesWeighted, kSharesDiluted, kSharesOutstanding};
+  static const std::array<std::pair<Item, Item>, 5> kBounds{{{kCurrentAssets, kAssets},
+                                                             {kCash, kAssets},
+                                                             {kIntangibles, kAssets},
+                                                             {kCurrentLiabilities, kLiabilities},
+                                                             {kDebtCurrent, kDebt}}};
+  std::vector<Item> broken;
+  for (const Item item : kNonnegative) {
+    if (row.values.at(item) < 0.0) {  // false for NULL
+      broken.push_back(item);
+    }
+  }
+  for (const auto& [lesser, greater] : kBounds) {
+    const double a = row.values.at(lesser);
+    const double b = row.values.at(greater);
+    if (!std::isnan(a) && !std::isnan(b) && a - b > 0.001 * std::abs(b)) {
+      broken.push_back(lesser);
+    }
+  }
+  return broken;
+}
+
+// A fault that leaves a row impossible is DQ902's too: its label names DQ902 as
+// well as its own code, or, where DQ902 reports another item, that item gets a
+// label of its own.
+void Universe::mark_impossible() {
+  const std::size_t count = labels_.size();
+  std::vector<std::tuple<std::string, Date, Statement, PeriodType, int, Item>> added;
+  for (std::size_t k = 0; k < count; ++k) {
+    const Label label = labels_[k];
+    Company* c = company(label.series);
+    if (label.expect.empty() || c == nullptr) {
+      continue;
+    }
+    for (const Row& row : c->rows) {
+      const Date end = c->quarters[row.quarter].end;
+      if (row.removed || end < label.first || label.last < end ||
+          (label.statement && *label.statement != row.statement) ||
+          (label.type && *label.type != row.type) ||
+          (label.version && *label.version != row.version)) {
+        continue;
+      }
+      for (const Item item : impossible_items(row)) {
+        if (label.item.empty() || label.item == info(item).column) {
+          if (labels_[k].expect.find("DQ902") == std::string::npos) {
+            labels_[k].expect += "|DQ902";
+          }
+          continue;
+        }
+        const auto key = std::tuple{c->id, end, row.statement, row.type, row.version, item};
+        if (std::find(added.begin(), added.end(), key) != added.end()) {
+          continue;
+        }
+        added.push_back(key);
+        label_row(*c, row, label.kind.c_str(), "DQ902", std::string{info(item).column});
+      }
+    }
+  }
+}
+
 void Universe::faults() {
   unit_errors();
   sign_flips();
@@ -1927,7 +2150,10 @@ void Universe::faults() {
   identity_breaks();
   filing_faults();
   missing_quarters();
+  key_faults();
+  impossible_values();
   restated_at_scale();
+  mark_impossible();
 }
 
 // Labels that cover a whole series, or a span of one.
@@ -2026,25 +2252,30 @@ void Universe::write_statements(const std::filesystem::path& dir) const {
     for (std::size_t i = 0; i < rows.size(); ++i) {
       const Row& row = *rows[i];
       const Quarter& q = c.quarters[row.quarter];
-      // The next version's known_from ends this one's interval.
-      std::optional<Date> known_to;
-      if (i + 1 < rows.size() && rows[i + 1]->quarter == row.quarter &&
+      // The next version's known_from ends this one's interval, unless a fault
+      // says otherwise.
+      std::optional<Date> known_to = row.known_to;
+      if (!known_to && !row.open && i + 1 < rows.size() && rows[i + 1]->quarter == row.quarter &&
           rows[i + 1]->statement == row.statement && rows[i + 1]->type == row.type) {
         known_to = rows[i + 1]->known_from;
       }
       const bool annual = row.type == PeriodType::kAnnual;
-      statements << c.id << ',' << dorq::to_string(row.statement) << ','
-                 << dorq::to_string(row.type) << ',' << q.end.to_string() << ',' << q.fiscal_year
-                 << ',' << (annual ? std::string{"FY"} : "Q" + std::to_string(q.number)) << ','
-                 << row.version << ',' << row.known_from.to_string() << ','
-                 << (known_to ? known_to->to_string() : "") << ',' << dorq::to_string(row.source)
-                 << ',' << (row.filing_date ? row.filing_date->to_string() : "") << ','
-                 << loaded_at(row.known_from) << ',' << c.currency << ','
-                 << price_text(close_at(c, row.known_from));
+      std::ostringstream line;
+      line << c.id << ',' << dorq::to_string(row.statement) << ',' << dorq::to_string(row.type)
+           << ',' << q.end.to_string() << ',' << q.fiscal_year << ','
+           << (annual ? std::string{"FY"} : "Q" + std::to_string(q.number)) << ',' << row.version
+           << ',' << row.known_from.to_string() << ',' << (known_to ? known_to->to_string() : "")
+           << ',' << dorq::to_string(row.source) << ','
+           << (row.filing_date ? row.filing_date->to_string() : "") << ','
+           << loaded_at(row.known_from) << ',' << c.currency << ','
+           << price_text(close_at(c, row.known_from));
       for (std::size_t item = 0; item < kItemCount; ++item) {
-        statements << ',' << integer_text(row.values.at(item));
+        line << ',' << integer_text(row.values.at(item));
       }
-      statements << '\n';
+      line << '\n';
+      for (int copy = 0; copy < row.copies; ++copy) {
+        statements << line.str();
+      }
     }
   }
 }

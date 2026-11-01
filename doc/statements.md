@@ -143,7 +143,8 @@ cash_flow = "net_change_in_cash = net_cash_operating + net_cash_investing + net_
 - With `--items`, every item the table names must be one it lists: another is a
   configuration error (exit status 2). Without `--items` nothing is checked.
 - The lists and identities are empty by default, so dorq names no vendor's items.
-  fafnir's come with the checks that use them (DR-0905).
+  fafnir's are in `priors/fafnir-statements.toml`: DQ902's lists now, and SF1's
+  identities with DR-0905.
 - The table is global: a profile does not change it.
 - `config_hash` covers the table only where it differs from its defaults, so the
   release that added it changed no existing hash.
@@ -152,7 +153,9 @@ cash_flow = "net_change_in_cash = net_cash_operating + net_cash_investing + net_
 
 | Check | On statements |
 |---|---|
-| DQ9xx | only on statements (added from DR-0904) |
+| DQ901 | every version: rows that collide, versions that do not chain, knowledge dates that cannot be right |
+| DQ902 | every version: the `nonnegative` items and `bounds` above |
+| the other DQ9xx | only on statements, as the plan adds them |
 | DQ104 | on every kind: a field that cannot be used |
 | DQ109 | on every context file, `--items` included |
 | every other check | not on statements: DQ103 would read a restatement as a duplicate date, and DQ105 a fiscal date on a Sunday as a bar on a closed day |

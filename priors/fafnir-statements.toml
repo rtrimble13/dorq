@@ -1,0 +1,34 @@
+# dorq for fafnir's statements: SF1's fundamentals in core.income_statement,
+# core.balance_sheet and core.cash_flow_statement (plan M9, doc/statements.md).
+#
+# fafnir runs `dorq check --format fafnir` on its export of every current version
+# with this file, and passes fafnir's taxonomy as --items (ref.statement_line_item):
+#
+#   dorq statements.csv --kind statements --items items.csv \
+#        --config priors/fafnir-statements.toml --format fafnir
+#
+# Every item named here must be one --items lists, or the run stops with exit
+# status 2. DR-0905 adds SF1's identities.
+
+[fafnir]
+# A finding on no one statement; each statement's own go to its table
+# ([fafnir.tables], whose defaults are fafnir's three).
+table_name = "core.income_statement"
+
+[statements]
+# DQ902: what can never be negative. fafnir's NEVER_NEGATIVE
+# (src/fafnir/dq/checks.py), which fundamentals_negative_impossible judges.
+nonnegative = [
+  "revenue",
+  "weighted_average_shares",
+  "weighted_average_shares_diluted",
+  "total_assets",
+  "shares_outstanding",
+]
+# DQ902: a component that can never exceed the total it is part of.
+bounds = [
+  "total_current_assets <= total_assets",
+  "cash_and_equivalents <= total_assets",
+  "goodwill_and_intangibles <= total_assets",
+  "total_current_liabilities <= total_liabilities",
+]

@@ -233,6 +233,8 @@ generated data.
     those move its revenue, cost and SG&A by up to 4%, and its totals with them.
   - A restatement is known from the next 10-K (35%), from the backfill day
     2026-10-20 (50%, so that one load day holds many), or from a night after it.
+    Its version is `observed`, as fafnir's constraints require of every version
+    after the first.
   - `loaded_at` is the backfill day for every row known by then.
 
 ### Faults and hard negatives
@@ -261,6 +263,12 @@ has one.
 | `missing_quarter` | DQ941 | 4 quarters missing from all three statements |
 | `restatement_x1000` | DQ932 | 3 restatements whose new version is the old one at ×1,000 |
 | `statements_missing` | DQ943 | `MIS01`, which expects statements and has none |
+| `duplicate_row` | DQ901 | 3 rows written twice |
+| `chain_gap`, `chain_overlap`, `chain_two_open`, `chain_closed_last` | DQ901 | 7 restated periods whose versions do not chain: the first closed before the next is known (2) or after (2), the first left open (2), and the last closed (1) |
+| `known_before_period` | DQ901 | 3 periods known, and filed, 1–20 days before they end |
+| `filing_date_mismatch` | DQ901 | 3 periods known 3–20 days after their filing date |
+| `negative_impossible` | DQ902 | 4 values that cannot be negative (revenue, a share count, total assets) at a small negative, which is not a clean sign flip |
+| `component_above_total` | DQ902 | 4 components (cash, current assets, goodwill, current liabilities) above their total |
 | `hn_acquisition` | - | about a fifth of the industrials buy a company with debt: goodwill and assets step, and revenue steps 15–50% for good (DQ9) |
 | `hn_writedown` | - | goodwill written down by 50–90% in a quarter, through operating expenses (DQ9) |
 | `hn_fiscal_year_change` | - | the three changes of fiscal year (DQ9) |
@@ -272,6 +280,14 @@ has one.
 | `hn_split_on_file` | - | every other split, from the last period known before it to the first after (DQ92) |
 | `hn_delisted` | - | each delisted company, from its last period (DQ94) |
 | `hn_no_statements_expected` | - | `ETF01` (DQ94) |
+
+A fault that leaves a row breaking one of [statements.toml](statements.toml)'s
+non-negative items or bounds is DQ902's too:
+
+- when DQ902 reports the fault's own item, or the fault has none, its label's
+  `expect` adds DQ902 (`DQ913|DQ902` for a revenue flipped negative);
+- when DQ902 reports another item, that item gets a label of its own, of the same
+  kind. A total at ×0.001 puts each component above it.
 
 A label's `first` and `last` are fiscal dates. `labels.csv` adds the columns
 `statement`, `period_type`, `version_no`, `item` and `identity`; an empty one covers
@@ -305,12 +321,16 @@ holds on no row, or when the input has a row dorq cannot use (DQ104, DQ109).
 4. it scores dorq's output with `dorq-synth score` and dorq-eval against
    [gates.txt](gates.txt).
 
-No DQ9xx check has shipped yet, so the gate holds the following, and each check's
-plan item adds its own bounds:
+The gate holds the following, and each DQ9xx check's plan item adds its own
+bounds:
 
 - no row dorq cannot use: `DQ104 max 0`;
 - no context row it cannot use: `DQ109 max 0`;
+- DQ901 and DQ902 (DR-0904), which are deterministic, at precision and recall 1.0;
 - no report at warn on any hard negative.
+
+It also runs dorq with `priors/fafnir-statements.toml`, so that file names only
+items fafnir's taxonomy lists.
 
 `max` on a code bounds that code's reports at warn and above. On a hard-negative
 kind, it bounds that kind's hits.
