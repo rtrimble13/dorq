@@ -409,8 +409,9 @@ Violation report_gap(const CheckInfo& info, const SeriesContext& context, const 
     case Gap::kReclassification:
       message += "another version holds, with the same " + *terms.names.front();
       break;
-    case Gap::kFieldError:
-      message += match_text(*terms.names[e.match->term], e.match->multiple);
+    case Gap::kFieldError:  // only with a match: no match weighs it down to the last
+      message += e.match ? match_text(*terms.names[e.match->term], e.match->multiple)
+                         : std::string{"no term explains it"};
       break;
     case Gap::kUnexplained:
       message += "no term explains it";
@@ -425,7 +426,7 @@ Violation report_gap(const CheckInfo& info, const SeriesContext& context, const 
   if (e.neighbours >= 2) {
     v.detail.push_back({"neighbours_gap", e.baseline});
   }
-  if (best == Gap::kFieldError) {
+  if (best == Gap::kFieldError && e.match) {
     const std::string& field = *terms.names[e.match->term];
     v.key.push_back({"item", field});
     v.detail.push_back({"field", field});
@@ -655,16 +656,31 @@ std::optional<SumGap> quarter_gap(const std::vector<double>& column,
     score.at(k) = std::fabs(q.at(k) - g.gap - m) / unit;                 // quarter k put right
     score.at(4) = std::max(score.at(4), std::fabs(q.at(k) - m) / unit);  // the year wrong
   }
-  const auto best = std::min_element(score.begin(), score.end());
-  g.target = static_cast<std::size_t>(best - score.begin());
+  g.target = static_cast<std::size_t>(std::min_element(score.begin(), score.end()) - score.begin());
+  const double best = score.at(g.target);
   double runner = std::numeric_limits<double>::infinity();
   for (std::size_t k = 0; k < score.size(); ++k) {
     if (k != g.target) {
       runner = std::min(runner, score.at(k));
     }
   }
-  g.margin = runner - *best;
+  g.margin = runner - best;
   return g;
+}
+
+// The statement's flow items the series has, by their index in --items.
+std::vector<std::pair<std::size_t, const std::vector<double>*>> flows_of(
+    const SeriesContext& context, Statement statement) {
+  std::vector<std::pair<std::size_t, const std::vector<double>*>> flows;
+  for (std::size_t k = 0; k < context.items->size(); ++k) {
+    const LineItem& item = (*context.items)[k];
+    if (item.statement == statement && item.item_class == ItemClass::kFlow) {
+      if (const std::vector<double>* column = context.series.statements.item(item.column)) {
+        flows.emplace_back(k, column);
+      }
+    }
+  }
+  return flows;
 }
 
 // A fiscal year's four quarters in force against its one year in force, for each
@@ -676,15 +692,7 @@ void judge_quarter_sums(const CheckInfo& info, const SeriesContext& context,
   const StatementRows& st = s.statements;
   const StatementSettings& settings = *context.statement_settings;
   for (const Statement statement : {Statement::kIncome, Statement::kCashFlow}) {
-    std::vector<std::pair<std::size_t, const std::vector<double>*>> flows;
-    for (std::size_t k = 0; k < context.items->size(); ++k) {
-      const LineItem& item = (*context.items)[k];
-      if (item.statement == statement && item.item_class == ItemClass::kFlow) {
-        if (const std::vector<double>* column = st.item(item.column)) {
-          flows.emplace_back(k, column);
-        }
-      }
-    }
+    const auto flows = flows_of(context, statement);
     // By fiscal year: its quarters and years in force.
     std::map<std::int32_t, std::pair<std::vector<std::size_t>, std::vector<std::size_t>>> years;
     for (const std::size_t r : context.statements->in_force) {
@@ -718,6 +726,7 @@ void judge_quarter_sums(const CheckInfo& info, const SeriesContext& context,
           });
       const std::size_t row = lead.target == 4 ? annual.front() : q.at(lead.target);
       std::vector<std::string> items;
+      items.reserve(gaps.size());
       for (const SumGap& g : gaps) {
         items.push_back((*context.items)[g.item].column);
       }

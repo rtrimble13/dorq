@@ -2,6 +2,7 @@
 // [statements] settings they read (explained_by, cash_tie, restricted cash).
 
 #include <algorithm>
+#include <array>
 #include <set>
 #include <sstream>
 #include <string>
@@ -73,8 +74,8 @@ std::string report(const std::string& out, const std::string& code, const std::s
   return {};
 }
 
-constexpr const char* kQuarters[] = {"2010-03-31", "2010-06-30", "2010-09-30", "2010-12-31",
-                                     "2011-03-31"};
+constexpr std::array<const char*, 5> kQuarters{"2010-03-31", "2010-06-30", "2010-09-30",
+                                               "2010-12-31", "2011-03-31"};
 
 // ---------------------------------------------------------------------------
 // DQ903
@@ -101,7 +102,7 @@ std::string sheet(const std::string& id, const std::string& date, const std::str
 std::string five_quarters(const std::string& id, std::size_t at, const std::string& odd) {
   std::string text;
   for (std::size_t q = 0; q < 5; ++q) {
-    text += q == at ? odd : sheet(id, kQuarters[q], "10000000000", "6000000000", "4000000000");
+    text += q == at ? odd : sheet(id, kQuarters.at(q), "10000000000", "6000000000", "4000000000");
   }
   return text;
 }
@@ -110,27 +111,27 @@ std::string identity_rows() {
   std::string text = kIdentityHeader;
   // A field error: total_liabilities in thousands in one quarter.
   text += five_quarters("FIELD", 2,
-                        sheet("FIELD", kQuarters[2], "10000000000", "6000000", "4000000000"));
+                        sheet("FIELD", kQuarters.at(2), "10000000000", "6000000", "4000000000"));
   // ... and equity with its sign flipped.
   text += five_quarters("SIGN", 1,
-                        sheet("SIGN", kQuarters[1], "10000000000", "6000000000", "-4000000000"));
+                        sheet("SIGN", kQuarters.at(1), "10000000000", "6000000000", "-4000000000"));
   // Structural: the same gap (say, temporary equity) in every quarter.
   for (const char* q : kQuarters) {
     text += sheet("STRUCT", q, "10000000000", "6000000000", "3700000000");
   }
   // One quarter's gap, with noncontrolling interests reported in it.
   text += five_quarters("NCI", 2,
-                        sheet("NCI", kQuarters[2], "10000000000", "6000000000", "3750000000"));
+                        sheet("NCI", kQuarters.at(2), "10000000000", "6000000000", "3750000000"));
   text += "NCI,income,quarter,2010-09-30,2010,,1,2013-01-01,,,,,,,50000000\n";
   // A reclassification: v1 breaks, and v2, with the same total, holds.
   text += five_quarters("RECLASS", 2,
-                        sheet("RECLASS", kQuarters[2], "10000000000", "6300000000", "4000000000",
+                        sheet("RECLASS", kQuarters.at(2), "10000000000", "6300000000", "4000000000",
                               "1,2013-01-01,2013-06-01") +
-                            sheet("RECLASS", kQuarters[2], "10000000000", "6000000000",
+                            sheet("RECLASS", kQuarters.at(2), "10000000000", "6000000000",
                                   "4000000000", "2,2013-06-01,"));
   // Unexplained: one quarter's gap that no term gives; and a NULL term, not judged.
-  text += five_quarters("UNEXPL", 2,
-                        sheet("UNEXPL", kQuarters[2], "10000000000", "6000000000", "3700000000"));
+  text += five_quarters(
+      "UNEXPL", 2, sheet("UNEXPL", kQuarters.at(2), "10000000000", "6000000000", "3700000000"));
   text += sheet("UNEXPL", "2011-06-30", "10000000000", "1", "");
   return text;
 }
@@ -177,25 +178,26 @@ std::string tie_rows() {
   // One cash flow off: the change since 2010-03-31 is 100M, the flow says 300M. A
   // balance sheet nine months after the last is beyond the spacing, so not tied.
   text += cash("CASH", "2009-12-31", "1000000000");
-  const char* balances[] = {"1100000000", "1200000000", "1300000000", "1400000000"};
+  const std::array<const char*, 4> balances{"1100000000", "1200000000", "1300000000", "1400000000"};
   for (std::size_t q = 0; q < 4; ++q) {
-    text += cash("CASH", kQuarters[q], balances[q]);
-    text += flow("CASH", kQuarters[q], q == 1 ? "300000000" : "100000000");
+    text += cash("CASH", kQuarters.at(q), balances.at(q));
+    text += flow("CASH", kQuarters.at(q), q == 1 ? "300000000" : "100000000");
   }
   text += cash("CASH", "2011-09-30", "5000000000");
   text += flow("CASH", "2011-09-30", "100000000");
   // One balance sheet's cash out of line with both flows around it: one report.
   text += cash("PAIR", "2009-12-31", "1000000000");
   for (std::size_t q = 0; q < 4; ++q) {
-    text += cash("PAIR", kQuarters[q], q == 1 ? "1500000000" : balances[q]);
-    text += flow("PAIR", kQuarters[q], "100000000");
+    text += cash("PAIR", kQuarters.at(q), q == 1 ? "1500000000" : balances.at(q));
+    text += flow("PAIR", kQuarters.at(q), "100000000");
   }
   // Restricted cash: a 5% gap is a break in 2017, and within its share from 2018.
-  const char* restricted[][2] = {{"2017-06-30", ""},
-                                 {"2017-09-30", "0"},
-                                 {"2017-12-31", "50000000"},
-                                 {"2018-03-31", "50000000"},
-                                 {"2018-06-30", "-50000000"}};
+  const std::array<std::pair<const char*, const char*>, 5> restricted{
+      {{"2017-06-30", ""},
+       {"2017-09-30", "0"},
+       {"2017-12-31", "50000000"},
+       {"2018-03-31", "50000000"},
+       {"2018-06-30", "-50000000"}}};
   for (const auto& [date, change] : restricted) {
     text += cash("RESTR", date, "1000000000");
     if (std::string{change}.empty()) {
@@ -204,12 +206,12 @@ std::string tie_rows() {
     text += flow("RESTR", date, change);
   }
   // FY2010: Q3's revenue stored twice over. FY2011: the year is wrong.
-  const char* fy2010[] = {"1000000000", "1100000000", "2400000000", "1300000000"};
-  const char* fy2011[] = {"1000000000", "1050000000", "1100000000", "1150000000"};
-  const char* q2011[] = {"2011-03-31", "2011-06-30", "2011-09-30", "2011-12-31"};
+  const std::array<const char*, 4> fy2010{"1000000000", "1100000000", "2400000000", "1300000000"};
+  const std::array<const char*, 4> fy2011{"1000000000", "1050000000", "1100000000", "1150000000"};
+  const std::array<const char*, 4> q2011{"2011-03-31", "2011-06-30", "2011-09-30", "2011-12-31"};
   for (std::size_t q = 0; q < 4; ++q) {
-    text += income("QSUM", "quarter", kQuarters[q], "2010", fy2010[q]);
-    text += income("QSUM", "quarter", q2011[q], "2011", fy2011[q]);
+    text += income("QSUM", "quarter", kQuarters.at(q), "2010", fy2010.at(q));
+    text += income("QSUM", "quarter", q2011.at(q), "2011", fy2011.at(q));
   }
   text += income("QSUM", "annual", "2010-12-31", "2010", "4600000000");
   text += income("QSUM", "annual", "2011-12-31", "2011", "5300000000");
@@ -239,7 +241,8 @@ constexpr const char* kTieConfig =
     "[statements]\n"
     "cash_tie = [\"cash_and_equivalents\", \"net_change_in_cash\"]\n";
 
-const std::string kQuarter = R"("period_type":"quarter",)";
+// The record_key's period type, for a quarter.
+std::string quarter_key() { return R"("period_type":"quarter",)"; }
 
 }  // namespace
 
@@ -254,7 +257,7 @@ TEST_CASE("DQ903: a gap is weighed as structural, a reclassification, a field er
                           "--format", "jsonl", "--exit-zero", file.c_str()});
   INFO(r.err);
   REQUIRE(r.status == 0);
-  const std::string sheet_key = R"({"statement":"balance_sheet",)" + kQuarter;
+  const std::string sheet_key = R"({"statement":"balance_sheet",)" + quarter_key();
   const std::string q3 = R"("fiscal_date":"2010-09-30","version_no":1,"identity":"balance_sheet")";
   std::vector<std::string> expected{
       "FIELD " + sheet_key + q3 + R"(,"item":"total_liabilities"})",
@@ -388,14 +391,14 @@ TEST_CASE("DQ904: the cash tie, restricted cash, and a year's quarters against t
   INFO(r.err);
   REQUIRE(r.status == 0);
   const std::vector<std::string> expected{
-      R"(CASH {"statement":"cash_flow",)" + kQuarter +
+      R"(CASH {"statement":"cash_flow",)" + quarter_key() +
           R"("fiscal_date":"2010-06-30","version_no":1,"tie":"cash"})",
-      R"(PAIR {"statement":"balance_sheet",)" + kQuarter +
+      R"(PAIR {"statement":"balance_sheet",)" + quarter_key() +
           R"("fiscal_date":"2010-06-30","version_no":1,"tie":"cash","item":"cash_and_equivalents"})",
       R"(QSUM {"statement":"income","period_type":"annual","fiscal_date":"2011-12-31","version_no":1,"tie":"quarter_sum"})",
-      R"(QSUM {"statement":"income",)" + kQuarter +
+      R"(QSUM {"statement":"income",)" + quarter_key() +
           R"("fiscal_date":"2010-09-30","version_no":1,"tie":"quarter_sum"})",
-      R"(RESTR {"statement":"cash_flow",)" + kQuarter +
+      R"(RESTR {"statement":"cash_flow",)" + quarter_key() +
           R"("fiscal_date":"2017-12-31","version_no":1,"tie":"cash"})",
   };
   const std::vector<std::string> got = reports_of(r.out, "DQ904");
