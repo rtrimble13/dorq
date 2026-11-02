@@ -185,6 +185,19 @@ std::string views_text(const ValueFinding& f) {
   return f.in_force ? "in_force" : "first_reported";
 }
 
+void report_structure(const CheckInfo& info, const SeriesContext& context, const ValueFinding& f,
+                      std::vector<Violation>& out) {
+  std::optional<Severity> severity = context.thresholds.for_probability(f.p_error());
+  if (severity && f.provisional && *severity == Severity::kError) {
+    severity = Severity::kWarn;  // the newest period: nothing after it yet
+  }
+  if (severity) {
+    Violation v = structure_violation(info, context, f, *severity);
+    v.detail.push_back({"views", views_text(f)});
+    out.push_back(std::move(v));
+  }
+}
+
 void report(const CheckInfo& info, const SeriesContext& context, std::vector<Violation>& out) {
   const Series& s = context.series;
   if (s.kind != SeriesKind::kStatements || context.values == nullptr) {
@@ -197,15 +210,7 @@ void report(const CheckInfo& info, const SeriesContext& context, std::vector<Vio
       continue;
     }
     if (f.kind != ValueKind::kModel) {
-      std::optional<Severity> severity = context.thresholds.for_probability(f.p_error());
-      if (severity && f.provisional && *severity == Severity::kError) {
-        severity = Severity::kWarn;
-      }
-      if (severity) {
-        Violation v = structure_violation(info, context, f, *severity);
-        v.detail.push_back({"views", views_text(f)});
-        out.push_back(std::move(v));
-      }
+      report_structure(info, context, f, out);
       continue;
     }
     const bool large_change = code == "DQ919";

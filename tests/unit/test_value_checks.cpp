@@ -146,9 +146,17 @@ std::string company(const std::string& id, const Edit& edit = {}, int quarters =
     }
     if (annual && q % 4 == 3) {
       // The year: its quarters' sums, as a year's flows are.
-      text += id + ",income,annual," + end + "," + end.substr(0, 4) + ",FY,1,2020-01-01,,,";
+      text += id;
+      text += ",income,annual,";
+      text += end;
+      text += ',';
+      text += end.substr(0, 4);
+      text += ",FY,1,2020-01-01,,,";
       for (std::size_t k = 0; k < 7; ++k) {
-        text += k < 3 ? "," + whole(year.at(k)) : std::string{","};
+        text += ',';
+        if (k < 3) {
+          text += whole(year.at(k));
+        }
       }
       text += "\n";
       year = {};
@@ -523,7 +531,7 @@ TEST_CASE("DQ916: a quarter holding its year, and a year with two years in force
   const TempDir dir;
   // FY2013's Q3 holds the year: the quarters as filed, Q3's put to their sum.
   const auto holds_year = [](const std::string& id, bool second_year) {
-    std::string text = company(id, {}, 28, 0.0, true);
+    const std::string text = company(id, {}, 28, 0.0, true);
     std::vector<std::string> rows;
     std::istringstream in(text);
     std::array<long long, 3> year{};

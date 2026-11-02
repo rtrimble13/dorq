@@ -1142,14 +1142,20 @@ double poisson_tail(double lambda, std::size_t m) {
     return 1.0;
   }
   const double l = std::max(lambda, 1e-12);
+  // The first term, e^-l l^m / m!, in logs; each next one by the ratio l / k.
+  double log_term = -l;
+  for (std::size_t k = 1; k <= m; ++k) {
+    log_term += std::log(l) - std::log(static_cast<double>(k));
+  }
+  double term = std::exp(log_term);
   double sum = 0.0;
   for (std::size_t k = m; k < m + 400; ++k) {
-    const auto kd = static_cast<double>(k);
-    const double term = std::exp(-l + kd * std::log(l) - std::lgamma(kd + 1.0));
     sum += term;
+    const auto kd = static_cast<double>(k);
     if (kd > l && term < 1e-16 * sum) {
       break;
     }
+    term *= l / (kd + 1.0);
   }
   return std::min(1.0, sum);
 }
@@ -1332,6 +1338,151 @@ void cumulative_years(const ViewContext& vc, const Line& line, const std::vector
 // vendor's 0 for a value the filing did not carry against a real 0, by the item's
 // own zeros and never_absent, with the row's identities and the year's quarter sum
 // as evidence.
+// The odds of a 0 being absent against real, as log weights, and the finding they
+// go into.
+struct ZeroCase {
+  double log_absent = 0.0;
+  double log_real = 0.0;
+  ValueFinding finding;
+};
+
+// The row's subtotals: a value that fell to 0 takes those it is part of down by as
+// much, where a value the filing did not carry leaves them as filed.
+void zero_subtotals(const ViewContext& vc, const std::vector<Track>& tracks, const Track& t,
+                    std::size_t p, ZeroCase& z) {
+  const double drop = -z.finding.expected;
+  bool moved = false;
+  bool unmoved = true;      // every subtotal that would show the drop stayed put
+  std::size_t visible = 0;  // the subtotals the drop would show in
+  for (const Track& o : tracks) {
+    if (&o == &t || !o.ready || !vc.info[o.item].subtotal || !usable(o.x[p]) ||
+        !std::isfinite(o.pred[p])) {
+      continue;
+    }
+    const double o_expected = o.s * std::sinh(o.pred[p]);
+    const double change = o.x[p] - o_expected;
+    const double noise = o.sigma[p] * std::hypot(o.s, o_expected);
+    if (std::fabs(change - drop) <= 0.35 * std::fabs(drop)) {
+      moved = true;
+    } else if (std::fabs(drop) > 3.0 * noise) {
+      ++visible;
+      unmoved = unmoved && std::fabs(change) < 0.35 * std::fabs(drop);
+    }
+  }
+  if (moved) {
+    z.log_real += kSubtotalMoves;
+    z.finding.evidence.push_back({"subtotal_moves", true, -kSubtotalMoves, ""});
+  } else if (visible >= 2 && unmoved) {
+    z.log_absent += kSubtotalsStill;
+    z.finding.evidence.push_back({"subtotals_unmoved", true, kSubtotalsStill, ""});
+  }
+}
+
+// The row's identities with the 0: one that holds is evidence it is real, and one
+// that fails and needs a value that fits the periods around it, that it is absent.
+void zero_identities(const ViewContext& vc, const Track& t, std::size_t p, std::size_t i,
+                     ZeroCase& z) {
+  const StatementRows& st = vc.series.statements;
+  bool held = false;
+  for (const IdentityTerms& terms : vc.identities) {
+    const auto it = std::find(terms.items.begin(), terms.items.end(), t.item);
+    if (it == terms.items.end()) {
+      continue;
+    }
+    const std::optional<Gap> g = identity_gap(st, terms, vc.settings, i, t.item, 0.0);
+    if (!g) {
+      continue;
+    }
+    if (g->holds()) {
+      held = true;
+      continue;
+    }
+    const double needed = -g->gap / terms.signs[static_cast<std::size_t>(it - terms.items.begin())];
+    if (std::fabs(std::asinh(needed / t.s) - t.pred[p]) <= std::max(kUnusual * t.sigma[p], 0.3)) {
+      z.log_absent += kIdentityRepair;
+      z.finding.repaired = needed;
+      z.finding.evidence.push_back({"identity_repair", terms.identity->name, kIdentityRepair, ""});
+    }
+  }
+  if (held) {
+    z.log_real += kIdentityHolds;
+    z.finding.evidence.push_back({"identity_holds", true, -kIdentityHolds, ""});
+  }
+}
+
+// The year's quarters against the year with the 0 (a flow, with --items).
+void zero_quarter_sum(const ViewContext& vc, const Track& t, std::size_t p, std::size_t i,
+                      ZeroCase& z) {
+  const StatementRows& st = vc.series.statements;
+  if (!vc.have_items || !vc.info[t.item].flow) {
+    return;
+  }
+  const Years& years = vc.years.at(static_cast<std::size_t>(st.statement[i]));
+  const std::optional<Gap> g = quarter_gap(st, years, vc.settings, i, t.item, 0.0);
+  if (!g) {
+    return;
+  }
+  if (g->holds()) {
+    z.log_real += kQuarterHolds;
+    z.finding.evidence.push_back({"quarter_sum_holds", true, -kQuarterHolds, ""});
+    return;
+  }
+  const double needed = st.period_type[i] == PeriodType::kAnnual ? g->gap : -g->gap;
+  if (std::fabs(std::asinh(needed / t.s) - t.pred[p]) <= 0.3) {
+    z.log_absent += kQuarterRepair;
+    z.finding.evidence.push_back({"quarter_sum_repair", true, kQuarterRepair, ""});
+  }
+}
+
+// One 0 of an item: absent, or real.
+std::optional<ValueFinding> judge_zero(const ViewContext& vc, const Line& line,
+                                       const std::vector<Track>& tracks, const Track& t,
+                                       std::size_t p, double zero_rate, bool never) {
+  ZeroCase z;
+  z.finding = structure_finding(ValueKind::kAbsentZero, ValueScope::kValue, line.rows[p], 0.0);
+  ValueFinding& f = z.finding;
+  f.item = t.item;
+  f.expected = t.s * std::sinh(t.pred[p]);
+  f.repaired = f.expected;
+  // A real 0: as often as the item is 0 elsewhere, or as likely as its value
+  // falling to 0 or past it is, by the real-change model (a balance that runs down
+  // to nothing, or an item as volatile as its level).
+  const double sigma = t.sigma[p];
+  const double wide = std::max(kBadScale, 4 * sigma);
+  const double large =
+      (static_cast<double>(t.outliers) + 0.1) / (static_cast<double>(t.judged) + 10.0);
+  const double reach = -std::fabs(t.pred[p]);
+  const double to_zero = (1.0 - large) * stats::student_t_cdf(reach / sigma, kNu) +
+                         large * stats::student_t_cdf(reach / wide, kNu);
+  const double real_chance = zero_rate + (1.0 - zero_rate) * to_zero;
+  z.log_absent = std::log(never ? kNeverAbsentPrior : kAbsentPrior);
+  z.log_real = std::log(real_chance);
+  if (never) {
+    f.evidence.push_back({"never_absent", true, 0.0, ""});
+  }
+  f.evidence.push_back(
+      {"real_zero_chance", real_chance, 0.0, "the item at 0 elsewhere, or falling to it"});
+  zero_subtotals(vc, tracks, t, p, z);
+  // Reported at its level either side, not running down to 0.
+  if (std::min(std::fabs(at(t.x, line.prev[p])), std::fabs(at(t.x, line.next[p]))) >= 0.5 * t.s) {
+    z.log_absent += kAtLevel;
+    f.evidence.push_back({"reported_at_level", true, kAtLevel, ""});
+  }
+  zero_identities(vc, t, p, line.rows[p], z);
+  zero_quarter_sum(vc, t, p, line.rows[p], z);
+  const double p_absent = 1.0 / (1.0 + std::exp(z.log_real - z.log_absent));
+  if (p_absent < kStructureReport) {
+    return std::nullopt;
+  }
+  f.posterior = {1.0 - p_absent, p_absent, 0.0, 0.0};
+  f.provisional = line.next[p] == kNone;
+  return std::move(z.finding);
+}
+
+// DQ915: a 0 where the item is reported in the periods either side, weighed as the
+// vendor's 0 for a value the filing did not carry against a real 0, by the item's
+// own zeros and never_absent, with the row's identities, the year's quarter sum and
+// the row's subtotals as evidence.
 void absent_zeros(const ViewContext& vc, const Line& line, const std::vector<Track>& tracks,
                   const std::vector<bool>& explained, std::vector<ValueFinding>& out) {
   const StatementRows& st = vc.series.statements;
@@ -1345,126 +1496,22 @@ void absent_zeros(const ViewContext& vc, const Line& line, const std::vector<Tra
     const auto negative = static_cast<std::size_t>(
         std::count_if(t.x.begin(), t.x.end(), [](double v) { return usable(v) && v < 0.0; }));
     const std::size_t nonzero = finite - zeros;
-    if (std::min(negative, nonzero - negative) * 20 > nonzero) {
-      continue;  // both signs: it crosses 0
+    if (zeros == 0 || std::min(negative, nonzero - negative) * 20 > nonzero) {
+      continue;  // no 0, or both signs: it crosses 0
     }
     const std::string& name = st.item_names[t.item];
     const bool never = std::any_of(vc.settings.never_absent.begin(), vc.settings.never_absent.end(),
                                    [&](const std::string& n) { return iequals(n, name); });
+    const double zero_rate =
+        (static_cast<double>(zeros - 1) + 0.1) / (static_cast<double>(finite - 1) + 10.0);
     for (std::size_t p = 0; p < line.size(); ++p) {
       if (t.x[p] != 0.0 || explained[p] || !usable(at(t.x, line.prev[p])) ||
           !usable(at(t.x, line.next[p])) || !std::isfinite(t.pred[p])) {
         continue;
       }
-      const double expected = t.s * std::sinh(t.pred[p]);
-      // A real 0: as often as the item is 0 elsewhere, or as likely as its value
-      // falling to 0 or past it is, by the real-change model (a balance that runs
-      // down to nothing, or an item as volatile as its level).
-      const double sigma = t.sigma[p];
-      const double wide = std::max(kBadScale, 4 * sigma);
-      const double large =
-          (static_cast<double>(t.outliers) + 0.1) / (static_cast<double>(t.judged) + 10.0);
-      const double reach = -std::fabs(t.pred[p]);
-      const double to_zero = (1.0 - large) * stats::student_t_cdf(reach / sigma, kNu) +
-                             large * stats::student_t_cdf(reach / wide, kNu);
-      const double zero_rate =
-          (static_cast<double>(zeros - 1) + 0.1) / (static_cast<double>(finite - 1) + 10.0);
-      double log_absent = std::log(never ? kNeverAbsentPrior : kAbsentPrior);
-      double log_real = std::log(zero_rate + (1.0 - zero_rate) * to_zero);
-      ValueFinding f =
-          structure_finding(ValueKind::kAbsentZero, ValueScope::kValue, line.rows[p], 0.0);
-      f.item = t.item;
-      f.expected = expected;
-      f.repaired = expected;
-      if (never) {
-        f.evidence.push_back({"never_absent", true, 0.0, ""});
+      if (std::optional<ValueFinding> f = judge_zero(vc, line, tracks, t, p, zero_rate, never)) {
+        out.push_back(std::move(*f));
       }
-      f.evidence.push_back({"real_zero_chance", zero_rate + (1.0 - zero_rate) * to_zero, 0.0,
-                            "the item at 0 elsewhere, or falling to it"});
-      // The row's subtotals: a value that fell to 0 takes those it is part of down by
-      // as much, where a value the filing did not carry leaves them as filed.
-      const double drop = -expected;
-      bool moved = false;
-      bool unmoved = true;      // every subtotal that would show the drop stayed put
-      std::size_t visible = 0;  // the subtotals the drop would show in
-      for (const Track& o : tracks) {
-        if (&o == &t || !o.ready || !vc.info[o.item].subtotal || !usable(o.x[p]) ||
-            !std::isfinite(o.pred[p])) {
-          continue;
-        }
-        const double o_expected = o.s * std::sinh(o.pred[p]);
-        const double change = o.x[p] - o_expected;
-        const double noise = o.sigma[p] * std::hypot(o.s, o_expected);
-        if (std::fabs(change - drop) <= 0.35 * std::fabs(drop)) {
-          moved = true;
-        } else if (std::fabs(drop) > 3.0 * noise) {
-          ++visible;
-          unmoved = unmoved && std::fabs(change) < 0.35 * std::fabs(drop);
-        }
-      }
-      if (moved) {
-        log_real += kSubtotalMoves;
-        f.evidence.push_back({"subtotal_moves", true, -kSubtotalMoves, ""});
-      } else if (visible >= 2 && unmoved) {
-        log_absent += kSubtotalsStill;
-        f.evidence.push_back({"subtotals_unmoved", true, kSubtotalsStill, ""});
-      }
-      // Reported at its level either side, not running down to 0.
-      if (std::min(std::fabs(at(t.x, line.prev[p])), std::fabs(at(t.x, line.next[p]))) >=
-          0.5 * t.s) {
-        log_absent += kAtLevel;
-        f.evidence.push_back({"reported_at_level", true, kAtLevel, ""});
-      }
-      const std::size_t i = line.rows[p];
-      bool held = false;
-      for (const IdentityTerms& terms : vc.identities) {
-        const auto it = std::find(terms.items.begin(), terms.items.end(), t.item);
-        if (it == terms.items.end()) {
-          continue;
-        }
-        const std::optional<Gap> g = identity_gap(st, terms, vc.settings, i, t.item, 0.0);
-        if (!g) {
-          continue;
-        }
-        if (g->holds()) {
-          held = true;
-          continue;
-        }
-        const double needed =
-            -g->gap / terms.signs[static_cast<std::size_t>(it - terms.items.begin())];
-        if (std::fabs(std::asinh(needed / t.s) - t.pred[p]) <=
-            std::max(kUnusual * t.sigma[p], 0.3)) {
-          log_absent += kIdentityRepair;
-          f.repaired = needed;
-          f.evidence.push_back({"identity_repair", terms.identity->name, kIdentityRepair, ""});
-        }
-      }
-      if (held) {
-        log_real += kIdentityHolds;
-        f.evidence.push_back({"identity_holds", true, -kIdentityHolds, ""});
-      }
-      if (vc.have_items && vc.info[t.item].flow) {
-        const Years& years = vc.years.at(static_cast<std::size_t>(st.statement[i]));
-        if (const std::optional<Gap> g = quarter_gap(st, years, vc.settings, i, t.item, 0.0)) {
-          if (g->holds()) {
-            log_real += kQuarterHolds;
-            f.evidence.push_back({"quarter_sum_holds", true, -kQuarterHolds, ""});
-          } else {
-            const double needed = st.period_type[i] == PeriodType::kAnnual ? g->gap : -g->gap;
-            if (std::fabs(std::asinh(needed / t.s) - t.pred[p]) <= 0.3) {
-              log_absent += kQuarterRepair;
-              f.evidence.push_back({"quarter_sum_repair", true, kQuarterRepair, ""});
-            }
-          }
-        }
-      }
-      const double p_absent = 1.0 / (1.0 + std::exp(log_real - log_absent));
-      if (p_absent < kStructureReport) {
-        continue;
-      }
-      f.posterior = {1.0 - p_absent, p_absent, 0.0, 0.0};
-      f.provisional = line.next[p] == kNone;
-      out.push_back(std::move(f));
     }
   }
 }
