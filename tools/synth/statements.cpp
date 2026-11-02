@@ -1167,6 +1167,7 @@ class Universe {
   void identity_breaks();
   void share_faults();
   void share_count_units();
+  void corrected_versions();
   void filing_faults();
   void missing_quarters();
   void restated_at_scale();
@@ -2032,6 +2033,34 @@ void Universe::restated_at_scale() {
   }
 }
 
+// A first version stored at x1000 (or x0.001) and corrected by a second: the old
+// version was wrong while in force, and DQ932 names it (DQ912 too, as first
+// reported).
+void Universe::corrected_versions() {
+  for (int done = 0, tries = 0; done < 3 && tries < 5000; ++tries) {
+    Company& c = any();
+    const std::size_t t = pick_quarter(c);
+    if (t == kNoQuarter || !reserve(c, t, t)) {
+      continue;
+    }
+    const Statement s = any_statement();
+    KnowledgeSource source = KnowledgeSource::kFiled;
+    std::optional<Date> filing;
+    const Date known = restatement_date(c, year_last(c, t), source, filing);
+    Row& row = row_of(c, s, PeriodType::kQuarter, t, 1);
+    const Row corrected = make_row(c, s, PeriodType::kQuarter, t, 2, known, source, filing);
+    const double f = rng_.chance(0.5) ? 1000.0 : 0.001;
+    for (std::size_t item = 0; item < kItemCount; ++item) {
+      if (is_money(item) && !std::isnan(row.values.at(item))) {
+        row.values.at(item) *= f;
+      }
+    }
+    label_row(c, row, "corrected_bad_version", "DQ932|DQ912");
+    c.rows.push_back(corrected);
+    ++done;
+  }
+}
+
 // DQ901: a row twice, versions that do not chain, and knowledge dates before the
 // period's end or apart from the filing date.
 void Universe::key_faults() {
@@ -2436,6 +2465,7 @@ void Universe::faults() {
   impossible_values();
   restated_at_scale();
   share_count_units();
+  corrected_versions();
   mark_impossible();
   mark_identities();
   mark_ties();
