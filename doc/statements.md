@@ -187,6 +187,8 @@ prior_weight = 6              # in periods, against the item's own residuals
 | DQ911, DQ912, DQ913, DQ919 | both views, in force and as first reported: each money item over time (the value model, below) |
 | DQ914, DQ915, DQ916 | both views: copied rows, zeros where the item is reported either side, and quarters to date (`--items`' flows) |
 | DQ921, DQ922 | both views: the share counts `--items` lists, in one share terms with `--actions`' splits (share counts, below) |
+| DQ931, DQ932 | every version: each period's filing date against the issuer's own lags, and each version against the one before it (the knowledge timeline, below) |
+| DQ951 | the whole input, once every series is in: revisions and findings by the day they became known |
 | the other DQ9xx | only on statements, as the plan adds them |
 | DQ104 | on every kind: a field that cannot be used |
 | DQ109 | on every context file, `--items` included |
@@ -311,6 +313,28 @@ sheet's outstanding shares (fundamentals plan §4.3).
 DQ921 needs `--actions`: without it there are no splits to put the counts into one
 terms, and it judges nothing. DQ922 runs with `--items` alone, and then weighs a
 missing split wherever the two counts were known on different dates.
+
+## The knowledge timeline
+
+DQ931 filing-date-implausible, DQ932 restatement-implausible and DQ951
+revision-cohort judge when a version became known (fundamentals plan §4.4, §4.6):
+
+- **DQ931.** Each period's first filed version, its lag from the period end
+  against the issuer's own lags of the same form (10-Q, or the 10-K for a year and
+  its last quarter) and the SEC's deadlines. A date at the period end, or far
+  before any filer's, is a look-ahead and can reach error. A date after the next
+  period's is an amendment's, at warn. A long lag otherwise is a late filing, a
+  filing fact, at info.
+- **DQ932.** Each pair of a period's consecutive versions. The changed items'
+  pattern (a power of ten, a sign, two values swapped, a total alone, or an amount
+  moved between two items) and how each version sits with the periods around it
+  tell a restatement from a new version stored wrong, or from an old version that a
+  restatement corrected. An old version wrong is reported on the old version,
+  which every point-in-time read in its interval saw.
+- **DQ951.** Across the input: many series revised on one day (a backfill, at
+  info), or carrying one finding in rows known the same day (a load fault, at
+  warn), beyond the base rate. A load fault's DQ932 and DQ903 reports go to info,
+  linked to it. While DQ951 runs, results are held until every series is in.
 
 ## Output
 

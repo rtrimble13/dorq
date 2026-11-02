@@ -35,6 +35,20 @@ const CheckInfo& MarketDay::info() const noexcept {
   return kInfo;
 }
 
+const CheckInfo& RevisionCohort::info() const noexcept {
+  static const CheckInfo kInfo{
+      .code = "DQ951",
+      .name = "revision-cohort",
+      .summary =
+          "many statements series revised on one day (info: a vendor batch, a backfill), "
+          "or carrying one finding in versions loaded the same day (a load fault)",
+      .default_severity = Severity::kWarn,
+      .applies = Applies::kStatements,
+      .cross_sectional = true,
+  };
+  return kInfo;
+}
+
 std::vector<Violation> market_days(const MarketSeries& market, const Calendar& calendar,
                                    double threshold) {
   // The market's own volatility per session, from the moves before each day: a

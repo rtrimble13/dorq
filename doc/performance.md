@@ -115,6 +115,29 @@ cost is within the reader's own spread from run to run: a series has three count
 against the value model's dozens of money items. Every statement check together,
 DQ901 to DQ922, runs in 41 seconds, inside the plan's two minutes.
 
+## Statements (DR-0909)
+
+The knowledge timeline (DQ931, DQ932) and the revision cohort (DQ951), on the same
+6M rows. DQ951 is cross-sectional, so while it runs, results are held until every
+series is in, as a bars run holds them for DQ303. What is held is what would be
+reported (`--min-severity`), and memory grows with it.
+
+| Run | Rows | Series | Threads | Time | Peak memory |
+|---|---|---|---|---|---|
+| Piped into `dorq --select DQ104`: the reader | 6.0M | 20,000 | 4 | 18.5 s | 11 MB |
+| Piped into `dorq --select DQ93,DQ951` | 6.0M | 20,000 | 4 | 17.8 s | 54 MB |
+| Piped into `dorq --select DQ9`: every statement check | 6.0M | 20,000 | 4 | **45.1 s** | 1.4 GB |
+
+The same 4-core machine and `release` build (2026-11-02). The timeline checks cost
+nothing measurable over the reader. Every statement check together runs in 45
+seconds, inside the plan's two minutes. The full run's memory is the 800,000
+findings at warn and above that this input's random values make (identity and tie
+breaks on nearly every series), held for DQ951: about 1.7 KB each. fafnir's own
+history makes a few per cent of that. A run on the default selection held them
+before DQ951 too, since DQ303, DQ304 and DQ601 are on by default and the engine
+holds for any cross-sectional check selected, whatever the input's kind. `--select
+DQ9 --ignore DQ951` streams them.
+
 ## The profile
 
 The profile is a callgrind run on one copy (230,000 rows, one thread), before

@@ -263,6 +263,8 @@ has one.
 | `share_count_unit` | DQ922, DQ921 | 4 runs of 1–3 quarters whose weighted-average shares are at ×1,000 or ×0.001, against the outstanding count of the same filings |
 | `filing_at_period_end` | DQ931 | 3 periods whose filing date, and `known_from`, is the period end |
 | `amendment_date` | DQ931 | 3 10-Qs dated 20–60 days after the next quarter's filing |
+| `corrected_bad_version` | DQ932, DQ912 | 3 quarterly rows filed at ×1,000 or ×0.001 and restated right: the old version wrong, which DQ932 reports on version 1 |
+| `load_fault`, `load_fault_member` | DQ951; DQ912, DQ932 | a night's load, 4–9 days after the backfill, that stored 4 series' new versions at ×1,000: one DQ951 on that night (`*`), and each member's new version (DQ932 at info, linked) |
 | `missing_quarter` | DQ941 | 4 quarters missing from all three statements |
 | `restatement_x1000` | DQ932, DQ912 | 3 restatements whose new version is the old one at ×1,000: a row at ×1,000 in the in-force view too |
 | `statements_missing` | DQ943 | `MIS01`, which expects statements and has none |
@@ -283,6 +285,7 @@ has one.
 | `hn_reclassification`, `hn_restatement` | - | each restatement's year and statement (DQ9) |
 | `hn_split_on_file` | - | every other split, from the last period known before it to the first after (DQ92) |
 | `hn_delisted` | - | each delisted company, from its last period (DQ94) |
+| `hn_backfill` | - | the backfill day, which dates every restatement it found to one day: a cohort of revisions at info (DQ951) |
 | `hn_no_statements_expected` | - | `ETF01` (DQ94) |
 
 A fault that leaves a row breaking one of [statements.toml](statements.toml)'s
@@ -351,6 +354,8 @@ bounds:
   without its reporting each one;
 - the quarterly structure (DR-0907) at warn: DQ914, DQ915 and DQ916 at precision 0.9;
 - the share counts (DR-0908) at warn: DQ921 and DQ922 at precision and recall 0.9;
+- the knowledge timeline (DR-0909) at warn: DQ931 and DQ932 at precision and recall
+  0.9, DQ951 at 1.0. The gate also holds the backfill day to one DQ951, at info;
 - the value model (DR-0906) at warn: DQ912 at precision 0.95 and recall 0.9, DQ911
   at precision 0.85 and DQ913 at precision 0.9. Their recall otherwise is left to
   the evidence a single value leaves: a value in no identity and no quarter sum

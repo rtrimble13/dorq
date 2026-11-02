@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <string>
@@ -296,8 +297,201 @@ std::vector<Violation> CrossSection::cohort_moves(std::vector<SeriesResult>& res
   return out;
 }
 
+namespace {
+
+constexpr double kRevisionMaxTail = 1e-4;  // DQ951, as DQ601's
+constexpr std::size_t kMembersShown = 6;
+
+// A code that many series carry in rows known the same day.
+struct FindingCohort {
+  std::string code;
+  std::int64_t rows = 0;
+  double expected = 0.0;
+  double p = 1.0;
+  std::vector<std::size_t> members;
+};
+
+// One day's DQ951: the series revised beyond the base rate, and the findings.
+struct DayCohort {
+  std::vector<std::size_t> revised;
+  double revision_rate = 0.0;
+  double revision_p = 1.0;
+  std::vector<FindingCohort> findings;
+};
+
+std::string member_names(const std::vector<SeriesResult>& results,
+                         const std::vector<std::size_t>& members) {
+  std::string names;
+  for (std::size_t m = 0; m < members.size() && m < kMembersShown; ++m) {
+    names += (m == 0 ? "" : ", ") + results[members[m]].id;
+  }
+  if (members.size() > kMembersShown) {
+    names += " and " + std::to_string(members.size() - kMembersShown) + " more";
+  }
+  return names;
+}
+
+Violation cohort_report(Date day, const DayCohort& cohort,
+                        const std::vector<SeriesResult>& results) {
+  Violation v;
+  v.check = &find_check("DQ951")->info();
+  v.date = day;
+  std::vector<std::size_t> members = cohort.revised;
+  for (const FindingCohort& f : cohort.findings) {
+    members.insert(members.end(), f.members.begin(), f.members.end());
+  }
+  std::sort(members.begin(), members.end());
+  members.erase(std::unique(members.begin(), members.end()), members.end());
+  std::string ids;
+  for (const std::size_t i : members) {
+    ids += (ids.empty() ? "" : ",") + results[i].id;
+  }
+  std::string revised;
+  if (!cohort.revised.empty()) {
+    revised = std::to_string(cohort.revised.size()) + " series revised on " + day.to_string() +
+              ", against about " + format_number(std::round(cohort.revision_rate * 10.0) / 10.0) +
+              " on a day with revisions (p = " + significant(cohort.revision_p, 2) + ")";
+    v.detail.push_back({"series_revised", static_cast<std::int64_t>(cohort.revised.size())});
+    v.detail.push_back({"base_rate", cohort.revision_rate});
+    v.detail.push_back({"p_value", cohort.revision_p});
+  }
+  if (cohort.findings.empty()) {
+    v.severity = Severity::kInfo;
+    v.classification = Classification::kMarketFact;
+    v.p_error = 0.0;
+    v.message = revised + ": a vendor batch or a backfill, not " +
+                std::to_string(cohort.revised.size()) +
+                " separate events: " + member_names(results, cohort.revised);
+  } else {
+    v.severity = Severity::kWarn;
+    v.classification = Classification::kDataError;
+    std::string codes;
+    std::string found;
+    double p = 1.0;
+    for (const FindingCohort& f : cohort.findings) {
+      codes += (codes.empty() ? "" : ",") + f.code;
+      found += (found.empty() ? "" : "; ") + std::to_string(f.members.size()) + " carry " + f.code +
+               " (" + std::to_string(f.rows) + " rows, against about " +
+               significant(f.expected, 2) + ", p = " + significant(f.p, 2) + ")";
+      p = std::min(p, f.p);
+    }
+    v.p_error = 1.0 - p;
+    v.message = std::to_string(members.size()) + " series in rows known on " + day.to_string() +
+                ": " + found + (revised.empty() ? "" : "; " + revised) +
+                ": a load fault, not separate findings: " + member_names(results, members);
+    v.detail.push_back({"codes", codes});
+  }
+  v.detail.push_back({"members", ids});
+  return v;
+}
+
+// A member's reports a cohort explains: on rows known that day, of its codes (a
+// revision cohort's: DQ932 and DQ903). Each is linked to the cohort; a finding
+// cohort's DQ932 and DQ903 reports, one condition reported once, go to info, as a
+// DQ303 cohort's members do.
+void link_members(Date day, const DayCohort& cohort, std::vector<SeriesResult>& results) {
+  const auto link = [&](std::size_t i, const std::string& code, bool downgrade) {
+    for (Violation& v : results[i].violations) {
+      if (v.check->code != code || v.known != day) {
+        continue;
+      }
+      v.detail.push_back({"cohort_date", day.to_string()});
+      if (downgrade && (code == "DQ932" || code == "DQ903")) {
+        v.severity = Severity::kInfo;
+        v.message += "; part of the DQ951 cohort on " + day.to_string();
+      }
+    }
+  };
+  for (const std::size_t i : cohort.revised) {
+    link(i, "DQ932", false);
+    link(i, "DQ903", false);
+  }
+  for (const FindingCohort& f : cohort.findings) {
+    for (const std::size_t i : f.members) {
+      link(i, f.code, true);
+    }
+  }
+}
+
+}  // namespace
+
+// DQ951: revisions by the day their versions became known, tested against the
+// count on the input's other days with revisions; and findings by the day their
+// rows became known, against the rate per row on the other days, so that a first
+// load holding all of history is no cohort of its findings.
+std::vector<Violation> CrossSection::revision_cohorts(std::vector<SeriesResult>& results) const {
+  std::map<Date, std::vector<std::size_t>> revised;
+  std::map<Date, std::int64_t> rows;
+  std::map<std::pair<std::string, Date>, FindingCohort> found;
+  std::map<std::string, std::int64_t> found_total;
+  std::int64_t rows_total = 0;
+  std::size_t revisions = 0;
+  for (std::size_t i = 0; i < tails_.size() && i < results.size(); ++i) {
+    const CrossSummary& t = tails_[i];
+    if (!t.revision_cohort) {
+      continue;
+    }
+    for (const Date day : t.revised) {
+      revised[day].push_back(i);
+      ++revisions;
+    }
+    for (const auto& [day, n] : t.known_rows) {
+      rows[day] += n;
+      rows_total += n;
+    }
+    for (const auto& [day, code, n] : t.found) {
+      FindingCohort& f = found[{code, day}];
+      f.code = code;
+      f.rows += n;
+      f.members.push_back(i);
+      found_total[code] += n;
+    }
+  }
+  const auto min_series = static_cast<std::size_t>(cohort_.min_series);
+  std::map<Date, DayCohort> days;
+  for (const auto& [day, members] : revised) {
+    if (members.size() < min_series || revised.size() < 2) {
+      continue;
+    }
+    const double rate = std::max(1e-3, static_cast<double>(revisions - members.size()) /
+                                           static_cast<double>(revised.size() - 1));
+    const double p = stats::poisson_upper_tail(static_cast<std::int64_t>(members.size()), rate);
+    if (p <= kRevisionMaxTail) {
+      DayCohort& d = days[day];
+      d.revised = members;
+      d.revision_rate = rate;
+      d.revision_p = p;
+    }
+  }
+  for (auto& [key, f] : found) {
+    const Date day = key.second;
+    const std::int64_t others = rows_total - rows[day];
+    if (f.members.size() < min_series || others <= 0) {
+      continue;
+    }
+    // The code's rate per row on the other days, half a finding added so that a
+    // clean rest of the input is no certainty.
+    const double rate =
+        (static_cast<double>(found_total[f.code] - f.rows) + 0.5) / static_cast<double>(others);
+    f.expected = rate * static_cast<double>(rows[day]);
+    f.p = stats::poisson_upper_tail(f.rows, f.expected);
+    if (f.p <= kRevisionMaxTail) {
+      days[day].findings.push_back(std::move(f));
+    }
+  }
+  std::vector<Violation> out;
+  for (const auto& [day, cohort] : days) {
+    out.push_back(cohort_report(day, cohort, results));
+    link_members(day, cohort, results);
+  }
+  return out;
+}
+
 std::vector<Violation> CrossSection::finalize(std::vector<SeriesResult>& results) {
   std::vector<Violation> cohort_violations = cohort_moves(results);
+  std::vector<Violation> revisions = revision_cohorts(results);
+  cohort_violations.insert(cohort_violations.end(), std::make_move_iterator(revisions.begin()),
+                           std::make_move_iterator(revisions.end()));
   // A series that stops before the as-of date was expected on the session after
   // its last bar. Counting that session lets a load that failed for many series on
   // the latest night show up as a cohort, like any other.

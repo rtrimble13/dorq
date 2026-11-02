@@ -1167,6 +1167,8 @@ class Universe {
   void identity_breaks();
   void share_faults();
   void share_count_units();
+  void corrected_versions();
+  void load_fault();
   void filing_faults();
   void missing_quarters();
   void restated_at_scale();
@@ -2032,6 +2034,65 @@ void Universe::restated_at_scale() {
   }
 }
 
+// A first version stored at x1000 (or x0.001) and corrected by a second: the old
+// version was wrong while in force, and DQ932 names it (DQ912 too, as first
+// reported).
+void Universe::corrected_versions() {
+  for (int done = 0, tries = 0; done < 3 && tries < 5000; ++tries) {
+    Company& c = any();
+    const std::size_t t = pick_quarter(c);
+    if (t == kNoQuarter || !reserve(c, t, t)) {
+      continue;
+    }
+    const Statement s = any_statement();
+    KnowledgeSource source = KnowledgeSource::kFiled;
+    std::optional<Date> filing;
+    const Date known = restatement_date(c, year_last(c, t), source, filing);
+    Row& row = row_of(c, s, PeriodType::kQuarter, t, 1);
+    const Row corrected = make_row(c, s, PeriodType::kQuarter, t, 2, known, source, filing);
+    const double f = rng_.chance(0.5) ? 1000.0 : 0.001;
+    for (std::size_t item = 0; item < kItemCount; ++item) {
+      if (is_money(item) && !std::isnan(row.values.at(item))) {
+        row.values.at(item) *= f;
+      }
+    }
+    label_row(c, row, "corrected_bad_version", "DQ932|DQ912");
+    c.rows.push_back(corrected);
+    ++done;
+  }
+}
+
+// A night's load, some days after the backfill, that stored four series' new
+// versions at x1000: one finding in many series' rows known the same day (DQ951, a
+// load fault). Each is a new version wrong (DQ912, and DQ932, which the cohort
+// takes to info).
+void Universe::load_fault() {
+  const Date night = session_on_or_after(plus_days(backfill_day(), rng_.integer(4, 9)));
+  std::vector<std::string> members;
+  for (int done = 0, tries = 0; done < 4 && tries < 5000; ++tries) {
+    Company& c = any();
+    const std::size_t t = pick_quarter(c);
+    if (std::find(members.begin(), members.end(), c.id) != members.end() || t == kNoQuarter ||
+        !reserve(c, t, t)) {
+      continue;
+    }
+    const Statement s = any_statement();
+    const Row row = row_of(c, s, PeriodType::kQuarter, t, 1);
+    Row restated =
+        make_row(c, s, PeriodType::kQuarter, t, 2, night, KnowledgeSource::kObserved, std::nullopt);
+    for (std::size_t item = 0; item < kItemCount; ++item) {
+      if (is_money(item) && !std::isnan(row.values.at(item))) {
+        restated.values.at(item) = row.values.at(item) * 1000.0;
+      }
+    }
+    c.rows.push_back(restated);
+    label_row(c, restated, "load_fault_member", "DQ912|DQ932");
+    members.push_back(c.id);
+    ++done;
+  }
+  labels_.emplace_back("*", night, night, "load_fault", "DQ951", "");
+}
+
 // DQ901: a row twice, versions that do not chain, and knowledge dates before the
 // period's end or apart from the filing date.
 void Universe::key_faults() {
@@ -2436,6 +2497,8 @@ void Universe::faults() {
   impossible_values();
   restated_at_scale();
   share_count_units();
+  corrected_versions();
+  load_fault();
   mark_impossible();
   mark_identities();
   mark_ties();
@@ -2475,6 +2538,9 @@ void Universe::whole_series_labels() {
   }
   labels_.emplace_back("ETF01", Date::from_ymd(2010, 1, 4), newest_end(),
                        "hn_no_statements_expected", "", "DQ94");
+  // The backfill dated every restatement it found to one day: a cohort of
+  // revisions, at info (DQ951).
+  labels_.emplace_back("*", backfill_day(), backfill_day(), "hn_backfill", "", "DQ951");
   labels_.emplace_back("MIS01", Date::from_ymd(2012, 3, 1), newest_end(), "statements_missing",
                        "DQ943", "");
 }

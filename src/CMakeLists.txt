@@ -28,6 +28,7 @@ add_library(
   checks/registry.cpp
   checks/identities.cpp
   checks/shares.cpp
+  checks/timeline.cpp
   checks/values.cpp
   checks/stale.cpp
   checks/statement_rows.cpp
