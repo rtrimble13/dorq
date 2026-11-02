@@ -9,6 +9,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <doctest/doctest.h>
@@ -96,8 +97,9 @@ using Values = std::array<double, 7>;
 using Edit = std::function<void(int, const std::string&, Values&)>;
 
 std::string company(const std::string& id, const Edit& edit = {}, int quarters = 28,
-                    double season = 0.0) {
+                    double season = 0.0, bool annual = false) {
   std::string text;
+  Values year{};  // the year's income and cash flow, as filed before any edit
   for (int q = 0; q < quarters; ++q) {
     const double t = q;
     const double seasonal = 1.0 + season * (q % 4 == 3 ? 1.0 : -season / 3.0);
@@ -120,6 +122,13 @@ std::string company(const std::string& id, const Edit& edit = {}, int quarters =
       } else {
         v = {kNaN, kNaN, kNaN, kNaN, assets, liabilities, assets - liabilities};
       }
+      if (s != "balance_sheet") {
+        for (std::size_t k = 0; k < 4; ++k) {
+          if (!std::isnan(v.at(k))) {
+            year.at(k) += static_cast<double>(std::llround(v.at(k)));
+          }
+        }
+      }
       if (edit) {
         edit(q, s, v);
       }
@@ -134,6 +143,23 @@ std::string company(const std::string& id, const Edit& edit = {}, int quarters =
         }
       }
       text += "\n";
+    }
+    if (annual && q % 4 == 3) {
+      // The year: its quarters' sums, as a year's flows are.
+      text += id;
+      text += ",income,annual,";
+      text += end;
+      text += ',';
+      text += end.substr(0, 4);
+      text += ",FY,1,2020-01-01,,,";
+      for (std::size_t k = 0; k < 7; ++k) {
+        text += ',';
+        if (k < 3) {
+          text += whole(year.at(k));
+        }
+      }
+      text += "\n";
+      year = {};
     }
   }
   return text;
@@ -155,10 +181,10 @@ constexpr const char* kConfig =
     "balance_sheet = \"total_assets = total_liabilities + total_equity_parent\"\n";
 
 Result check(const TempDir& dir, const std::string& csv, bool items = true,
-             const std::string& extra = {}) {
+             const std::string& extra = {}, const std::string& settings = {}) {
   write_file(dir.path() / "s.csv", std::string{kHeader} + csv);
   write_file(dir.path() / "items.csv", kItems);
-  write_file(dir.path() / "st.toml", kConfig);
+  write_file(dir.path() / "st.toml", settings + kConfig);
   const std::string file = (dir.path() / "s.csv").string();
   const std::string items_file = (dir.path() / "items.csv").string();
   const std::string config = (dir.path() / "st.toml").string();
@@ -296,7 +322,7 @@ TEST_CASE("the value model: no warn on a real step, a seasonal business or a zer
   const Result r = check(dir, csv);
   INFO(r.err);
   REQUIRE(r.status == 0);
-  for (const char* code : {"DQ911", "DQ912", "DQ913"}) {
+  for (const char* code : {"DQ911", "DQ912", "DQ913", "DQ914", "DQ915", "DQ916"}) {
     CAPTURE(code);
     CHECK(reports_of(r.out, code).empty());
   }
@@ -419,6 +445,15 @@ prior_weight = 8
   CHECK(contains(dorq::to_toml(dorq::Config{}), "[statements.priors]"));  // config show
   CHECK(dorq::config_hash(dorq::Config{}) == "803c581d98ba409a");
   CHECK(dorq::config_hash(config) != dorq::config_hash(dorq::Config{}));
+  // copy_min_items (DQ914) round-trips, and leaves the hash alone at its default.
+  const dorq::Config copies =
+      dorq::parse_config("[statements]\ncopy_min_items = 7\n", "c.toml", false);
+  CHECK(copies.statements.copy_min_items == 7);
+  CHECK(dorq::parse_config(dorq::to_toml(copies), "again.toml", false).statements ==
+        copies.statements);
+  CHECK(dorq::config_hash(copies) != dorq::config_hash(dorq::Config{}));
+  CHECK_THROWS_AS((void)dorq::parse_config("[statements]\ncopy_min_items = 1\n", "bad.toml", false),
+                  dorq::ConfigError);
   for (const char* bad :
        {"[statements.priors]\nbad_value = 0.6\n",
         "[statements.priors]\nbad_value = 0.4\nunit_error = 0.4\nsign_error = 0.2\n",
@@ -426,4 +461,131 @@ prior_weight = 8
     CAPTURE(bad);
     CHECK_THROWS_AS((void)dorq::parse_config(bad, "bad.toml", false), dorq::ConfigError);
   }
+}
+
+TEST_CASE("DQ914, DQ915 and DQ916: a copied quarter, an absent zero, quarters to date") {
+  const TempDir dir;
+  std::string csv;
+  // 2012 Q3's income statement repeats Q2's, to the unit.
+  Values copied{};
+  csv += company("COPY", [&copied](int q, const std::string& s, Values& v) {
+    if (s == "income" && q == 9) {
+      copied = v;
+    }
+    if (s == "income" && q == 10) {
+      v = copied;
+    }
+  });
+  // Cost of revenue left at 0 in 2013 Q1, with gross profit as filed.
+  csv += company("ZERO", [](int q, const std::string& s, Values& v) {
+    if (s == "income" && q == 12) {
+      v[1] = 0.0;
+    }
+  });
+  // FY2012's Q2 to Q4 hold the year to date.
+  Values to_date{};
+  csv += company(
+      "YTD",
+      [&to_date](int q, const std::string& s, Values& v) {
+        if (s != "income" || q < 8 || q > 11) {
+          return;
+        }
+        for (std::size_t k = 0; k < 3; ++k) {
+          to_date.at(k) =
+              (q == 8 ? 0.0 : to_date.at(k)) + static_cast<double>(std::llround(v.at(k)));
+          v.at(k) = to_date.at(k);
+        }
+      },
+      28, 0.0, true);
+  const Result r = check(dir, csv, true, {}, "[statements]\ncopy_min_items = 3\n");
+  INFO(r.err);
+  REQUIRE(r.status == 0);
+  CHECK(reports_of(r.out, "DQ914") ==
+        std::vector<std::string>{std::string{"COPY "} + kIncomeQ +
+                                 R"("fiscal_date":"2012-09-30","version_no":1})"});
+  CHECK(reports_of(r.out, "DQ915") ==
+        std::vector<std::string>{
+            std::string{"ZERO "} + kIncomeQ +
+            R"("fiscal_date":"2013-03-31","version_no":1,"item":"cost_of_revenue"})"});
+  CHECK(reports_of(r.out, "DQ916") ==
+        std::vector<std::string>{std::string{"YTD "} + kIncomeQ +
+                                 R"("fiscal_date":"2012-06-30","version_no":1})"});
+  const std::string copy = report(r.out, "DQ914", "COPY");
+  CHECK(contains(copy, "the row repeats the period before it, to the unit, on 3 of 3 items"));
+  CHECK(contains(copy, R"("hypotheses":{"real_change":)"));
+  const std::string zero = report(r.out, "DQ915", "ZERO");
+  CHECK(contains(zero, "cost_of_revenue is 0, reported either side"));
+  CHECK(contains(zero, R"("feature":"identity_repair","value":"gross_profit")"));
+  const std::string ytd = report(r.out, "DQ916", "YTD");
+  CHECK(contains(ytd, "the quarters of FY2012 are stored year to date"));
+  CHECK(contains(ytd, R"("end_date":"2012-12-31")"));
+  // The rows they explain are no bad values, and no large changes either.
+  for (const char* series : {"COPY", "YTD"}) {
+    CAPTURE(series);
+    CHECK(report(r.out, "DQ911", series).empty());
+    CHECK(report(r.out, "DQ919", series).empty());
+  }
+}
+
+TEST_CASE("DQ916: a quarter holding its year, and a year with two years in force") {
+  const TempDir dir;
+  // FY2013's Q3 holds the year: the quarters as filed, Q3's put to their sum.
+  const auto holds_year = [](const std::string& id, bool second_year) {
+    const std::string text = company(id, {}, 28, 0.0, true);
+    std::vector<std::string> rows;
+    std::istringstream in(text);
+    std::array<long long, 3> year{};
+    for (std::string line; std::getline(in, line);) {
+      rows.push_back(line);
+    }
+    for (const std::string& row : rows) {
+      if (contains(row, ",income,annual,2013-12-31,")) {
+        std::vector<std::string> f;
+        std::stringstream ss(row);
+        for (std::string x; std::getline(ss, x, ',');) {
+          f.push_back(x);
+        }
+        for (std::size_t k = 0; k < 3; ++k) {
+          year.at(k) = std::stoll(f.at(11 + k));
+        }
+      }
+    }
+    std::string out;
+    for (std::string row : rows) {
+      if (contains(row, ",income,quarter,2013-09-30,")) {
+        std::vector<std::string> f;
+        std::stringstream ss(row);
+        for (std::string x; std::getline(ss, x, ',');) {
+          f.push_back(x);
+        }
+        for (std::size_t k = 0; k < 3; ++k) {
+          f.at(11 + k) = std::to_string(year.at(k));
+        }
+        row.clear();
+        for (std::size_t k = 0; k < f.size(); ++k) {
+          row += (k > 0 ? "," : "") + f[k];
+        }
+        while (std::count(row.begin(), row.end(), ',') < 17) {
+          row += ",";
+        }
+      }
+      out += row + "\n";
+      if (second_year && contains(row, ",income,annual,2013-12-31,")) {
+        // A transition period labelled with the year it shares: two years in force.
+        std::string transition = row;
+        transition.replace(transition.find("2013-12-31"), 10, "2013-06-30");
+        out += transition + "\n";
+      }
+    }
+    return out;
+  };
+  const Result r = check(dir, holds_year("AIQ", false) + holds_year("TWO", true));
+  INFO(r.err);
+  REQUIRE(r.status == 0);
+  CHECK(reports_of(r.out, "DQ916") ==
+        std::vector<std::string>{std::string{"AIQ "} + kIncomeQ +
+                                 R"("fiscal_date":"2013-09-30","version_no":1})"});
+  CHECK(contains(report(r.out, "DQ916", "AIQ"),
+                 "the quarter holds FY2013's flows (3 of 3 equal the year's)"));
+  CHECK(report(r.out, "DQ916", "TWO").empty());
 }

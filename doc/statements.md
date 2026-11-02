@@ -126,6 +126,7 @@ cash_tie_share = 0.02         # the change in cash, within this share of the bal
 quarter_spacing = [56, 126]   # days between consecutive quarter ends
 year_spacing = [300, 430]     # and year ends
 coverage_floor = "1998-01-01" # no period is expected before this
+copy_min_items = 5            # DQ914: a copy repeats at least this many items
 nonnegative = ["revenue", "total_assets"]          # items that cannot be negative
 never_absent = ["revenue", "net_income"]           # items a reporting company always has
 null_is_zero = ["fx_effect_on_cash"]               # items an identity reads as 0 where NULL
@@ -184,6 +185,7 @@ prior_weight = 6              # in periods, against the item's own residuals
 | DQ903 | every version: each identity, and why it fails where it does |
 | DQ904 | the periods in force: the change in cash (`cash_tie`), and a year's quarters against the year (`--items`' flows) |
 | DQ911, DQ912, DQ913, DQ919 | both views, in force and as first reported: each money item over time (the value model, below) |
+| DQ914, DQ915, DQ916 | both views: copied rows, zeros where the item is reported either side, and quarters to date (`--items`' flows) |
 | the other DQ9xx | only on statements, as the plan adds them |
 | DQ104 | on every kind: a field that cannot be used |
 | DQ109 | on every context file, `--items` included |
@@ -255,6 +257,28 @@ in the first-reported view, and reported on version 1.
 
 On 6M synthetic rows, fafnir's history's size, the model adds about 17 seconds to
 a run on four threads ([performance.md](performance.md#statements-dr-0906)).
+
+## The quarterly structure
+
+DQ914 copied-period, DQ915 absent-as-zero and DQ916 cumulative-quarters are the
+value model's row and zero hypotheses (fundamentals plan §4.1), judged on the same
+lines, predictions and identities:
+
+- **DQ914.** A row that repeats the period before it to the unit on at least
+  `copy_min_items` items, four in five of those both report and two of them flows,
+  against the chance of that many repeats from each item's own repeats in the
+  series.
+- **DQ915.** A 0 where the item is reported either side, weighed against a real 0:
+  as likely as the item's own zeros, and its chance of falling to 0 under the value
+  model. Items in `never_absent` are rarely absent for real. The evidence is the
+  row's identities, the year's quarter sum and its subtotals, which a value the
+  filing did not carry leaves as filed.
+- **DQ916.** A fiscal year's quarters stored year to date, or one quarter holding
+  the year, on the flows `--items` lists, for a year with four quarters and one
+  year in force.
+
+The rows DQ914 and DQ916 explain are not reported again by DQ911 or DQ919, and
+DQ911 leaves zeros, and values next to one, to DQ915.
 
 ## Output
 

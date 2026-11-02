@@ -24,6 +24,18 @@ enum class ValueHypothesis : std::uint8_t { kRealChange, kBadValue, kUnitError, 
 inline constexpr std::array<const char*, 4> kValueHypothesisNames{"real_change", "bad_value",
                                                                   "unit_error", "sign_error"};
 
+// What a finding is: the value model's four hypotheses (DQ911 to DQ913, DQ919), or
+// the quarterly structure's (DR-0907): a row copied from the one before (DQ914), a
+// zero where the item is reported either side (DQ915), a year's quarters stored
+// year to date, or a quarter holding its year (DQ916).
+enum class ValueKind : std::uint8_t {
+  kModel,
+  kCopied,
+  kAbsentZero,
+  kCumulative,
+  kAnnualInQuarter,
+};
+
 // What a finding covers: one value, every money item of one row, or a run of rows
 // (or one item's run of values) at a power of ten.
 enum class ValueScope : std::uint8_t { kValue, kRow, kEra };
@@ -31,6 +43,7 @@ enum class ValueScope : std::uint8_t { kValue, kRow, kEra };
 inline constexpr std::size_t kNoItem = std::numeric_limits<std::size_t>::max();
 
 struct ValueFinding {
+  ValueKind kind = ValueKind::kModel;
   ValueScope scope = ValueScope::kValue;
   std::size_t row = 0;                // the row (an era's first)
   std::size_t last_row = 0;           // an era's last row; `row` otherwise
@@ -48,10 +61,18 @@ struct ValueFinding {
   // A change large for its item: at least double or half the expected value, far
   // out, on an item whose values rarely stray. DQ919 reports these alone.
   bool notable = false;
+  // DQ914: the items the row shares with the period before it, of those both
+  // report, and the chance of that many repeats from the series' own; DQ916: the
+  // flows that fit, of those judged.
+  std::size_t present = 0;
+  double chance = 0.0;
+  std::int32_t fiscal_year = 0;
   bool in_force = false;  // flagged in the in-force view
   bool first_reported = false;
   std::vector<Evidence> evidence;
 
+  // The probability of an error. For the quarterly structure's findings, posterior
+  // holds the innocent explanation first and the error second.
   [[nodiscard]] double p_error() const noexcept {
     return posterior[1] + posterior[2] + posterior[3];
   }

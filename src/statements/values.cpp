@@ -998,9 +998,12 @@ bool screened(const Line& line, const Track& t, std::size_t p, bool signs) {
 }
 
 std::optional<ValueFinding> judge(const ViewContext& vc, const Line& line,
-                                  const std::vector<Track>& tracks, std::size_t self,
-                                  std::size_t p) {
+                                  const std::vector<Track>& tracks, std::size_t self, std::size_t p,
+                                  const std::vector<bool>& explained) {
   const Track& t = tracks[self];
+  if (explained[p]) {
+    return std::nullopt;  // a row the quarterly structure explains (DQ914, DQ916)
+  }
   const double x = t.x[p];
   const double pred = t.pred[p];
   const double sigma = t.sigma[p];
@@ -1123,6 +1126,396 @@ ValueFinding era_finding(const Line& line, const Era& e) {
   return f;
 }
 
+// ---------------------------------------------------------------------------
+// The quarterly structure (DR-0907): DQ914, DQ915 and DQ916.
+
+constexpr double kCopyPrior = 0.001;        // a row copied from the one before
+constexpr double kAbsentPrior = 0.002;      // a value the vendor wrote 0 for
+constexpr double kNeverAbsentPrior = 0.05;  // ... of an item in never_absent
+constexpr double kStructureReport = 0.2;    // below this, no finding
+constexpr double kAtLevel = 1.0;            // a zero's neighbours at the item's usual level
+constexpr double kSubtotalsStill = 2.0;     // subtotals that would show the drop did not move
+
+// P(N >= m) for N ~ Poisson(lambda).
+double poisson_tail(double lambda, std::size_t m) {
+  if (m == 0) {
+    return 1.0;
+  }
+  const double l = std::max(lambda, 1e-12);
+  // The first term, e^-l l^m / m!, in logs; each next one by the ratio l / k.
+  double log_term = -l;
+  for (std::size_t k = 1; k <= m; ++k) {
+    log_term += std::log(l) - std::log(static_cast<double>(k));
+  }
+  double term = std::exp(log_term);
+  double sum = 0.0;
+  for (std::size_t k = m; k < m + 400; ++k) {
+    sum += term;
+    const auto kd = static_cast<double>(k);
+    if (kd > l && term < 1e-16 * sum) {
+      break;
+    }
+    term *= l / (kd + 1.0);
+  }
+  return std::min(1.0, sum);
+}
+
+ValueFinding structure_finding(ValueKind kind, ValueScope scope, std::size_t row, double p) {
+  ValueFinding f;
+  f.kind = kind;
+  f.scope = scope;
+  f.row = f.last_row = row;
+  f.posterior = {1.0 - p, p, 0.0, 0.0};
+  return f;
+}
+
+// DQ914: a row that repeats the period before it on most of its items, to the
+// unit, against the chance of that many repeats given how often each item repeats
+// in this series.
+void copied_rows(const ViewContext& vc, const Line& line, const std::vector<Track>& tracks,
+                 std::vector<bool>& explained, std::vector<ValueFinding>& out) {
+  std::vector<std::size_t> repeats(tracks.size(), 0);
+  std::vector<std::size_t> pairs(tracks.size(), 0);
+  for (std::size_t j = 0; j < tracks.size(); ++j) {
+    const std::vector<double>& x = tracks[j].x;
+    for (std::size_t p = 1; p < line.size(); ++p) {
+      if (line.prev[p] != kNone && usable(x[p]) && usable(x[p - 1])) {
+        ++pairs[j];
+        if (x[p] == x[p - 1]) {
+          ++repeats[j];
+        }
+      }
+    }
+  }
+  const auto minimum = static_cast<std::size_t>(vc.settings.copy_min_items);
+  for (std::size_t p = 1; p < line.size(); ++p) {
+    if (line.prev[p] == kNone) {
+      continue;
+    }
+    std::size_t equal = 0;
+    std::size_t present = 0;
+    std::size_t flows = 0;  // the repeats that are flows: a balance can stand still
+    double lambda = 0.0;    // the repeats to expect by chance
+    for (std::size_t j = 0; j < tracks.size(); ++j) {
+      const double a = tracks[j].x[p - 1];
+      const double b = tracks[j].x[p];
+      if (!usable(a) || !usable(b)) {
+        continue;
+      }
+      ++present;
+      const bool same = a == b;
+      if (same) {
+        ++equal;
+        const ItemInfo& info = vc.info[tracks[j].item];
+        if (info.known ? info.flow : line.flows()) {
+          ++flows;
+        }
+      }
+      lambda += (static_cast<double>(repeats[j] - (same ? 1 : 0)) + 0.1) /
+                (static_cast<double>(pairs[j] - 1) + 10.0);
+    }
+    // A copy repeats the row, not half of it: at least four in five of the items.
+    if (equal < minimum || 5 * equal < 4 * present || flows < 2) {
+      continue;
+    }
+    const double tail = poisson_tail(lambda, equal);
+    const double p_copy = kCopyPrior / (kCopyPrior + (1.0 - kCopyPrior) * tail);
+    if (p_copy < kStructureReport) {
+      continue;
+    }
+    ValueFinding f = structure_finding(ValueKind::kCopied, ValueScope::kRow, line.rows[p], p_copy);
+    f.items = equal;
+    f.present = present;
+    f.chance = tail;
+    f.provisional = line.next[p] == kNone;
+    f.evidence.push_back({"repeats", static_cast<std::int64_t>(equal), std::log(1.0 / tail),
+                          std::to_string(equal) + " of " + std::to_string(present) + " items"});
+    out.push_back(std::move(f));
+    explained[p] = true;
+  }
+}
+
+// DQ916: a fiscal year's quarters stored year to date (quarter k the sum of 1 to k,
+// so Q4 is the year), or one quarter holding the year, judged on the flows --items
+// lists. A year with another count of quarters or years in force is not judged.
+void cumulative_years(const ViewContext& vc, const Line& line, const std::vector<Track>& tracks,
+                      std::vector<bool>& explained, std::vector<ValueFinding>& out) {
+  if (!vc.have_items || !line.seasonal()) {
+    return;
+  }
+  const StatementRows& st = vc.series.statements;
+  std::map<std::size_t, std::size_t> position;  // series row -> line position
+  for (std::size_t p = 0; p < line.size(); ++p) {
+    position.emplace(line.rows[p], p);
+  }
+  for (const auto& [fiscal_year, rows] : vc.years.at(static_cast<std::size_t>(line.statement))) {
+    const auto& [quarters, annual] = rows;
+    if (quarters.size() != 4 || annual.size() != 1 ||
+        !std::all_of(quarters.begin(), quarters.end(),
+                     [&](std::size_t r) { return position.contains(r); })) {
+      continue;
+    }
+    std::size_t judged = 0;
+    std::size_t cumulative = 0;
+    std::array<std::size_t, 4> holds_year{};
+    for (const Track& t : tracks) {
+      if (!vc.info[t.item].flow) {
+        continue;
+      }
+      const std::vector<double>& column = st.items[t.item];
+      const double year = column[annual.front()];
+      std::array<double, 4> q{};
+      double sum = 0.0;
+      double scale = std::fabs(year);
+      for (std::size_t k = 0; k < 4; ++k) {
+        q.at(k) = column[quarters[k]];
+        sum += q.at(k);
+        scale = std::max(scale, std::fabs(q.at(k)));
+      }
+      const double tolerance = std::max(vc.settings.identity_share * scale, vc.settings.tie_floor);
+      if (!std::isfinite(sum) || !std::isfinite(year) || std::fabs(year) <= tolerance) {
+        continue;
+      }
+      ++judged;
+      if (std::fabs(sum - year) <= tolerance) {
+        continue;  // the year's quarters sum to it: neither
+      }
+      // A plausible quarter: of the year's sign, and a twentieth to 70% of it.
+      const auto quarter_like = [&](double v) {
+        return std::signbit(v) == std::signbit(year) && std::fabs(v) >= 0.05 * std::fabs(year) &&
+               std::fabs(v) <= 0.7 * std::fabs(year);
+      };
+      if (std::fabs(q.at(3) - year) <= tolerance && quarter_like(q.at(0)) &&
+          quarter_like(q.at(1) - q.at(0)) && quarter_like(q.at(2) - q.at(1)) &&
+          quarter_like(q.at(3) - q.at(2))) {
+        ++cumulative;
+      }
+      for (std::size_t k = 0; k < 4; ++k) {
+        if (std::fabs(q.at(k) - year) <= tolerance && quarter_like(year - (sum - q.at(k)))) {
+          ++holds_year.at(k);
+        }
+      }
+    }
+    const auto most = [judged](std::size_t fit) { return fit >= 3 && 2 * fit >= judged; };
+    if (most(cumulative)) {
+      ValueFinding f = structure_finding(ValueKind::kCumulative, ValueScope::kEra, quarters[1],
+                                         3 * cumulative >= 2 * judged ? 0.97 : 0.9);
+      f.last_row = quarters[3];
+      f.rows = 3;
+      f.items = cumulative;
+      f.present = judged;
+      f.fiscal_year = fiscal_year;
+      f.evidence.push_back({"quarters_to_date", static_cast<std::int64_t>(cumulative), 0.0,
+                            std::to_string(cumulative) + " of " + std::to_string(judged) +
+                                " flows: Q4 is the year, and each quarter less the one before "
+                                "is a quarter"});
+      for (std::size_t k = 1; k < 4; ++k) {
+        explained[position.at(quarters[k])] = true;
+      }
+      out.push_back(std::move(f));
+      continue;
+    }
+    for (std::size_t k = 0; k < 4; ++k) {
+      if (!most(holds_year.at(k))) {
+        continue;
+      }
+      ValueFinding f = structure_finding(ValueKind::kAnnualInQuarter, ValueScope::kRow, quarters[k],
+                                         3 * holds_year.at(k) >= 2 * judged ? 0.95 : 0.9);
+      f.items = holds_year.at(k);
+      f.present = judged;
+      f.fiscal_year = fiscal_year;
+      f.evidence.push_back({"quarter_is_year", static_cast<std::int64_t>(holds_year.at(k)), 0.0,
+                            std::to_string(holds_year.at(k)) + " of " + std::to_string(judged) +
+                                " flows equal the year's"});
+      explained[position.at(quarters[k])] = true;
+      out.push_back(std::move(f));
+      break;
+    }
+  }
+}
+
+// DQ915: a 0 where the item is reported in the periods either side, weighed as the
+// vendor's 0 for a value the filing did not carry against a real 0, by the item's
+// own zeros and never_absent, with the row's identities and the year's quarter sum
+// as evidence.
+// The odds of a 0 being absent against real, as log weights, and the finding they
+// go into.
+struct ZeroCase {
+  double log_absent = 0.0;
+  double log_real = 0.0;
+  ValueFinding finding;
+};
+
+// The row's subtotals: a value that fell to 0 takes those it is part of down by as
+// much, where a value the filing did not carry leaves them as filed.
+void zero_subtotals(const ViewContext& vc, const std::vector<Track>& tracks, const Track& t,
+                    std::size_t p, ZeroCase& z) {
+  const double drop = -z.finding.expected;
+  bool moved = false;
+  bool unmoved = true;      // every subtotal that would show the drop stayed put
+  std::size_t visible = 0;  // the subtotals the drop would show in
+  for (const Track& o : tracks) {
+    if (&o == &t || !o.ready || !vc.info[o.item].subtotal || !usable(o.x[p]) ||
+        !std::isfinite(o.pred[p])) {
+      continue;
+    }
+    const double o_expected = o.s * std::sinh(o.pred[p]);
+    const double change = o.x[p] - o_expected;
+    const double noise = o.sigma[p] * std::hypot(o.s, o_expected);
+    if (std::fabs(change - drop) <= 0.35 * std::fabs(drop)) {
+      moved = true;
+    } else if (std::fabs(drop) > 3.0 * noise) {
+      ++visible;
+      unmoved = unmoved && std::fabs(change) < 0.35 * std::fabs(drop);
+    }
+  }
+  if (moved) {
+    z.log_real += kSubtotalMoves;
+    z.finding.evidence.push_back({"subtotal_moves", true, -kSubtotalMoves, ""});
+  } else if (visible >= 2 && unmoved) {
+    z.log_absent += kSubtotalsStill;
+    z.finding.evidence.push_back({"subtotals_unmoved", true, kSubtotalsStill, ""});
+  }
+}
+
+// The row's identities with the 0: one that holds is evidence it is real, and one
+// that fails and needs a value that fits the periods around it, that it is absent.
+void zero_identities(const ViewContext& vc, const Track& t, std::size_t p, std::size_t i,
+                     ZeroCase& z) {
+  const StatementRows& st = vc.series.statements;
+  bool held = false;
+  for (const IdentityTerms& terms : vc.identities) {
+    const auto it = std::find(terms.items.begin(), terms.items.end(), t.item);
+    if (it == terms.items.end()) {
+      continue;
+    }
+    const std::optional<Gap> g = identity_gap(st, terms, vc.settings, i, t.item, 0.0);
+    if (!g) {
+      continue;
+    }
+    if (g->holds()) {
+      held = true;
+      continue;
+    }
+    const double needed = -g->gap / terms.signs[static_cast<std::size_t>(it - terms.items.begin())];
+    if (std::fabs(std::asinh(needed / t.s) - t.pred[p]) <= std::max(kUnusual * t.sigma[p], 0.3)) {
+      z.log_absent += kIdentityRepair;
+      z.finding.repaired = needed;
+      z.finding.evidence.push_back({"identity_repair", terms.identity->name, kIdentityRepair, ""});
+    }
+  }
+  if (held) {
+    z.log_real += kIdentityHolds;
+    z.finding.evidence.push_back({"identity_holds", true, -kIdentityHolds, ""});
+  }
+}
+
+// The year's quarters against the year with the 0 (a flow, with --items).
+void zero_quarter_sum(const ViewContext& vc, const Track& t, std::size_t p, std::size_t i,
+                      ZeroCase& z) {
+  const StatementRows& st = vc.series.statements;
+  if (!vc.have_items || !vc.info[t.item].flow) {
+    return;
+  }
+  const Years& years = vc.years.at(static_cast<std::size_t>(st.statement[i]));
+  const std::optional<Gap> g = quarter_gap(st, years, vc.settings, i, t.item, 0.0);
+  if (!g) {
+    return;
+  }
+  if (g->holds()) {
+    z.log_real += kQuarterHolds;
+    z.finding.evidence.push_back({"quarter_sum_holds", true, -kQuarterHolds, ""});
+    return;
+  }
+  const double needed = st.period_type[i] == PeriodType::kAnnual ? g->gap : -g->gap;
+  if (std::fabs(std::asinh(needed / t.s) - t.pred[p]) <= 0.3) {
+    z.log_absent += kQuarterRepair;
+    z.finding.evidence.push_back({"quarter_sum_repair", true, kQuarterRepair, ""});
+  }
+}
+
+// One 0 of an item: absent, or real.
+std::optional<ValueFinding> judge_zero(const ViewContext& vc, const Line& line,
+                                       const std::vector<Track>& tracks, const Track& t,
+                                       std::size_t p, double zero_rate, bool never) {
+  ZeroCase z;
+  z.finding = structure_finding(ValueKind::kAbsentZero, ValueScope::kValue, line.rows[p], 0.0);
+  ValueFinding& f = z.finding;
+  f.item = t.item;
+  f.expected = t.s * std::sinh(t.pred[p]);
+  f.repaired = f.expected;
+  // A real 0: as often as the item is 0 elsewhere, or as likely as its value
+  // falling to 0 or past it is, by the real-change model (a balance that runs down
+  // to nothing, or an item as volatile as its level).
+  const double sigma = t.sigma[p];
+  const double wide = std::max(kBadScale, 4 * sigma);
+  const double large =
+      (static_cast<double>(t.outliers) + 0.1) / (static_cast<double>(t.judged) + 10.0);
+  const double reach = -std::fabs(t.pred[p]);
+  const double to_zero = (1.0 - large) * stats::student_t_cdf(reach / sigma, kNu) +
+                         large * stats::student_t_cdf(reach / wide, kNu);
+  const double real_chance = zero_rate + (1.0 - zero_rate) * to_zero;
+  z.log_absent = std::log(never ? kNeverAbsentPrior : kAbsentPrior);
+  z.log_real = std::log(real_chance);
+  if (never) {
+    f.evidence.push_back({"never_absent", true, 0.0, ""});
+  }
+  f.evidence.push_back(
+      {"real_zero_chance", real_chance, 0.0, "the item at 0 elsewhere, or falling to it"});
+  zero_subtotals(vc, tracks, t, p, z);
+  // Reported at its level either side, not running down to 0.
+  if (std::min(std::fabs(at(t.x, line.prev[p])), std::fabs(at(t.x, line.next[p]))) >= 0.5 * t.s) {
+    z.log_absent += kAtLevel;
+    f.evidence.push_back({"reported_at_level", true, kAtLevel, ""});
+  }
+  zero_identities(vc, t, p, line.rows[p], z);
+  zero_quarter_sum(vc, t, p, line.rows[p], z);
+  const double p_absent = 1.0 / (1.0 + std::exp(z.log_real - z.log_absent));
+  if (p_absent < kStructureReport) {
+    return std::nullopt;
+  }
+  f.posterior = {1.0 - p_absent, p_absent, 0.0, 0.0};
+  f.provisional = line.next[p] == kNone;
+  return std::move(z.finding);
+}
+
+// DQ915: a 0 where the item is reported in the periods either side, weighed as the
+// vendor's 0 for a value the filing did not carry against a real 0, by the item's
+// own zeros and never_absent, with the row's identities, the year's quarter sum and
+// the row's subtotals as evidence.
+void absent_zeros(const ViewContext& vc, const Line& line, const std::vector<Track>& tracks,
+                  const std::vector<bool>& explained, std::vector<ValueFinding>& out) {
+  const StatementRows& st = vc.series.statements;
+  for (const Track& t : tracks) {
+    if (!t.ready) {
+      continue;  // an item often at 0: a real 0 is likelier
+    }
+    const auto zeros = static_cast<std::size_t>(std::count(t.x.begin(), t.x.end(), 0.0));
+    const auto finite = static_cast<std::size_t>(
+        std::count_if(t.x.begin(), t.x.end(), [](double v) { return std::isfinite(v); }));
+    const auto negative = static_cast<std::size_t>(
+        std::count_if(t.x.begin(), t.x.end(), [](double v) { return usable(v) && v < 0.0; }));
+    const std::size_t nonzero = finite - zeros;
+    if (zeros == 0 || std::min(negative, nonzero - negative) * 20 > nonzero) {
+      continue;  // no 0, or both signs: it crosses 0
+    }
+    const std::string& name = st.item_names[t.item];
+    const bool never = std::any_of(vc.settings.never_absent.begin(), vc.settings.never_absent.end(),
+                                   [&](const std::string& n) { return iequals(n, name); });
+    const double zero_rate =
+        (static_cast<double>(zeros - 1) + 0.1) / (static_cast<double>(finite - 1) + 10.0);
+    for (std::size_t p = 0; p < line.size(); ++p) {
+      if (t.x[p] != 0.0 || explained[p] || !usable(at(t.x, line.prev[p])) ||
+          !usable(at(t.x, line.next[p])) || !std::isfinite(t.pred[p])) {
+        continue;
+      }
+      if (std::optional<ValueFinding> f = judge_zero(vc, line, tracks, t, p, zero_rate, never)) {
+        out.push_back(std::move(*f));
+      }
+    }
+  }
+}
+
 // Judges a view's lines; a line `judged` already holds the same rows of is left
 // out (each line of the as-first-reported view that no restatement changed).
 std::vector<Line> analyze_view(const ViewContext& vc, const std::vector<std::size_t>& view,
@@ -1186,12 +1579,16 @@ std::vector<Line> analyze_view(const ViewContext& vc, const std::vector<std::siz
     for (Track& t : tracks) {
       prepare(line, t, vc.settings.priors);
     }
+    std::vector<bool> explained(line.size(), false);
+    copied_rows(vc, line, tracks, explained, out);
+    cumulative_years(vc, line, tracks, explained, out);
+    absent_zeros(vc, line, tracks, explained, out);
     for (std::size_t j = 0; j < tracks.size(); ++j) {
       if (!tracks[j].ready) {
         continue;
       }
       for (std::size_t p = 0; p < line.size(); ++p) {
-        if (std::optional<ValueFinding> f = judge(vc, line, tracks, j, p)) {
+        if (std::optional<ValueFinding> f = judge(vc, line, tracks, j, p, explained)) {
           out.push_back(std::move(*f));
         }
       }
@@ -1242,9 +1639,10 @@ StatementValueAnalysis analyze_statement_values(const Series& series, const Stat
     }
     for (ValueFinding& f : found) {
       (in_force ? f.in_force : f.first_reported) = true;
-      const auto key = std::make_tuple(
-          series.date[f.row].days(), static_cast<int>(st.statement[f.row]),
-          static_cast<int>(st.period_type[f.row]), f.item, static_cast<int>(f.scope));
+      const auto key =
+          std::make_tuple(series.date[f.row].days(), static_cast<int>(st.statement[f.row]),
+                          static_cast<int>(st.period_type[f.row]), f.item,
+                          static_cast<int>(f.scope) * 8 + static_cast<int>(f.kind));
       std::vector<std::size_t>& same = seen[key];
       const auto match = std::find_if(same.begin(), same.end(), [&](std::size_t k) {
         const ValueFinding& o = analysis.findings[k];

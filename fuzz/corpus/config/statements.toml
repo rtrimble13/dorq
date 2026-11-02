@@ -8,6 +8,7 @@ coverage_floor = "1998-01-01"
 nonnegative = ["revenue", "total_assets"]
 never_absent = ["revenue"]
 bounds = ["total_current_assets <= total_assets"]
+copy_min_items = 4
 cash_tie = ["cash_and_equivalents", "net_change_in_cash"]
 null_is_zero = ["fx_effect_on_cash"]
 restricted_cash_from = "2018-01-01"

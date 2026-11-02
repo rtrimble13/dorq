@@ -1849,7 +1849,9 @@ void Universe::identity_breaks() {
     // that is wrong, which DQ911 can see where the term is a large part of it.
     const char* kind = doubled ? "identity_doubled_field" : "identity_dropped_field";
     label_row(c, row, kind, "DQ903", std::string{info(term).column});
-    label_row(c, row, kind, "DQ911", std::string{info(eq.total).column});
+    // A total left at 0 is DQ915's to see.
+    label_row(c, row, kind, row.values.at(eq.total) == 0.0 ? "DQ911|DQ915" : "DQ911",
+              std::string{info(eq.total).column});
     ++done;
   }
 }

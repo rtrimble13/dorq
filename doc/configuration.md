@@ -155,6 +155,7 @@ nonnegative = []      # items that cannot be negative
 never_absent = []     # items a reporting company always carries
 null_is_zero = []     # items an identity reads as 0 where NULL
 bounds = []           # "item <= item"
+copy_min_items = 5    # DQ914: a copied row repeats at least this many items
 cash_tie = []         # DQ904: [cash item, its change on the cash flow], or none
 restricted_cash_from = "2018-01-01"  # the cash flow includes restricted cash from here,
 restricted_cash_share = 0.1          # up to this share of the balance
