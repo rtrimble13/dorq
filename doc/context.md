@@ -100,8 +100,18 @@ With `--actions`:
 | `tick_size` | `tick` | the exchange tick |
 | `peer_group` | `family` | series that move together (a fund family) |
 | `exchange` | `exchange_code`, `mic` | the listing exchange |
+| `currency` | `trading_currency`, `trade_currency` | the currency it trades in (DQ944) |
+| `first_trade_date` | `first_price_date`, `first_trade`, `ipo_date` | its first trading day (DQ941, DQ943) |
+| `last_trade_date` | `last_price_date`, `last_trade` | its last (DQ941, DQ942, DQ943) |
+| `active` | `is_actively_trading`, `is_active`; `is_delisted`, read the other way | still trading (DQ942) |
+| `delisted_date` | `delisted_on`, `delist_date` | the day it was delisted |
+| `sector` | `sector_name` | its sector: profiles match on it |
+| `industry` | `industry_name` | its industry |
+| `statements_expected` | `has_statements`; `first_quarter`, set when not empty | the vendor files statements for it (DQ943) |
 
-Every column but `series` is optional, and a series may appear only once.
+Every column but `series` is optional, and a series may appear only once. The other
+names are fafnir's (`core.security`, `core.vendor_security`). A date may be a
+timestamp, read as its day.
 
 - **Profiles** can match `asset_type`, `nav_priced`, `exchange` and `peer_group`
   (doc/configuration.md). A profile that matches on one of these never matches a
@@ -111,6 +121,12 @@ Every column but `series` is optional, and a series may appear only once.
   decimals the prices are written to.
 - **`peer_group`**: siblings in a group that move by the same split ratio on the
   same day are evidence that each split (DQ601).
+- **The trading life and statements** (DQ94x, statements only): a period is
+  expected only while the security traded, and from the coverage floor; a security
+  no longer trading is not stale. After a statements input, dorq visits each meta
+  series the input did not have, in the file's order, as a series with no rows: one
+  with `statements_expected` is DQ943's. A bars run reads these fields and makes
+  nothing of them: its output is the same with them or without.
 - **`nav_priced`**: a fund struck once a day at NAV. Its fall of 2% to 35% that
   holds, with no dividend on file to explain it, is likely a distribution the
   actions file does not have yet (DQ209, `pending_distribution`;

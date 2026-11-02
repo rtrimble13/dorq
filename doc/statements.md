@@ -188,6 +188,7 @@ prior_weight = 6              # in periods, against the item's own residuals
 | DQ914, DQ915, DQ916 | both views: copied rows, zeros where the item is reported either side, and quarters to date (`--items`' flows) |
 | DQ921, DQ922 | both views: the share counts `--items` lists, in one share terms with `--actions`' splits (share counts, below) |
 | DQ931, DQ932 | every version: each period's filing date against the issuer's own lags, and each version against the one before it (the knowledge timeline, below) |
+| DQ941, DQ942, DQ943, DQ944 | the period sequence, with `--meta`'s trading life: a period missing, the series stale by `--as-of`, statements missing, another currency (coverage and freshness, below) |
 | DQ951 | the whole input, once every series is in: revisions and findings by the day they became known |
 | the other DQ9xx | only on statements, as the plan adds them |
 | DQ104 | on every kind: a field that cannot be used |
@@ -335,6 +336,24 @@ revision-cohort judge when a version became known (fundamentals plan §4.4, §4.
   info), or carrying one finding in rows known the same day (a load fault, at
   warn), beyond the base rate. A load fault's DQ932 and DQ903 reports go to info,
   linked to it. While DQ951 runs, results are held until every series is in.
+
+## Coverage and freshness
+
+DQ941 period-gap, DQ942 statements-stale, DQ943 statements-missing and DQ944
+reporting-currency succeed fafnir's `fundamentals_gap`, `fundamentals_ttm_incomplete`,
+`fundamentals_stale`, `fundamentals_coverage` and `fundamentals_currency_mismatch`
+(fundamentals plan §4.5). Where those used fixed spans, these go by the issuer's own
+cadence and lags, and by `--meta`'s trading life:
+
+- **DQ941.** Each period type's sequence, by spacing and labels: a missing period
+  while the security traded, a change of fiscal year (info), a mislabelled quarter,
+  or a period not yet filed (info).
+- **DQ942.** With `--as-of`: no newer period by then, against the next period's end
+  plus the issuer's usual lag. A security no longer trading is not stale.
+- **DQ943.** A security `--meta` expects statements for, with none. After the
+  input, dorq visits each meta series it did not have, in the meta file's order.
+- **DQ944.** Statements in another currency than the one the security trades in,
+  at info.
 
 ## Output
 
