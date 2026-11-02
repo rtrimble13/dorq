@@ -32,10 +32,13 @@ ShareHypothesis ShareFinding::explanation() const noexcept {
 namespace {
 
 constexpr double kStepSd = 0.04;   // a clean step's spread, on the log scale (issuance meanwhile)
-constexpr double kCapSd = 0.25;    // the market cap's move between two filings a quarter apart
+constexpr double kCapSd = 0.25;    // the market cap's move between two filings, without a line's own
+constexpr double kCapFloor = 0.05;  // the least a line's market cap spread is taken to be
+constexpr double kCapTail = 0.15;   // the share of market cap moves from the fat tail
 constexpr double kRealSd = 0.35;   // a real issuance's step (an offering, a merger)
 constexpr double kMinStep = 0.22;  // log 1.25: smaller steps are issuance
 constexpr double kMatch = 0.1;     // a step at a split's ratio, to within this on the log scale
+constexpr double kMatchMax = 0.25;  // ... widened by a line's own real steps, at most this
 constexpr double kSplitRate = 0.04;  // splits missing from the actions a year: 0.01 a quarter
 constexpr double kTermsPrior = 0.01;
 constexpr double kUnitPrior = 0.002;
@@ -147,7 +150,14 @@ struct Nearest {
   double power_ll = -std::numeric_limits<double>::infinity();
 };
 
-Nearest nearest(double d, const PriceSettings& price) {
+// How near a step must be to a ratio: kMatch, or 2.5 times the step's spread (a
+// split's ratio plus the line's real change meanwhile), whichever is wider.
+double tolerance(double sd) { return std::min(kMatchMax, std::max(kMatch, 2.5 * sd)); }
+
+// A step's spread about a clean ratio on a line whose real steps spread by `noise`.
+double ratio_sd(double noise) { return std::hypot(kStepSd, noise); }
+
+Nearest nearest(double d, const PriceSettings& price, double sd) {
   Nearest n;
   double total = 0.0;
   for (const SplitRatio& r : price.split_ratios) {
@@ -156,20 +166,20 @@ Nearest nearest(double d, const PriceSettings& price) {
   double best = std::numeric_limits<double>::infinity();
   for (const SplitRatio& r : price.split_ratios) {
     n.ratio_ll = log_add(n.ratio_ll, std::log(split_weight(r) / total) +
-                                         normal_log_pdf(d, log_of(r), kStepSd));
+                                         normal_log_pdf(d, log_of(r), sd));
     if (std::fabs(d - log_of(r)) < best) {
       best = std::fabs(d - log_of(r));
       n.ratio = r;
     }
   }
-  if (best > kMatch) {
+  if (best > tolerance(sd)) {
     n.ratio.reset();
   }
   for (const int k : kPowers) {
-    const double ll = normal_log_pdf(d, k * std::numbers::ln10, kStepSd) - std::log(4.0);
+    const double ll = normal_log_pdf(d, k * std::numbers::ln10, sd) - std::log(4.0);
     if (ll > n.power_ll) {
       n.power_ll = ll;
-      n.power = std::fabs(d - k * std::numbers::ln10) < kMatch ? k : 0;
+      n.power = std::fabs(d - k * std::numbers::ln10) < tolerance(sd) ? k : 0;
     }
   }
   return n;
@@ -204,7 +214,7 @@ struct SplitFit {
   double ll = kNegInf;
 };
 
-SplitFit split_fit(double s, double price, const PriceSettings& ps) {
+SplitFit split_fit(double s, double price, const PriceSettings& ps, double sd) {
   const double forward = usable(price) ? split_level_weights(price) : 0.5;
   double forward_total = 0.0;
   double reverse_total = 0.0;
@@ -217,13 +227,13 @@ SplitFit split_fit(double s, double price, const PriceSettings& ps) {
     const bool up = r.shares_after > r.shares_before;
     const double total = up ? forward_total : reverse_total;
     const double weight = (up ? forward : 1.0 - forward) * split_weight(r) / total;
-    fit.ll = log_add(fit.ll, std::log(weight) + normal_log_pdf(s, log_of(r), kStepSd));
+    fit.ll = log_add(fit.ll, std::log(weight) + normal_log_pdf(s, log_of(r), sd));
     if (std::fabs(s - log_of(r)) < best) {
       best = std::fabs(s - log_of(r));
       fit.ratio = r;
     }
   }
-  if (best > kMatch) {
+  if (best > tolerance(sd)) {
     fit.ratio.reset();
   }
   return fit;
@@ -259,7 +269,7 @@ double to_latest(const ShareContext& sc, Date known) {
 
 // The split on file with its ex-date in (from, to] whose ratio, either way, or
 // twice it, the step is; nullptr for none. `multiple` is the matching one.
-const SplitAction* split_in(const ShareContext& sc, Date from, Date to, double d,
+const SplitAction* split_in(const ShareContext& sc, Date from, Date to, double d, double sd,
                             double* multiple = nullptr) {
   for (const SplitAction& split : sc.splits) {
     if (split.ex_date <= from || split.ex_date > to) {
@@ -267,7 +277,7 @@ const SplitAction* split_in(const ShareContext& sc, Date from, Date to, double d
     }
     const double l = std::fabs(std::log(split.numerator / split.denominator));
     for (const double m : {l, 2.0 * l}) {
-      if (std::fabs(std::fabs(d) - m) < kMatch) {
+      if (std::fabs(std::fabs(d) - m) < tolerance(sd)) {
         if (multiple != nullptr) {
           *multiple = m;
         }
@@ -278,49 +288,34 @@ const SplitAction* split_in(const ShareContext& sc, Date from, Date to, double d
   return nullptr;
 }
 
-// The partner count's step over the same two periods, put into the latest terms: an
-// income count's partner is the balance sheet's outstanding count, a balance-sheet
-// count's the weighted average.
-std::optional<double> partner_step(const ShareContext& sc, std::size_t a, std::size_t b,
-                                   bool weighted_item) {
-  const StatementRows& st = sc.series.statements;
-  const Statement other = weighted_item ? Statement::kBalanceSheet : Statement::kIncome;
-  const auto find = [&](std::size_t r) {
-    const auto it = sc.rows.find(
-        {sc.series.date[r].days(), static_cast<int>(st.period_type[r]), static_cast<int>(other)});
-    return it == sc.rows.end() ? std::optional<std::size_t>{} : std::optional{it->second};
-  };
-  const std::optional<std::size_t> pa = find(a);
-  const std::optional<std::size_t> pb = find(b);
-  if (!pa || !pb) {
-    return std::nullopt;
-  }
-  for (const std::size_t item : weighted_item ? sc.outstanding : sc.weighted) {
-    const double va = st.items[item][*pa] * to_latest(sc, st.known_from[*pa]);
-    const double vb = st.items[item][*pb] * to_latest(sc, st.known_from[*pb]);
-    if (usable(va) && usable(vb)) {
-      return std::log(vb / va);
-    }
-  }
-  return std::nullopt;
-}
-
 double normal_cdf(double z) { return 0.5 * std::erfc(-z / std::numbers::sqrt2); }
 
-// The log density of the weighted-average count's step `dw` given the outstanding
-// count's `dout` under a real issuance: the shares come some time in the period, so
-// the average moves by a uniform share of the outstanding count's step, give or
-// take `sd`.
-double issuance_log_pdf(double dw, double dout, double sd) {
-  if (dout < 0.0) {
-    dw = -dw;
-    dout = -dout;
+// The log density at x of a value anywhere between lo and hi, uniformly, give or take
+// sd.
+double uniform_normal_log_pdf(double x, double lo, double hi, double sd) {
+  if (hi < lo) {
+    std::swap(lo, hi);
   }
-  const double mass = normal_cdf((dout - dw) / sd) - normal_cdf(-dw / sd);
-  return std::log(std::max(mass, 1e-300) / std::max(dout, sd));
+  if (hi - lo < 0.1 * sd) {
+    return normal_log_pdf(x, 0.5 * (lo + hi), sd);
+  }
+  const double mass = normal_cdf((hi - x) / sd) - normal_cdf((lo - x) / sd);
+  return std::log(std::max(mass, 1e-300) / (hi - lo));
 }
 
-// Two counts' knowledge dates: the window a missing split would be in, and the
+// A count's partner at a step: the other statement's count for the same periods
+// (an income count's is the balance sheet's outstanding count, a balance-sheet
+// count's the weighted average). A period's weighted average is the mean of its
+// outstanding counts, so it lies between the counts at its start and end: anywhere
+// between for an issuance in the period, at the end for a split (its counts all
+// restated) or a filing stored in other terms.
+struct PairAt {
+  double position = 0.0;  // log(weighted / outstanding) at the step's period, less its median
+  double other_step = 0.0;  // the partner's step, a to b, in the latest terms
+  double sd = 0.02;         // the position's spread along the line
+};
+
+// Two counts' knowledge dates:// Two counts' knowledge dates: the window a missing split would be in, and the
 // ratio of the later-known count to the earlier-known, from `d` = log(b / a).
 // Returns the earlier-known row.
 std::size_t set_window(const StatementRows& st, std::size_t a, std::size_t b, double d,
@@ -333,32 +328,71 @@ std::size_t set_window(const StatementRows& st, std::size_t a, std::size_t b, do
   return forward ? a : b;
 }
 
-// The market cap's spread between two knowledge dates: kCapSd a quarter, as a
-// random walk.
-double cap_sd(const ShareFinding& f) {
-  const double quarters = static_cast<double>(f.window_to.days() - f.window_from.days()) / 91.0;
-  return kCapSd * std::sqrt(std::max(1.0, quarters));
-}
-
-// A count's real steps along its line: their median, and their spread about it.
+// A count's real steps along its line: their median, and their spread about it; and
+// the spread of the market cap it implies (the count as stored times the close at
+// its knowledge date) from one period to the next.
 struct Trend {
   double median = 0.0;
   double noise = 0.0;
+  double cap_sd = kCapSd;
+  double period_days = 91.0;  // the line's spacing
 };
 
+// The market cap's spread between two knowledge dates: the line's own, as a random
+// walk over the periods between them.
+double cap_sd(const ShareFinding& f, const Trend& trend) {
+  const double periods =
+      static_cast<double>(f.window_to.days() - f.window_from.days()) / trend.period_days;
+  return trend.cap_sd * std::sqrt(std::max(1.0, periods));
+}
+
+// The market cap's move: returns have fat tails, so the line's spread most of the
+// time and four times it now and then.
+double cap_log_pdf(double x, double mean, double sd) {
+  return log_add(std::log(1.0 - kCapTail) + normal_log_pdf(x, mean, sd),
+                 std::log(kCapTail) + normal_log_pdf(x, mean, 4.0 * sd));
+}
+
+// The line's market cap spread from period to period: robust, so the steps a fault
+// leaves do not widen it; kCapSd with too few periods to say.
+double line_cap_sd(const Series& s, const Line& line, std::size_t item) {
+  const StatementRows& st = s.statements;
+  std::vector<double> steps;
+  for (std::size_t p = 1; p < line.rows.size(); ++p) {
+    const std::size_t a = line.rows[p - 1];
+    const std::size_t b = line.rows[p];
+    if (line.follows[p] && usable(s.close[a]) && usable(s.close[b]) && usable(st.items[item][a]) &&
+        usable(st.items[item][b])) {
+      steps.push_back(std::log(st.items[item][b] * s.close[b] / (st.items[item][a] * s.close[a])));
+    }
+  }
+  if (steps.size() < 4) {
+    return kCapSd;
+  }
+  const double median = median_of(steps);
+  for (double& x : steps) {
+    x = std::fabs(x - median);
+  }
+  return std::max(kCapFloor, 1.4826 * median_of(steps));
+}
+
 // DQ921: one step of one item, a to b, put into the latest terms (step = log b / a),
-// against the item's own trend; nullopt for a step no clean ratio explains.
+// against the item's own trend; `d` is the factor to judge, the step net of the
+// trend, or a run's measured going in and coming out. nullopt for a step no clean
+// ratio explains.
 std::optional<ShareFinding> judge_step(const ShareContext& sc, std::size_t item, std::size_t a,
-                                       std::size_t b, double step, const Trend& trend) {
+                                       std::size_t b, double step, double d, const Trend& trend,
+                                       const std::optional<PairAt>& pair) {
   const Series& s = sc.series;
   const StatementRows& st = s.statements;
-  const double d = step - trend.median;  // net of the count's steady issuance or buybacks
+  const double moved = step - trend.median;  // net of the count's steady issuance or buybacks
   const double noise = trend.noise;
   ShareFinding f;
   const std::size_t earlier = set_window(st, a, b, d, f);
   double multiple = 0.0;
-  const SplitAction* on_file = split_in(sc, f.window_from, f.window_to, d, &multiple);
-  const Nearest near = nearest(d, sc.price);
+  const double sd_ratio = ratio_sd(noise);
+  const SplitAction* on_file = split_in(sc, f.window_from, f.window_to, d, sd_ratio, &multiple);
+  const Nearest near = nearest(d, sc.price, sd_ratio);
   if (!near.ratio && near.power == 0 && on_file == nullptr) {
     return std::nullopt;  // not a clean ratio: issuance or buybacks
   }
@@ -377,7 +411,7 @@ std::optional<ShareFinding> judge_step(const ShareContext& sc, std::size_t item,
     const auto den = static_cast<int>(on_file->denominator);
     f.ratio = (d > 0.0) == (num > den) ? SplitRatio{num, den} : SplitRatio{den, num};
   }
-  const SplitFit fit = split_fit(f.implied, s.close[earlier], sc.price);
+  const SplitFit fit = split_fit(f.implied, s.close[earlier], sc.price, sd_ratio);
   f.split = fit.ratio;
   // With close: the implied market cap, the counts as stored times the raw close at
   // their knowledge dates, both in the terms of that date. A missing split leaves it
@@ -388,41 +422,45 @@ std::optional<ShareFinding> judge_step(const ShareContext& sc, std::size_t item,
     cap = std::log(f.value * s.close[b] / (raw_a * s.close[a]));
     f.cap_step = cap;
   }
-  const double sd = cap_sd(f);
-  const double cap_moved = cap ? normal_log_pdf(*cap, step, sd) : 0.0;
-  const double cap_level = cap ? normal_log_pdf(*cap, trend.median, sd) : 0.0;
+  const double sd = cap_sd(f, trend);
+  const double cap_moved = cap ? cap_log_pdf(*cap, step, sd) : 0.0;
+  const double cap_level = cap ? cap_log_pdf(*cap, trend.median, sd) : 0.0;
   const double p_split = f.same_known ? 0.0 : missing_split_prior(f.window_from, f.window_to);
   // A real change in the count: mostly the item's own small moves, now and then an
   // offering or a merger.
-  const double real = log_add(std::log(1.0 - kLargeIssuance) + normal_log_pdf(d, 0.0, noise),
-                              std::log(kLargeIssuance) + normal_log_pdf(d, 0.0, kRealSd));
+  const double real = log_add(std::log(1.0 - kLargeIssuance) + normal_log_pdf(moved, 0.0, noise),
+                              std::log(kLargeIssuance) + normal_log_pdf(moved, 0.0, kRealSd));
   std::array<double, 4> log{};
   log[0] = std::log(1.0 - p_split - kTermsPrior - kUnitPrior) + real + cap_moved;
   log[1] = f.same_known ? kNegInf : std::log(p_split) + fit.ll + cap_level;
   log[2] = kNegInf;
   if (on_file != nullptr) {
-    log[2] = std::log(kTermsPrior) + normal_log_pdf(std::fabs(d), multiple, kStepSd) + cap_moved;
+    log[2] = std::log(kTermsPrior) + normal_log_pdf(std::fabs(d), multiple, sd_ratio) + cap_moved;
   }
   log[3] = std::log(kUnitPrior) + near.power_ll + cap_moved;
-  // A split restates the period's weighted average with its outstanding count, so
-  // the two step alike, as they do for a filing stored in the wrong terms; an
-  // issuance moves the average by part of the outstanding count's step; a count
-  // stored at a power of ten steps alone.
-  const bool weighted_item = st.statement[b] == Statement::kIncome;
-  if (const std::optional<double> y = partner_step(sc, a, b, weighted_item)) {
-    const double py = *y - trend.median;
-    const double pair_sd = std::max(0.02, std::numbers::sqrt2 * noise);
-    const double dw = weighted_item ? d : py;
-    const double dout = weighted_item ? py : d;
-    const double alike = normal_log_pdf(dw - dout, 0.0, pair_sd);
-    const double issued = issuance_log_pdf(dw, dout, pair_sd);
+  // The weighted average's place in its period: at the period's end for a split, a
+  // filing in other terms, or (against the other count) a count stored at a power of
+  // ten; anywhere between its start and end for an issuance. Against a weighted
+  // average's step, a real issuance is the outstanding count's.
+  if (pair) {
+    const bool weighted_item = st.statement[b] == Statement::kIncome;
+    const double outstanding_step = weighted_item ? pair->other_step : step;
+    const double issued = uniform_normal_log_pdf(pair->position, -outstanding_step, 0.0, pair->sd);
+    const double at_end = normal_log_pdf(pair->position, 0.0, pair->sd);
+    if (weighted_item) {
+      const double y = pair->other_step - trend.median;
+      log[0] = std::log(1.0 - p_split - kTermsPrior - kUnitPrior) +
+               log_add(std::log(1.0 - kLargeIssuance) + normal_log_pdf(y, 0.0, noise),
+                       std::log(kLargeIssuance) + normal_log_pdf(y, 0.0, kRealSd)) +
+               cap_moved;
+    }
     log[0] += issued;
-    log[1] += alike;
-    log[2] += alike;
-    log[3] += normal_log_pdf(py, 0.0, pair_sd);
-    f.evidence.push_back({"partner_step", *y, alike - issued,
-                          "the other statement's count: alike for a split, part of it for an "
-                          "issuance"});
+    log[1] += at_end;
+    log[2] += at_end;
+    log[3] += normal_log_pdf(pair->position, weighted_item ? d : -d, pair->sd);
+    f.evidence.push_back({"weighted_in_period", pair->position, at_end - issued,
+                          "the weighted average against its period's outstanding counts: at "
+                          "the end for a split, between for an issuance"});
   }
   f.posterior = softmax(log);
   if (on_file != nullptr) {
@@ -440,6 +478,67 @@ std::optional<ShareFinding> judge_step(const ShareContext& sc, std::size_t item,
                           "forward splits at high prices, reverse splits at low ones"});
   }
   return f;
+}
+
+// A count's partner along its line, in the latest terms, by position on the line:
+// NaN where the other statement has no row or no count.
+struct Pairing {
+  std::vector<double> partner;
+  std::vector<double> position;  // log(weighted / outstanding), less its median
+  double sd = 0.02;
+
+  [[nodiscard]] std::optional<PairAt> at(std::size_t p) const {
+    if (p == 0 || p >= partner.size() || !usable(partner[p]) || !usable(partner[p - 1]) ||
+        !std::isfinite(position[p])) {
+      return std::nullopt;
+    }
+    return PairAt{position[p], std::log(partner[p] / partner[p - 1]), sd};
+  }
+};
+
+Pairing pairing_of(const ShareContext& sc, const Line& line, const std::vector<double>& converted) {
+  const Series& s = sc.series;
+  const StatementRows& st = s.statements;
+  const bool weighted_item = line.statement == Statement::kIncome;
+  const std::vector<std::size_t>& others = weighted_item ? sc.outstanding : sc.weighted;
+  const Statement other = weighted_item ? Statement::kBalanceSheet : Statement::kIncome;
+  const std::size_t n = line.rows.size();
+  Pairing out;
+  out.partner.assign(n, std::numeric_limits<double>::quiet_NaN());
+  out.position.assign(n, std::numeric_limits<double>::quiet_NaN());
+  if (others.empty()) {
+    return out;
+  }
+  const std::size_t partner = others.front();
+  std::vector<double> offsets;
+  for (std::size_t p = 0; p < n; ++p) {
+    const std::size_t r = line.rows[p];
+    const auto it = sc.rows.find(
+        {s.date[r].days(), static_cast<int>(st.period_type[r]), static_cast<int>(other)});
+    if (it == sc.rows.end()) {
+      continue;
+    }
+    out.partner[p] = st.items[partner][it->second] * to_latest(sc, st.known_from[it->second]);
+    if (usable(out.partner[p]) && usable(converted[p])) {
+      const double offset = weighted_item ? std::log(converted[p] / out.partner[p])
+                                          : std::log(out.partner[p] / converted[p]);
+      out.position[p] = offset;
+      offsets.push_back(offset);
+    }
+  }
+  if (offsets.size() < 3) {
+    out.position.assign(n, std::numeric_limits<double>::quiet_NaN());
+    return out;
+  }
+  const double median = median_of(offsets);
+  for (double& x : offsets) {
+    x = std::fabs(x - median);
+  }
+  out.sd = std::max(0.02, 1.4826 * median_of(offsets));
+  for (double& x : out.position) {
+    x -= median;  // NaN stays NaN
+  }
+  return out;
 }
 
 // DQ921: one item's steps along a line, put into the latest terms.
@@ -470,35 +569,55 @@ void judge_steps(const ShareContext& sc, const Line& line, std::size_t item,
     x = std::fabs(x - trend.median);
   }
   trend.noise = std::max(0.02, 1.4826 * median_of(steps));
+  trend.cap_sd = line_cap_sd(sc.series, line, item);
+  trend.period_days = line.type == PeriodType::kAnnual ? 365.0 : 91.0;
   const double large = std::max(kMinStep, 5.0 * trend.noise);
+  const Pairing pairing = pairing_of(sc, line, converted);
+  // The step back to the trend's line from before a step at p, within eight
+  // periods: the periods between may be one error, seen going in and coming out.
+  // Back means one large step against it, to nearer the old line than the step's
+  // half way and within the line's own spread of it.
+  const auto return_of = [&](std::size_t p) -> std::optional<std::size_t> {
+    const double d = std::log(converted[p] / converted[p - 1]) - trend.median;
+    for (std::size_t q = p + 1; q < n && q <= p + 8 && step_at(q); ++q) {
+      const double step = std::log(converted[q] / converted[q - 1]) - trend.median;
+      if (std::fabs(step) < large) {
+        continue;
+      }
+      const auto periods = static_cast<double>(q - p + 1);
+      const double off = std::log(converted[q] / converted[p - 1]) - trend.median * periods;
+      const bool back = (step > 0.0) != (d > 0.0) &&
+                        std::fabs(off) < std::min(0.5 * std::fabs(d),
+                                                  kMatch + 2.0 * trend.noise * std::sqrt(periods));
+      return back ? std::optional{q} : std::nullopt;
+    }
+    return std::nullopt;
+  };
   for (std::size_t p = 1; p < n; ++p) {
     if (!step_at(p)) {
       continue;
     }
     const double step = std::log(converted[p] / converted[p - 1]);
-    const double d = step - trend.median;
-    if (std::fabs(d) < large) {
+    if (std::fabs(step - trend.median) < large) {
       continue;
     }
+    // A run's factor is seen twice, so its two steps measure it better than one.
+    const std::optional<std::size_t> back = return_of(p);
+    double d = step - trend.median;
+    if (back) {
+      d = 0.5 * (d - (std::log(converted[*back] / converted[*back - 1]) - trend.median));
+    }
     std::optional<ShareFinding> f =
-        judge_step(sc, item, line.rows[p - 1], line.rows[p], step, trend);
+        judge_step(sc, item, line.rows[p - 1], line.rows[p], step, d, trend, pairing.at(p));
     if (!f) {
       continue;
     }
-    // A step back to the trend's line from before: the periods between are the ones
-    // stored wrong (terms or units), one report on the first.
-    for (std::size_t q = p + 1; q < n && q <= p + 8 && step_at(q); ++q) {
-      const auto periods = static_cast<double>(q - p + 1);
-      const double off = std::log(converted[q] / converted[p - 1]) - trend.median * periods;
-      if (std::fabs(off) < kMatch + 2.0 * trend.noise * std::sqrt(periods) &&
-          f->explanation() != ShareHypothesis::kUnreportedSplit) {
-        f->last_row = line.rows[q - 1];
-        p = q;  // the step back is the same error's end
-        break;
-      }
-      if (std::fabs(std::log(converted[q] / converted[q - 1]) - trend.median) >= large) {
-        break;
-      }
+    // A step back: the periods between are the ones stored wrong (terms or units),
+    // one report on the first. A split missing from the actions shifts the level for
+    // good; its steps back are restatements in other terms, which fold into it.
+    if (back && f->explanation() != ShareHypothesis::kUnreportedSplit) {
+      f->last_row = line.rows[*back - 1];
+      p = *back;
     }
     f->provisional = p + 1 >= n;
     out.push_back(std::move(*f));
@@ -523,14 +642,14 @@ std::optional<ShareFinding> judge_pair(const ShareContext& sc, std::size_t i, st
   if (std::fabs(d) < kMinStep) {
     return std::nullopt;
   }
-  const Nearest near = nearest(d, sc.price);
+  const Nearest near = nearest(d, sc.price, kStepSd);
   if (!near.ratio && near.power == 0) {
     return std::nullopt;
   }
   const int length = st.period_type[i] == PeriodType::kAnnual ? 366 : 92;
   const Date start = Date::from_days(s.date[i].days() - length);
   const Date filed = std::max(st.known_from[i], st.known_from[b]);
-  if (near.power == 0 && split_in(sc, start, filed, d) != nullptr) {
+  if (near.power == 0 && split_in(sc, start, filed, d, kStepSd) != nullptr) {
     return std::nullopt;  // a split in the period, or before its filing, explains it
   }
   ShareFinding f;
@@ -547,7 +666,7 @@ std::optional<ShareFinding> judge_pair(const ShareContext& sc, std::size_t i, st
   f.power = near.power;
   // d = log(w / o), so the window's orientation is income row against balance row.
   const std::size_t earlier = set_window(st, b, i, d, f);
-  const SplitFit fit = split_fit(f.implied, s.close[earlier], sc.price);
+  const SplitFit fit = split_fit(f.implied, s.close[earlier], sc.price, kStepSd);
   f.split = fit.ratio;
   const double p_split = f.same_known ? 0.0 : missing_split_prior(f.window_from, f.window_to);
   // Real: the period's issuance between its average and its end, now and then an
@@ -657,7 +776,12 @@ void fold_missing_splits(std::vector<ShareFinding>& findings) {
     folded[k] = true;
   }
   for (std::size_t k = 0; k < findings.size(); ++k) {
-    if (is_anchor[k]) {
+    // A count the evidence says is stored wrong stays its own finding.
+    const ShareFinding& f = findings[k];
+    const bool stored_wrong = f.kind == ShareFinding::Kind::kMismatch
+                                  ? f.posterior[1] >= 0.5
+                                  : f.posterior[2] >= 0.5 || f.posterior[3] >= 0.5;
+    if (is_anchor[k] || stored_wrong) {
       continue;
     }
     const auto it = std::find_if(splits.begin(), splits.end(), [&](const MissingSplit& m) {
