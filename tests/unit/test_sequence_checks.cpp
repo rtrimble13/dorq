@@ -81,8 +81,8 @@ struct Company {
   std::string id;
   int quarters = 24;
   std::string currency = "USD";
-  std::function<bool(int)> has = [](int) { return true; };       // the quarter is in the input
-  std::function<std::string(int)> label = [](int q) {              // its fiscal period
+  std::function<bool(int)> has = [](int) { return true; };  // the quarter is in the input
+  std::function<std::string(int)> label = [](int q) {       // its fiscal period
     return "Q" + std::to_string(q % 4 + 1);
   };
 };
@@ -96,8 +96,8 @@ std::string company(const Company& c) {
     const Date end = quarter_end(q);
     const Date known = plus(end, q % 4 == 3 ? 70 : 40);
     const std::string fy = std::to_string(2010 + q / 4);
-    const std::string tail = "," + known.to_string() + ",filed," + known.to_string() + "," +
-                             c.currency + ",";
+    const std::string tail =
+        "," + known.to_string() + ",filed," + known.to_string() + "," + c.currency + ",";
     text += c.id + ",income,quarter," + end.to_string() + "," + fy + "," + c.label(q) + ",1" +
             tail + std::to_string(1000000 + 1000 * q) + ",\n";
     text += c.id + ",balance_sheet,quarter," + end.to_string() + "," + fy + "," + c.label(q) +
@@ -119,14 +119,13 @@ Result check(const TempDir& dir, const std::string& csv, const std::string& meta
   const std::string items = (dir.path() / "items.csv").string();
   const std::string meta_file = (dir.path() / "meta.csv").string();
   if (as_of.empty()) {
-    return run_in(dir.path(), {"--items", items.c_str(), "--meta", meta_file.c_str(), "--select",
-                               "DQ94", "--show-info", "--format", "jsonl", "--exit-zero",
-                               file.c_str()});
+    return run_in(dir.path(),
+                  {"--items", items.c_str(), "--meta", meta_file.c_str(), "--select", "DQ94",
+                   "--show-info", "--format", "jsonl", "--exit-zero", file.c_str()});
   }
-  return run_in(dir.path(),
-                {"--items", items.c_str(), "--meta", meta_file.c_str(), "--select", "DQ94",
-                 "--as-of", as_of.c_str(), "--show-info", "--format", "jsonl", "--exit-zero",
-                 file.c_str()});
+  return run_in(dir.path(), {"--items", items.c_str(), "--meta", meta_file.c_str(), "--select",
+                             "DQ94", "--as-of", as_of.c_str(), "--show-info", "--format", "jsonl",
+                             "--exit-zero", file.c_str()});
 }
 
 constexpr const char* kMetaHeader =
@@ -160,15 +159,17 @@ TEST_CASE("DQ941: a missing quarter, a mislabelled one, and a gap before the sec
   const std::vector<std::string> g = reports(r.out, "DQ941", "GAP");
   REQUIRE(g.size() == 1);
   CHECK(contains(g[0], R"("date":"2012-09-30")"));
-  CHECK(contains(g[0], "1 quarter missing between 2012-06-30 and 2012-12-31 (184 days), while "
-                       "the security traded"));
+  CHECK(contains(g[0],
+                 "1 quarter missing between 2012-06-30 and 2012-12-31 (184 days), while "
+                 "the security traded"));
   CHECK(contains(g[0], R"("hypothesis":"missing_period")"));
 
   const std::vector<std::string> m = reports(r.out, "DQ941", "MISLABEL");
   REQUIRE(m.size() == 1);  // the quarter after it is judged against the label it should have had
   CHECK(contains(m[0], R"("date":"2013-06-30")"));
-  CHECK(contains(m[0], "is labelled Q3 one quarter after Q1: Q2 was due, and no period is "
-                       "missing (the labels after it resume the cycle)"));
+  CHECK(contains(m[0],
+                 "is labelled Q3 one quarter after Q1: Q2 was due, and no period is "
+                 "missing (the labels after it resume the cycle)"));
   CHECK(contains(m[0], R"("hypothesis":"mislabel")"));
 
   CHECK(reports(r.out, "DQ941", "EARLY", true).empty());
@@ -185,8 +186,7 @@ TEST_CASE("DQ941: a change of fiscal year is info at most") {
     const Date known = plus(end, 40);
     const bool new_year = q >= 15;  // from 2013-12-31
     const int label = new_year ? (q - 15) % 4 + 1 : q % 4 + 1;
-    const std::string tail =
-        "," + known.to_string() + ",filed," + known.to_string() + ",USD,";
+    const std::string tail = "," + known.to_string() + ",filed," + known.to_string() + ",USD,";
     csv += id + ",income,quarter," + end.to_string() + ",2010,Q" + std::to_string(label) + ",1" +
            tail + std::to_string(1000000 + 1000 * q) + ",\n";
     const bool year_end = new_year ? (q - 15) % 4 == 3 : (q % 4 == 3 && q < 12) || q == 14;
@@ -221,7 +221,8 @@ TEST_CASE("DQ942: a filer stopped while trading is stale; a delisted one is not"
   Company fresh;  // 2015 Q4 filed by the as-of date
   fresh.id = "FRESH";
   csv += company(fresh);
-  const std::string meta = std::string{kMetaHeader} + "STALE,USD,2009-01-02,2016-03-01,true,,true\n" +
+  const std::string meta = std::string{kMetaHeader} +
+                           "STALE,USD,2009-01-02,2016-03-01,true,,true\n" +
                            "DELISTED,USD,2009-01-02,2015-04-02,false,2015-04-03,true\n" +
                            "FRESH,USD,2009-01-02,2016-03-01,true,,true\n";
   const Result r = check(dir, csv, meta);
@@ -231,8 +232,9 @@ TEST_CASE("DQ942: a filer stopped while trading is stale; a delisted one is not"
   REQUIRE(s.size() == 1);
   CHECK(contains(s[0], R"("date":"2014-12-31")"));  // keyed on the latest fiscal date
   CHECK(contains(s[0], R"("severity":"error")"));
-  CHECK(contains(s[0], "no period after 2014-12-31 by 2016-03-01: the next, ending 2015-04-01 "
-                       "(a 10-Q), was due about 2015-05-11 at this issuer's usual 40 days"));
+  CHECK(contains(s[0],
+                 "no period after 2014-12-31 by 2016-03-01: the next, ending 2015-04-01 "
+                 "(a 10-Q), was due about 2015-05-11 at this issuer's usual 40 days"));
   CHECK(reports(r.out, "DQ942", "DELISTED", true).empty());
   CHECK(reports(r.out, "DQ942", "FRESH", true).empty());
 
@@ -247,7 +249,8 @@ TEST_CASE("DQ943 and DQ944: a security only the metadata has, and a currency of 
   euro.id = "EURO";
   euro.currency = "EUR";
   const std::string csv = company(euro);
-  const std::string meta = std::string{kMetaHeader} + "EURO,USD,2009-01-02,2016-03-01,true,,true\n" +
+  const std::string meta = std::string{kMetaHeader} +
+                           "EURO,USD,2009-01-02,2016-03-01,true,,true\n" +
                            "MISSING,USD,2012-03-01,2016-03-01,true,,true\n" +
                            "NOT_EXPECTED,USD,2012-03-01,2016-03-01,true,,false\n" +
                            "GONE,USD,1990-01-02,1996-03-01,false,1996-03-02,true\n";
@@ -257,8 +260,9 @@ TEST_CASE("DQ943 and DQ944: a security only the metadata has, and a currency of 
   const std::vector<std::string> missing = reports(r.out, "DQ943", "MISSING");
   REQUIRE(missing.size() == 1);
   CHECK(contains(missing[0], R"("date":"2012-03-01")"));
-  CHECK(contains(missing[0], "the metadata expects statements for this security, and the input "
-                             "has none: it traded from 2012-03-01 to 2016-03-01"));
+  CHECK(contains(missing[0],
+                 "the metadata expects statements for this security, and the input "
+                 "has none: it traded from 2012-03-01 to 2016-03-01"));
   CHECK(reports(r.out, "DQ943", "NOT_EXPECTED", true).empty());
   CHECK(reports(r.out, "DQ943", "GONE", true).empty());  // it stopped before the coverage floor
   CHECK(reports(r.out, "DQ943", "EURO", true).empty());
@@ -266,8 +270,9 @@ TEST_CASE("DQ943 and DQ944: a security only the metadata has, and a currency of 
   CHECK(reports(r.out, "DQ944", "EURO").empty());
   const std::vector<std::string> currency = reports(r.out, "DQ944", "EURO", true);
   REQUIRE(currency.size() == 1);
-  CHECK(contains(currency[0], "the statements are reported in EUR, and the security trades in "
-                              "USD"));
+  CHECK(contains(currency[0],
+                 "the statements are reported in EUR, and the security trades in "
+                 "USD"));
   CHECK(contains(currency[0], R"("classification":"market_fact")"));
 }
 

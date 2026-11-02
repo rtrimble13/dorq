@@ -138,6 +138,21 @@ series of a kind an enabled cross-sectional check applies to: DQ303, DQ304 and D
 judge bars, so a statements run with `--ignore DQ951` streams (on 4,000 of these
 securities, 14 MB against 291 MB holding).
 
+## Statements (DR-0910)
+
+Coverage and freshness (DQ941 to DQ944) on the same 6M rows, with `--as-of
+2026-03-01`, after the input's last filings. Each series' sequence is read once
+per period type.
+
+| Run | Rows | Series | Threads | Time | Peak memory |
+|---|---|---|---|---|---|
+| Piped into `dorq --select DQ104`: the reader | 6.0M | 20,000 | 4 | 17.3 s | 11 MB |
+| Piped into `dorq --select DQ94` | 6.0M | 20,000 | 4 | 17.7 s | 11 MB |
+| Piped into `dorq --select DQ9`: every statement check | 6.0M | 20,000 | 4 | **41.7 s** | 1.4 GB |
+
+The same machine and `release` build (2026-11-02). The checks cost nothing
+measurable over the reader, and the full run's memory is DQ951's, as above.
+
 ## The profile
 
 The profile is a callgrind run on one copy (230,000 rows, one thread), before
