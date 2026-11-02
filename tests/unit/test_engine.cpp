@@ -18,7 +18,10 @@ namespace {
 // Records the series it is handed, in order.
 class Recorder final : public dorq::ResultSink {
  public:
-  void series_done(dorq::SeriesResult&& result) override { ids.push_back(result.id); }
+  void series_done(dorq::SeriesResult&& result) override {
+    const dorq::SeriesResult taken = std::move(result);
+    ids.push_back(taken.id);
+  }
   std::vector<std::string> ids;
 };
 

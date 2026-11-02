@@ -368,7 +368,7 @@ void StatementsStale::run(const SeriesContext& context, std::vector<Violation>& 
   const Date as_of = *context.as_of;
   // The latest period, by quarters where the series has them.
   std::vector<Period> periods = periods_of(s, PeriodType::kQuarter);
-  bool quarters = !periods.empty();
+  const bool quarters = !periods.empty();
   if (!quarters) {
     periods = periods_of(s, PeriodType::kAnnual);
   }
@@ -406,7 +406,7 @@ void StatementsStale::run(const SeriesContext& context, std::vector<Violation>& 
   if (context.meta != nullptr && context.meta->active == false) {
     return;
   }
-  const double overdue = static_cast<double>(as_of.days() - due.days());
+  const auto overdue = static_cast<double>(as_of.days() - due.days());
   if (overdue <= 0.0) {
     return;
   }

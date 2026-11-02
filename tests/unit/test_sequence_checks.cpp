@@ -7,6 +7,7 @@
 #include <initializer_list>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -75,6 +76,15 @@ Date quarter_end(int q) {
 
 Date plus(Date d, int days) { return Date::from_days(d.days() + days); }
 
+// Parts joined, in one string.
+std::string cat(std::initializer_list<std::string_view> parts) {
+  std::string out;
+  for (const std::string_view part : parts) {
+    out += part;
+  }
+  return out;
+}
+
 // A company's quarters 0 to `quarters` - 1 (2010 Q1 on), a December year, each filed
 // 40 days after it ends (a year and its last quarter 70), with its years.
 struct Company {
@@ -97,14 +107,14 @@ std::string company(const Company& c) {
     const Date known = plus(end, q % 4 == 3 ? 70 : 40);
     const std::string fy = std::to_string(2010 + q / 4);
     const std::string tail =
-        "," + known.to_string() + ",filed," + known.to_string() + "," + c.currency + ",";
-    text += c.id + ",income,quarter," + end.to_string() + "," + fy + "," + c.label(q) + ",1" +
-            tail + std::to_string(1000000 + 1000 * q) + ",\n";
-    text += c.id + ",balance_sheet,quarter," + end.to_string() + "," + fy + "," + c.label(q) +
-            ",1" + tail + "," + std::to_string(5000000 + 1000 * q) + "\n";
+        cat({",", known.to_string(), ",filed,", known.to_string(), ",", c.currency, ","});
+    text += cat({c.id, ",income,quarter,", end.to_string(), ",", fy, ",", c.label(q), ",1", tail,
+                 std::to_string(1000000 + 1000 * q), ",\n"});
+    text += cat({c.id, ",balance_sheet,quarter,", end.to_string(), ",", fy, ",", c.label(q), ",1",
+                 tail, ",", std::to_string(5000000 + 1000 * q), "\n"});
     if (q % 4 == 3) {
-      text += c.id + ",income,annual," + end.to_string() + "," + fy + ",FY,1" + tail +
-              std::to_string(4000000 + 4000 * q) + ",\n";
+      text += cat({c.id, ",income,annual,", end.to_string(), ",", fy, ",FY,1", tail,
+                   std::to_string(4000000 + 4000 * q), ",\n"});
     }
   }
   return text;
@@ -186,13 +196,13 @@ TEST_CASE("DQ941: a change of fiscal year is info at most") {
     const Date known = plus(end, 40);
     const bool new_year = q >= 15;  // from 2013-12-31
     const int label = new_year ? (q - 15) % 4 + 1 : q % 4 + 1;
-    const std::string tail = "," + known.to_string() + ",filed," + known.to_string() + ",USD,";
-    csv += id + ",income,quarter," + end.to_string() + ",2010,Q" + std::to_string(label) + ",1" +
-           tail + std::to_string(1000000 + 1000 * q) + ",\n";
+    const std::string tail = cat({",", known.to_string(), ",filed,", known.to_string(), ",USD,"});
+    csv += cat({id, ",income,quarter,", end.to_string(), ",2010,Q", std::to_string(label), ",1",
+                tail, std::to_string(1000000 + 1000 * q), ",\n"});
     const bool year_end = new_year ? (q - 15) % 4 == 3 : (q % 4 == 3 && q < 12) || q == 14;
     if (year_end) {
-      csv += id + ",income,annual," + end.to_string() + ",2010,FY,1" + tail +
-             std::to_string(4000000 + 4000 * q) + ",\n";
+      csv += cat({id, ",income,annual,", end.to_string(), ",2010,FY,1", tail,
+                  std::to_string(4000000 + 4000 * q), ",\n"});
     }
   }
   const Result r = check(dir, csv, std::string{kMetaHeader} + "CHANGE,USD,,,true,,true\n");
