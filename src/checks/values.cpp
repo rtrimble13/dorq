@@ -145,8 +145,8 @@ Violation structure_violation(const CheckInfo& info, const SeriesContext& contex
       v.end_date = s.date[f.last_row];
       v.known = std::max(known_of(s, f.row), known_of(s, f.last_row));
       v.message = "the quarters of " + fy +
-                  " are stored year to date: Q2 to Q4 hold the sums from Q1, and Q4 the year" +
-                  of + " flows)";
+                  " are stored year to date: Q2 to Q4 hold the sums from Q1, and Q4 the year" + of +
+                  " flows)";
       v.detail.push_back({"fiscal_year", static_cast<std::int64_t>(f.fiscal_year)});
       v.detail.push_back({"items", static_cast<std::int64_t>(f.items)});
       v.detail.push_back({"present", static_cast<std::int64_t>(f.present)});
@@ -342,8 +342,9 @@ const CheckInfo& CopiedPeriod::info() const noexcept {
   static const CheckInfo kInfo{
       .code = "DQ914",
       .name = "copied-period",
-      .summary = "a row that repeats the period before it, to the unit, on most of its items, "
-                 "against the series' own repeats ([statements] copy_min_items)",
+      .summary =
+          "a row that repeats the period before it, to the unit, on most of its items, "
+          "against the series' own repeats ([statements] copy_min_items)",
       .default_severity = Severity::kWarn,
       .applies = Applies::kStatements,
   };
@@ -358,8 +359,9 @@ const CheckInfo& AbsentAsZero::info() const noexcept {
   static const CheckInfo kInfo{
       .code = "DQ915",
       .name = "absent-as-zero",
-      .summary = "a 0 where the item is reported in the periods either side: a value the "
-                 "filing did not carry ([statements] never_absent)",
+      .summary =
+          "a 0 where the item is reported in the periods either side: a value the "
+          "filing did not carry ([statements] never_absent)",
       .default_severity = Severity::kWarn,
       .applies = Applies::kStatements,
   };
@@ -374,8 +376,9 @@ const CheckInfo& CumulativeQuarters::info() const noexcept {
   static const CheckInfo kInfo{
       .code = "DQ916",
       .name = "cumulative-quarters",
-      .summary = "a fiscal year's quarters stored year to date, or a quarter holding its year's "
-                 "flows (--items)",
+      .summary =
+          "a fiscal year's quarters stored year to date, or a quarter holding its year's "
+          "flows (--items)",
       .default_severity = Severity::kWarn,
       .applies = Applies::kStatements,
   };

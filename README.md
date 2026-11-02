@@ -49,7 +49,8 @@ Lines and JSON arrays, and reports in five formats. It runs:
   that collide or do not chain, DQ902 values that cannot be right, DQ903
   identities that fail and why, DQ904 ties across periods that fail, and DQ911 to
   DQ919 values over time: a bad value, a unit error (a value, a row or an era), a
-  sign flipped, and large changes the evidence calls real.
+  sign flipped, a copied quarter, a value written as 0, quarters stored year to
+  date, and large changes the evidence calls real.
 
 `dorq calibrate` fits the price model's priors and its `p_error` map to labelled
 history: fafnir's own repair decisions ([doc/calibration.md](doc/calibration.md),
@@ -179,6 +180,9 @@ including the `fafnir` format that maps onto `ops.data_quality_flag`.
 | [DQ911](doc/checks/DQ911.md) | bad-value | statements: one period's value off its item's series, which the periods around it and the row's identities do not bear out |
 | [DQ912](doc/checks/DQ912.md) | unit-error | statements: a value, a whole row or a run of periods at a power of ten (×1,000, ×0.001, ×10⁶) |
 | [DQ913](doc/checks/DQ913.md) | sign-error | statements: a sign flipped against the item's convention and its own history (`--items`) |
+| [DQ914](doc/checks/DQ914.md) | copied-period | statements: a row that repeats the period before it, to the unit, on most of its items |
+| [DQ915](doc/checks/DQ915.md) | absent-as-zero | statements: a 0 where the item is reported either side: a value the filing did not carry |
+| [DQ916](doc/checks/DQ916.md) | cumulative-quarters | statements: a year's quarters stored year to date, or a quarter holding its year (`--items`) |
 | [DQ919](doc/checks/DQ919.md) | large-change | statements: a large change the evidence calls real (an acquisition, a write-down), at info |
 | [DQ701](doc/checks/DQ701.md) | split-misdated | a split on file the bars show a few sessions away (`--actions`) |
 | [DQ702](doc/checks/DQ702.md) | split-without-jump | a split on file the bars do not show: not real, already applied, or a duplicate row |

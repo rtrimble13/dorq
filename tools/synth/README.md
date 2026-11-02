@@ -255,7 +255,7 @@ has one.
 | `absent_as_zero` | DQ915 | 6 items, reported in the quarters either side, set to 0 |
 | `cumulative_quarters` | DQ916 | 3 fiscal years whose Q2 to Q4 hold the year to date (flows) |
 | `annual_in_quarter` | DQ916 | 3 quarters holding their fiscal year's flows |
-| `identity_dropped_field`, `identity_doubled_field` | DQ903, DQ911 | 4 totals missing one of their terms, and 4 counting one twice. The term's label expects DQ903, which names it; a second, on the total, DQ911, which sees the total off its series where the term is a large part of it |
+| `identity_dropped_field`, `identity_doubled_field` | DQ903, DQ911 | 4 totals missing one of their terms, and 4 counting one twice. The term's label expects DQ903, which names it; a second, on the total, DQ911, which sees the total off its series where the term is a large part of it (and DQ915, where the total is left at 0) |
 | `split_missing` | DQ921 | 3 splits that are not on file (a context gap) |
 | `counts_wrong_terms` | DQ921 | 3 quarters, the first known after a split on file, whose share counts are left in the old terms |
 | `filing_at_period_end` | DQ931 | 3 periods whose filing date, and `known_from`, is the period end |
@@ -345,6 +345,7 @@ bounds:
 - DQ903 (DR-0905) at precision and recall 0.9, and DQ904 at precision 0.9. DQ904's
   recall is not gated: its consequence labels cover rows other faults break
   without its reporting each one;
+- the quarterly structure (DR-0907) at warn: DQ914, DQ915 and DQ916 at precision 0.9;
 - the value model (DR-0906) at warn: DQ912 at precision 0.95 and recall 0.9, DQ911
   at precision 0.85 and DQ913 at precision 0.9. Their recall otherwise is left to
   the evidence a single value leaves: a value in no identity and no quarter sum

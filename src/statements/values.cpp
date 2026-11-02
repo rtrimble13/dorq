@@ -998,8 +998,8 @@ bool screened(const Line& line, const Track& t, std::size_t p, bool signs) {
 }
 
 std::optional<ValueFinding> judge(const ViewContext& vc, const Line& line,
-                                  const std::vector<Track>& tracks, std::size_t self,
-                                  std::size_t p, const std::vector<bool>& explained) {
+                                  const std::vector<Track>& tracks, std::size_t self, std::size_t p,
+                                  const std::vector<bool>& explained) {
   const Track& t = tracks[self];
   if (explained[p]) {
     return std::nullopt;  // a row the quarterly structure explains (DQ914, DQ916)
@@ -1129,12 +1129,12 @@ ValueFinding era_finding(const Line& line, const Era& e) {
 // ---------------------------------------------------------------------------
 // The quarterly structure (DR-0907): DQ914, DQ915 and DQ916.
 
-constexpr double kCopyPrior = 0.001;         // a row copied from the one before
-constexpr double kAbsentPrior = 0.002;       // a value the vendor wrote 0 for
-constexpr double kNeverAbsentPrior = 0.05;   // ... of an item in never_absent
-constexpr double kStructureReport = 0.2;     // below this, no finding
-constexpr double kAtLevel = 1.0;  // a zero's neighbours at the item's usual level
-constexpr double kSubtotalsStill = 2.0;  // subtotals that would show the drop did not move
+constexpr double kCopyPrior = 0.001;        // a row copied from the one before
+constexpr double kAbsentPrior = 0.002;      // a value the vendor wrote 0 for
+constexpr double kNeverAbsentPrior = 0.05;  // ... of an item in never_absent
+constexpr double kStructureReport = 0.2;    // below this, no finding
+constexpr double kAtLevel = 1.0;            // a zero's neighbours at the item's usual level
+constexpr double kSubtotalsStill = 2.0;     // subtotals that would show the drop did not move
 
 // P(N >= m) for N ~ Poisson(lambda).
 double poisson_tail(double lambda, std::size_t m) {
@@ -1292,9 +1292,8 @@ void cumulative_years(const ViewContext& vc, const Line& line, const std::vector
     }
     const auto most = [judged](std::size_t fit) { return fit >= 3 && 2 * fit >= judged; };
     if (most(cumulative)) {
-      ValueFinding f = structure_finding(
-          ValueKind::kCumulative, ValueScope::kEra, quarters[1],
-          3 * cumulative >= 2 * judged ? 0.97 : 0.9);
+      ValueFinding f = structure_finding(ValueKind::kCumulative, ValueScope::kEra, quarters[1],
+                                         3 * cumulative >= 2 * judged ? 0.97 : 0.9);
       f.last_row = quarters[3];
       f.rows = 3;
       f.items = cumulative;
@@ -1314,9 +1313,8 @@ void cumulative_years(const ViewContext& vc, const Line& line, const std::vector
       if (!most(holds_year.at(k))) {
         continue;
       }
-      ValueFinding f =
-          structure_finding(ValueKind::kAnnualInQuarter, ValueScope::kRow, quarters[k],
-                            3 * holds_year.at(k) >= 2 * judged ? 0.95 : 0.9);
+      ValueFinding f = structure_finding(ValueKind::kAnnualInQuarter, ValueScope::kRow, quarters[k],
+                                         3 * holds_year.at(k) >= 2 * judged ? 0.95 : 0.9);
       f.items = holds_year.at(k);
       f.present = judged;
       f.fiscal_year = fiscal_year;
@@ -1364,17 +1362,17 @@ void absent_zeros(const ViewContext& vc, const Line& line, const std::vector<Tra
       // down to nothing, or an item as volatile as its level).
       const double sigma = t.sigma[p];
       const double wide = std::max(kBadScale, 4 * sigma);
-      const double large = (static_cast<double>(t.outliers) + 0.1) /
-                           (static_cast<double>(t.judged) + 10.0);
+      const double large =
+          (static_cast<double>(t.outliers) + 0.1) / (static_cast<double>(t.judged) + 10.0);
       const double reach = -std::fabs(t.pred[p]);
       const double to_zero = (1.0 - large) * stats::student_t_cdf(reach / sigma, kNu) +
                              large * stats::student_t_cdf(reach / wide, kNu);
-      const double zero_rate = (static_cast<double>(zeros - 1) + 0.1) /
-                               (static_cast<double>(finite - 1) + 10.0);
+      const double zero_rate =
+          (static_cast<double>(zeros - 1) + 0.1) / (static_cast<double>(finite - 1) + 10.0);
       double log_absent = std::log(never ? kNeverAbsentPrior : kAbsentPrior);
       double log_real = std::log(zero_rate + (1.0 - zero_rate) * to_zero);
-      ValueFinding f = structure_finding(ValueKind::kAbsentZero, ValueScope::kValue,
-                                         line.rows[p], 0.0);
+      ValueFinding f =
+          structure_finding(ValueKind::kAbsentZero, ValueScope::kValue, line.rows[p], 0.0);
       f.item = t.item;
       f.expected = expected;
       f.repaired = expected;
@@ -1452,8 +1450,7 @@ void absent_zeros(const ViewContext& vc, const Line& line, const std::vector<Tra
             log_real += kQuarterHolds;
             f.evidence.push_back({"quarter_sum_holds", true, -kQuarterHolds, ""});
           } else {
-            const double needed =
-                st.period_type[i] == PeriodType::kAnnual ? g->gap : -g->gap;
+            const double needed = st.period_type[i] == PeriodType::kAnnual ? g->gap : -g->gap;
             if (std::fabs(std::asinh(needed / t.s) - t.pred[p]) <= 0.3) {
               log_absent += kQuarterRepair;
               f.evidence.push_back({"quarter_sum_repair", true, kQuarterRepair, ""});
@@ -1595,10 +1592,10 @@ StatementValueAnalysis analyze_statement_values(const Series& series, const Stat
     }
     for (ValueFinding& f : found) {
       (in_force ? f.in_force : f.first_reported) = true;
-      const auto key = std::make_tuple(
-          series.date[f.row].days(), static_cast<int>(st.statement[f.row]),
-          static_cast<int>(st.period_type[f.row]), f.item,
-          static_cast<int>(f.scope) * 8 + static_cast<int>(f.kind));
+      const auto key =
+          std::make_tuple(series.date[f.row].days(), static_cast<int>(st.statement[f.row]),
+                          static_cast<int>(st.period_type[f.row]), f.item,
+                          static_cast<int>(f.scope) * 8 + static_cast<int>(f.kind));
       std::vector<std::size_t>& same = seen[key];
       const auto match = std::find_if(same.begin(), same.end(), [&](std::size_t k) {
         const ValueFinding& o = analysis.findings[k];
