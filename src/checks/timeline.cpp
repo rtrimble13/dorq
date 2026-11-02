@@ -138,7 +138,11 @@ std::vector<Filing> filings_of(const Series& s) {
     }
     const auto filing_key = std::make_tuple(s.date[r].days(), static_cast<int>(st.period_type[r]),
                                             st.known_from[r].days());
-    Filing f{r,          form_of(st, r), st.period_type[r], s.date[r], st.known_from[r],
+    Filing f{r,
+             form_of(st, r),
+             st.period_type[r],
+             s.date[r],
+             st.known_from[r],
              static_cast<double>(st.known_from[r].days() - s.date[r].days())};
     const auto [it, fresh] = by.emplace(filing_key, f);
     if (!fresh && st.statement[r] == Statement::kIncome) {
@@ -169,9 +173,8 @@ UsualLag usual_lag(const std::vector<Filing>& filings, std::size_t k) {
     }
   }
   // The nearest kOwnLags on each side, by period end.
-  const auto split = std::partition_point(same.begin(), same.end(), [&](std::size_t j) {
-    return filings[j].end < filings[k].end;
-  });
+  const auto split = std::partition_point(
+      same.begin(), same.end(), [&](std::size_t j) { return filings[j].end < filings[k].end; });
   const auto before = static_cast<std::size_t>(split - same.begin());
   const std::size_t from = before > kOwnLags ? before - kOwnLags : 0;
   const std::size_t to = std::min(same.size(), before + kOwnLags);
@@ -243,8 +246,9 @@ Violation filing_violation(const CheckInfo& info, const SeriesContext& context, 
     v.classification = Classification::kMarketFact;
     v.message = head + ": a late filing, a filing fact";
   } else if (p_early >= p_amendment) {
-    v.message = head + ": too early for a filing (the period end or a press release's date), so "
-                       "every backtest knows the figures too soon";
+    v.message = head +
+                ": too early for a filing (the period end or a press release's date), so "
+                "every backtest knows the figures too soon";
   } else {
     v.message = head + ": an amendment's date taken for the original's";
     if (next) {
@@ -284,8 +288,8 @@ enum class Pattern : std::uint8_t { kNone, kPower, kSign, kSwap, kTotalOnly, kOf
 constexpr std::array<double, 6> kPatternRestated{0.49, 1e-4, 1e-3, 1e-3, 1e-2, 0.5};
 constexpr std::array<double, 6> kPatternError{0.3, 0.3, 0.15, 0.1, 0.14, 0.01};
 constexpr double kVersionErrorPrior = 0.01;  // each of a new version and an old one wrong
-constexpr double kFitFloorSd = 0.02;  // the least spread of an item about its neighbours
-constexpr double kOffScale = 30.0;    // how far off a version stored wrong sits, in spreads
+constexpr double kFitFloorSd = 0.02;         // the least spread of an item about its neighbours
+constexpr double kOffScale = 30.0;           // how far off a version stored wrong sits, in spreads
 
 constexpr std::array<const char*, 3> kRevisionNames{"restatement", "new_version_error",
                                                     "old_version_error"};
@@ -345,7 +349,8 @@ std::optional<std::size_t> item_index(const StatementRows& st, const std::string
 
 // A total that moved while every one of its terms held.
 std::optional<std::size_t> total_only(const StatementRows& st, const StatementSettings& settings,
-                                      std::size_t a, std::size_t b, const std::vector<bool>& changed) {
+                                      std::size_t a, std::size_t b,
+                                      const std::vector<bool>& changed) {
   for (const Identity& identity : settings.identities) {
     if (identity.left.size() != 1) {
       continue;  // no one total
@@ -419,7 +424,8 @@ Revision revision_of(const Series& s, std::size_t a, std::size_t b, const std::v
     for (std::size_t j = i + 1; j < rev.changed.size(); ++j) {
       const std::size_t p = rev.changed[i];
       const std::size_t q = rev.changed[j];
-      if (same_value(st.items[p][b], st.items[q][a]) && same_value(st.items[q][b], st.items[p][a])) {
+      if (same_value(st.items[p][b], st.items[q][a]) &&
+          same_value(st.items[q][b], st.items[p][a])) {
         rev.pattern = Pattern::kSwap;
         rev.pattern_items = {p, q};
         return rev;
@@ -530,8 +536,8 @@ std::optional<std::pair<const std::vector<std::size_t>*, std::size_t>> place(con
     return std::nullopt;
   }
   const std::vector<std::size_t>& line = it->second;
-  const auto at = std::find_if(line.begin(), line.end(),
-                               [&](std::size_t q) { return s.date[q] == s.date[r]; });
+  const auto at =
+      std::find_if(line.begin(), line.end(), [&](std::size_t q) { return s.date[q] == s.date[r]; });
   if (at == line.end()) {
     return std::nullopt;
   }
@@ -694,8 +700,9 @@ const CheckInfo& FilingDateImplausible::info() const noexcept {
   static const CheckInfo kInfo{
       .code = "DQ931",
       .name = "filing-date-implausible",
-      .summary = "a filing date judged against the issuer's own lags and the SEC's deadlines: "
-                 "too early (a look-ahead), or an amendment's date taken for the original's",
+      .summary =
+          "a filing date judged against the issuer's own lags and the SEC's deadlines: "
+          "too early (a look-ahead), or an amendment's date taken for the original's",
       .default_severity = Severity::kWarn,
       .applies = Applies::kStatements,
   };
@@ -723,8 +730,8 @@ void FilingDateImplausible::run(const SeriesContext& context, std::vector<Violat
     }
     const UsualLag usual = usual_lag(filings, k);
     std::array<double, 4> log = lag_log_likelihoods(f.lag, usual);
-    const std::array<double, 4> priors{1.0 - kLatePrior - kEarlyPrior - kAmendmentPrior,
-                                       kLatePrior, kEarlyPrior, kAmendmentPrior};
+    const std::array<double, 4> priors{1.0 - kLatePrior - kEarlyPrior - kAmendmentPrior, kLatePrior,
+                                       kEarlyPrior, kAmendmentPrior};
     const std::array<double, 4> after =
         successor_log_likelihoods(next.has_value() && f.known > next->known);
     for (std::size_t h = 0; h < 4; ++h) {
@@ -752,8 +759,9 @@ const CheckInfo& RestatementImplausible::info() const noexcept {
   static const CheckInfo kInfo{
       .code = "DQ932",
       .name = "restatement-implausible",
-      .summary = "a new version that differs from the one before it by a power of ten, a sign, "
-                 "two fields swapped or a total alone: the new version wrong, or the old one",
+      .summary =
+          "a new version that differs from the one before it by a power of ten, a sign, "
+          "two fields swapped or a total alone: the new version wrong, or the old one",
       .default_severity = Severity::kWarn,
       .applies = Applies::kStatements,
   };

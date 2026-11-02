@@ -101,6 +101,7 @@ class Engine {
     bool cohort = false;               // DQ303 enabled
     bool stale = false;                // DQ304 enabled
     bool cohort_move = false;          // DQ601 enabled
+    bool revision_cohort = false;      // DQ951 enabled
   };
   struct Work {
     std::size_t sequence = 0;

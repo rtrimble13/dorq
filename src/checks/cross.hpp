@@ -26,6 +26,15 @@ class MarketDay final : public Check {
   void run(const SeriesContext& /*context*/, std::vector<Violation>& /*out*/) const override {}
 };
 
+// DQ951: many statements series revised on one day, or carrying one finding in
+// versions loaded the same day, beyond the base rate (engine/cross_section.cpp;
+// doc/checks/DQ951.md).
+class RevisionCohort final : public Check {
+ public:
+  [[nodiscard]] const CheckInfo& info() const noexcept override;
+  void run(const SeriesContext& /*context*/, std::vector<Violation>& /*out*/) const override {}
+};
+
 // The DQ602 reports for a market reference: each day its move is at least
 // `threshold` standard deviations of its own recent moves.
 [[nodiscard]] std::vector<Violation> market_days(const MarketSeries& market,

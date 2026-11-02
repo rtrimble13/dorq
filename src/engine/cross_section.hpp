@@ -65,6 +65,13 @@ struct CrossSummary {
   // moves near a split ratio.
   std::vector<Date> moved;
   std::vector<BandMove> band_moves;
+  // DQ951 (statements): the days the series had a new observed version known, the
+  // rows it had known (known_from, or loaded_on when later) each day, and its rows
+  // with a finding at warn or above, by day and code.
+  bool revision_cohort = false;
+  std::vector<Date> revised;
+  std::vector<std::pair<Date, std::int64_t>> known_rows;
+  std::vector<std::tuple<Date, std::string, std::int64_t>> found;
 };
 
 // DQ303 cohort-gap and DQ304 stale-feed. Fed every series' summary in input
@@ -99,6 +106,8 @@ class CrossSection {
 
   // DQ601 (doc/checks/DQ601.md).
   [[nodiscard]] std::vector<Violation> cohort_moves(std::vector<SeriesResult>& results);
+  // DQ951 (doc/checks/DQ951.md).
+  [[nodiscard]] std::vector<Violation> revision_cohorts(std::vector<SeriesResult>& results) const;
   void sibling_evidence(std::size_t i, const std::vector<std::size_t>& members,
                         std::vector<SeriesResult>& results) const;
   [[nodiscard]] Violation cohort_violation(Date date, const std::string& ratio,

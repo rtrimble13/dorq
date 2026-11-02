@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -16,11 +17,44 @@
 #include "checks/cross.hpp"
 #include "checks/integrity.hpp"
 #include "checks/price.hpp"
+#include "checks/statement_rows.hpp"
 #include "dorq/frequency.hpp"
 #include "price/model.hpp"
 
 namespace dorq {
 namespace {
+
+// DQ951's part of a statements series: the days it had new observed versions known,
+// its rows known each day, and its rows with a finding at warn or above, by day and
+// code.
+void summarize_revisions(const Series& series, const std::vector<Violation>& violations,
+                         CrossSummary& summary) {
+  const StatementRows& st = series.statements;
+  summary.revision_cohort = true;
+  std::map<Date, std::int64_t> rows;
+  for (std::size_t r = 0; r < st.size(); ++r) {
+    rows[known_of(series, r)] += 1;
+    const bool observed =
+        st.knowledge_source[r] == KnowledgeSource::kObserved ||
+        (st.knowledge_source[r] == KnowledgeSource::kUnknown && st.version[r] > 1);
+    if (observed) {
+      summary.revised.push_back(st.known_from[r]);
+    }
+  }
+  std::sort(summary.revised.begin(), summary.revised.end());
+  summary.revised.erase(std::unique(summary.revised.begin(), summary.revised.end()),
+                        summary.revised.end());
+  summary.known_rows.assign(rows.begin(), rows.end());
+  std::map<std::pair<Date, std::string>, std::int64_t> found;
+  for (const Violation& v : violations) {
+    if (v.period && v.known && v.severity >= Severity::kWarn) {
+      found[{*v.known, std::string{v.check->code}}] += 1;
+    }
+  }
+  for (const auto& [key, count] : found) {
+    summary.found.emplace_back(key.first, key.second, count);
+  }
+}
 
 const Calendar& default_calendar() {
   static const Calendar kXnys(CalendarKind::kXnys);
@@ -69,7 +103,7 @@ Engine::Engine(const Config& config, EngineOptions options, ResultSink& sink)
   }
   for (const Selection& selection : selections) {
     holding_ = holding_ || enables(selection, "DQ303") || enables(selection, "DQ304") ||
-               enables(selection, "DQ601");
+               enables(selection, "DQ601") || enables(selection, "DQ951");
   }
   market_days_ = context_.market.has_value() && enables(selections.front(), "DQ602");
   // A row of a context file belongs to no series' profile: the global selection.
@@ -143,6 +177,8 @@ const Engine::Settings& Engine::settings_for(const Series& series) {
         slot->stale = true;
       } else if (info.code == "DQ601") {
         slot->cohort_move = true;
+      } else if (info.code == "DQ951") {
+        slot->revision_cohort = true;
       }
       if (info.code == "DQ301" || info.code == "DQ302" || info.code == "DQ303" ||
           info.code == "DQ304") {
@@ -300,6 +336,9 @@ Engine::Processed Engine::process(Work& work) const {
         }
       }
     }
+  }
+  if (statements && settings.revision_cohort) {
+    summarize_revisions(series, result.violations, summary);
   }
   summary.cohort = settings.cohort;
   summary.stale = settings.stale;

@@ -118,6 +118,17 @@ DQ921 precision 0.9
 DQ921 recall 0.9
 DQ922 precision 0.9
 DQ922 recall 0.9
+# The knowledge timeline and revisions (DR-0909), at warn: a filing date at the
+# period end or an amendment's date; a new version at x1000, or an old one a
+# restatement corrected; a night's load that stored many series' versions wrong.
+# Late filers are info at most (hn_late_filer), reclassifications are restatements
+# (hn_reclassification), and the backfill is a cohort at info (hn_backfill).
+DQ931 precision 0.9
+DQ931 recall 0.9
+DQ932 precision 0.9
+DQ932 recall 0.9
+DQ951 precision 1.0
+DQ951 recall 1.0
 # Real events and real data, which no statement check may report at warn.
 hn_acquisition max 0
 hn_stock_acquisition max 0
@@ -132,3 +143,4 @@ hn_restatement max 0
 hn_split_on_file max 0
 hn_delisted max 0
 hn_no_statements_expected max 0
+hn_backfill max 0

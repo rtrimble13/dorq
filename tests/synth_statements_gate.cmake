@@ -35,6 +35,16 @@ execute_process(
 if(NOT status EQUAL 0)
   message(FATAL_ERROR "dorq failed (${status})")
 endif()
+# The backfill dated every restatement it found to one day: one revision cohort, at
+# info (DQ951), and no other DQ951 that day.
+file(STRINGS "${OUT}/results.csv" backfill REGEX ",2026-10-20,[^,]*,[^,]*,DQ951,")
+file(STRINGS "${OUT}/results.csv" backfill_info
+     REGEX ",2026-10-20,[^,]*,[^,]*,DQ951,revision-cohort,info,")
+list(LENGTH backfill reports)
+list(LENGTH backfill_info infos)
+if(NOT reports EQUAL 1 OR NOT infos EQUAL 1)
+  message(FATAL_ERROR "the backfill day has ${reports} DQ951 reports, ${infos} at info: not one")
+endif()
 execute_process(
   COMMAND "${DORQ}" "${OUT}/statements.csv" --items "${OUT}/items.csv" --config
           "${FAFNIR_CONFIG}" --exit-zero --format fafnir
