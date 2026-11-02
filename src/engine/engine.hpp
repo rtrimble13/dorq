@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <condition_variable>
 #include <cstddef>
 #include <deque>
@@ -10,6 +11,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "checks/check.hpp"
@@ -66,10 +68,11 @@ struct EngineOptions {
 // results to the sink in input order. The output therefore never depends on the
 // number of threads or on scheduling (doc/adr/0001).
 //
-// The cross-sectional checks (DQ303, DQ304) can only be judged once every series is
-// in. While either is enabled, results are held until finish() and handed on then,
-// still in input order, followed by the DQ109 reports of the context files' rows
-// and then the DQ303 result.
+// The cross-sectional checks (DQ303, DQ304, DQ601, DQ951) can only be judged once
+// every series is in. From the first series of a kind one of them applies to,
+// results are held until finish() and handed on then, still in input order,
+// followed by the DQ109 reports of the context files' rows and then the
+// cross-sectional result. A series of a kind none of them applies to streams.
 class Engine {
  public:
   Engine(const Config& config, EngineOptions options, ResultSink& sink);
@@ -81,6 +84,10 @@ class Engine {
 
   // Takes the next series. Blocks while too many are in flight.
   void submit(Series&& series);
+  // After the last series of a statements input: each --meta series the input did
+  // not have, in the meta file's order, as a statements series with no rows (DQ943).
+  // finish() calls it.
+  void visit_meta_only();
   // Waits for every submitted series and delivers the remaining results.
   void finish();
 
@@ -128,8 +135,16 @@ class Engine {
   const Context& context_;
   std::unordered_map<std::string, std::unique_ptr<Settings>> settings_;
   std::size_t next_sequence_ = 0;
+  // Statements: the series the input had, so that a series known only from --meta
+  // can be visited once it ends (DQ943).
+  bool saw_statements_ = false;
+  std::unordered_set<std::string> seen_;
 
-  // Cross-sectional checks.
+  // Cross-sectional checks. Results are held from the first series of a kind that an
+  // enabled cross-sectional check (DQ303, DQ304, DQ601, DQ951) applies to, and for
+  // every series after it, so that what streams before comes first: the input's
+  // order either way.
+  std::array<bool, 3> hold_for_{};  // by SeriesKind
   bool holding_ = false;
   bool market_days_ = false;     // DQ602 enabled, and a market given
   bool context_issues_ = false;  // DQ109 enabled, and a context file has a row skipped

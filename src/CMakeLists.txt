@@ -29,6 +29,7 @@ add_library(
   checks/identities.cpp
   checks/shares.cpp
   checks/timeline.cpp
+  checks/sequence.cpp
   checks/values.cpp
   checks/stale.cpp
   checks/statement_rows.cpp

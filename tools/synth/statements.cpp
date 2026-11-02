@@ -287,6 +287,7 @@ struct Row {
   std::optional<Date> filing_date;
   Values values = blank();  // NULL off its statement
   bool removed = false;     // a missing quarter's: not written
+  int label_shift = 0;      // a mislabelled quarter's: its fiscal period, this many on
   int copies = 1;           // a duplicated row's: written twice
   // A version chain's fault: known_to set apart from the next version's
   // known_from, or left open.
@@ -394,7 +395,9 @@ void add_year(Company& c, int year, int month, int count, int first_month) {
 
 void plan_quarters(Company& c) {
   int month = c.fye_month;
-  const int last = c.delisted ? c.last_year : 2026;
+  // Every quarter that ends by the newest period end: a year ending in March has
+  // the June quarter of the next.
+  const int last = c.delisted ? c.last_year : 2027;
   for (int year = c.first_year; year <= last; ++year) {
     if (c.change_year != 0 && year == c.change_year + 1) {
       // The transition: from the old year end to the new, a short fiscal year.
@@ -1169,6 +1172,8 @@ class Universe {
   void share_count_units();
   void corrected_versions();
   void load_fault();
+  void delinquent_filer();
+  void mislabelled_quarters();
   void filing_faults();
   void missing_quarters();
   void restated_at_scale();
@@ -2093,6 +2098,48 @@ void Universe::load_fault() {
   labels_.emplace_back("*", night, night, "load_fault", "DQ951", "");
 }
 
+// Quarters labelled as the next one: one period apart, the label skips and the
+// labels after it resume their cycle (DQ941, a mislabel, told apart from a
+// missing quarter).
+void Universe::mislabelled_quarters() {
+  for (int done = 0, tries = 0; done < 2 && tries < 5000; ++tries) {
+    Company& c = any();
+    const std::size_t t = pick_quarter(c);
+    if (t == kNoQuarter || c.quarters[t].year_end || c.change_year != 0 || !reserve(c, t, t)) {
+      continue;
+    }
+    for (Row& row : c.rows) {
+      if (row.quarter == t && row.type == PeriodType::kQuarter) {
+        row.label_shift = 1;
+      }
+    }
+    Label label{c.id, c.quarters[t].end, c.quarters[t].end, "mislabelled_quarter", "DQ941", ""};
+    label.type = PeriodType::kQuarter;
+    labels_.push_back(label);
+    ++done;
+  }
+}
+
+// A company that still trades but stopped filing: its last three quarters never
+// arrived (DQ942, stale at the universe's last session).
+void Universe::delinquent_filer() {
+  for (int tries = 0; tries < 5000; ++tries) {
+    Company& c = any(Kind::kIndustrial);
+    const std::size_t n = c.quarters.size();
+    if (c.delisted || c.change_year != 0 || n < 16 || !reserve(c, n - 4, n - 1)) {
+      continue;
+    }
+    for (Row& row : c.rows) {
+      if (row.quarter >= n - 3) {
+        row.removed = true;
+      }
+    }
+    labels_.emplace_back(c.id, c.quarters[n - 4].end, c.quarters[n - 4].end, "delinquent_filer",
+                         "DQ942", "");
+    return;
+  }
+}
+
 // DQ901: a row twice, versions that do not chain, and knowledge dates before the
 // period's end or apart from the filing date.
 void Universe::key_faults() {
@@ -2499,6 +2546,8 @@ void Universe::faults() {
   share_count_units();
   corrected_versions();
   load_fault();
+  delinquent_filer();
+  mislabelled_quarters();
   mark_impossible();
   mark_identities();
   mark_ties();
@@ -2614,9 +2663,10 @@ void Universe::write_statements(const std::filesystem::path& dir) const {
       std::ostringstream line;
       line << c.id << ',' << dorq::to_string(row.statement) << ',' << dorq::to_string(row.type)
            << ',' << q.end.to_string() << ',' << q.fiscal_year << ','
-           << (annual ? std::string{"FY"} : "Q" + std::to_string(q.number)) << ',' << row.version
-           << ',' << row.known_from.to_string() << ',' << (known_to ? known_to->to_string() : "")
-           << ',' << dorq::to_string(row.source) << ','
+           << (annual ? std::string{"FY"}
+                      : "Q" + std::to_string((q.number - 1 + row.label_shift) % 4 + 1))
+           << ',' << row.version << ',' << row.known_from.to_string() << ','
+           << (known_to ? known_to->to_string() : "") << ',' << dorq::to_string(row.source) << ','
            << (row.filing_date ? row.filing_date->to_string() : "") << ','
            << loaded_at(row.known_from) << ',' << c.currency << ','
            << price_text(close_at(c, row.known_from));

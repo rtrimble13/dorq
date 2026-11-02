@@ -53,6 +53,8 @@ struct SeriesContext {
   const StatementValueAnalysis* values = nullptr;
   // The share terms model's findings, computed once when DQ921 or DQ922 runs.
   const StatementShareAnalysis* shares = nullptr;
+  // --as-of: the date the in-force view and DQ942 judge at; nullopt without it.
+  std::optional<Date> as_of = std::nullopt;
 
   // The exchange tick from --meta, if given.
   [[nodiscard]] std::optional<double> meta_tick() const noexcept {

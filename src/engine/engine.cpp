@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "checks/check.hpp"
 #include "checks/coverage_model.hpp"
 #include "checks/cross.hpp"
 #include "checks/integrity.hpp"
@@ -94,21 +95,30 @@ Engine::Engine(const Config& config, EngineOptions options, ResultSink& sink)
       sink_(sink),
       calendar_(options.calendar != nullptr ? *options.calendar : default_calendar()),
       context_(options.context != nullptr ? *options.context : no_context()) {
-  // Hold results when a cross-sectional check can run for any series: under the
-  // global selection, or under any profile's.
+  // The kinds whose results are held: those a cross-sectional check enabled under
+  // the global selection, or under any profile's, applies to.
   const std::vector<std::string> select = concat(config.select, config.extend_select);
   std::vector<Selection> selections = {Selection(select, config.ignore)};
   for (const Profile& profile : config.profiles) {
     selections.emplace_back(concat(select, profile.select), concat(config.ignore, profile.ignore));
   }
   for (const Selection& selection : selections) {
-    holding_ = holding_ || enables(selection, "DQ303") || enables(selection, "DQ304") ||
-               enables(selection, "DQ601") || enables(selection, "DQ951");
+    for (const char* code : {"DQ303", "DQ304", "DQ601", "DQ951"}) {
+      if (!enables(selection, code)) {
+        continue;
+      }
+      const Applies applies = find_check(code)->info().applies;
+      for (const SeriesKind kind :
+           {SeriesKind::kOhlcv, SeriesKind::kPoint, SeriesKind::kStatements}) {
+        bool& hold = hold_for_.at(static_cast<std::size_t>(kind));
+        hold = hold || applies_to(applies, kind);
+      }
+    }
   }
   market_days_ = context_.market.has_value() && enables(selections.front(), "DQ602");
   // A row of a context file belongs to no series' profile: the global selection.
   context_issues_ = !context_.issues.empty() && enables(selections.front(), "DQ109");
-  if (holding_) {
+  if (std::find(hold_for_.begin(), hold_for_.end(), true) != hold_for_.end()) {
     cross_ = std::make_unique<CrossSection>(calendar_, config.cohort, config.severity,
                                             config.coverage, options.as_of);
   }
@@ -276,6 +286,7 @@ Engine::Processed Engine::process(Work& work) const {
       .items = context_.have_items ? &context_.items : nullptr,
       .values = values ? &*values : nullptr,
       .shares = shares ? &*shares : nullptr,
+      .as_of = options_.as_of,
   };
   for (const Check* check : settings.checks) {
     check->run(context, result.violations);
@@ -410,6 +421,10 @@ void Engine::drop_unreported(SeriesResult& result) const {
 }
 
 void Engine::deliver(Processed processed) {
+  // Deliveries come in input order: once one series is held, so is every one after.
+  if (!holding_ && hold_for_.at(static_cast<std::size_t>(processed.result.kind))) {
+    holding_ = true;
+  }
   if (holding_) {
     // The cross-section only removes, downgrades or adds violations, so what
     // would not be reported can go now: on a large input, most of what is held
@@ -424,6 +439,12 @@ void Engine::deliver(Processed processed) {
 }
 
 void Engine::submit(Series&& series) {
+  if (series.kind == SeriesKind::kStatements) {
+    saw_statements_ = true;
+    if (!context_.meta.empty()) {
+      seen_.insert(series.id);
+    }
+  }
   const Settings& settings = settings_for(series);
   Work work{next_sequence_++, std::move(series), &settings};
   if (workers_.empty()) {
@@ -488,7 +509,24 @@ void Engine::deliver_ready() {
   }
 }
 
+void Engine::visit_meta_only() {
+  if (!saw_statements_) {
+    return;  // a bars input: the metadata's other series are not its business
+  }
+  for (const std::string& id : context_.meta_order) {
+    if (seen_.contains(id)) {
+      continue;
+    }
+    Series series;
+    series.id = id;
+    series.kind = SeriesKind::kStatements;
+    submit(std::move(series));
+  }
+  seen_.clear();
+}
+
 void Engine::finish() {
+  visit_meta_only();
   if (!workers_.empty()) {
     while (true) {
       {

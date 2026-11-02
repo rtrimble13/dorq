@@ -359,8 +359,9 @@ struct Profile {
   std::optional<bool> match_nav_priced;
   std::vector<std::string> match_exchange;
   std::vector<std::string> match_peer_group;
-  std::vector<std::string> select;  // added to the selection
-  std::vector<std::string> ignore;  // added to the ignores
+  std::vector<std::string> match_sector;  // --meta's sector, matched ignoring case
+  std::vector<std::string> select;        // added to the selection
+  std::vector<std::string> ignore;        // added to the ignores
   IntegrityPatch integrity;
   CoveragePatch coverage;
   PricePatch price;
@@ -368,7 +369,7 @@ struct Profile {
   [[nodiscard]] bool matches(const Series& series, const SeriesMeta* meta = nullptr) const;
   [[nodiscard]] bool matches_on_meta() const noexcept {
     return !match_asset_type.empty() || match_nav_priced.has_value() || !match_exchange.empty() ||
-           !match_peer_group.empty();
+           !match_peer_group.empty() || !match_sector.empty();
   }
 };
 

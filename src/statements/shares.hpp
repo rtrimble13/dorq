@@ -58,6 +58,9 @@ struct ShareFinding {
   // The log ratio of the later-known count to the earlier-known one, and the split
   // that ratio is: what a split missing from the actions would be.
   double implied = 0.0;
+  // The same, from the step as it is, the count's trend left in: a period off its
+  // trend (a buyback that had not begun) reads truer so.
+  double implied_raw = 0.0;
   std::optional<SplitRatio> split;
   int explains = 0;     // DQ921: the other steps and mismatches the same missing split explains
   double spread = 0.0;  // the real step's spread on the count's line, on the log scale

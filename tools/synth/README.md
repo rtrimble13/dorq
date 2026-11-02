@@ -188,8 +188,10 @@ generated data.
 | Biotechs (`PRE`) | 6 | none | 0 revenue, cost of revenue and inventory. They fund their losses by selling shares, and 40% start selling product some years in |
 
 - **History.** Industrials start in 2001–2004 (60%) or 2005–2014. Banks start in
-  2001–2006 and biotechs in 2008–2016. Every company files to 2026-06-30, except
-  four industrials and a biotech, which delist in their seventh to twelfth year.
+  2001–2006 and biotechs in 2008–2016. Every company files every quarter ending by
+  2026-06-30, whatever its fiscal year (a year ending in March has the June quarter
+  of the next), except four industrials and a biotech, which delist in their seventh
+  to twelfth year.
   Three industrials change their fiscal year from December to June or September,
   in 2009–2018: a short transition year, then the labels start again on the new year.
 - **Flows.** Revenue grows (−3% to 15% a year) and is seasonal. Costs are shares
@@ -285,6 +287,8 @@ has one.
 | `hn_reclassification`, `hn_restatement` | - | each restatement's year and statement (DQ9) |
 | `hn_split_on_file` | - | every other split, from the last period known before it to the first after (DQ92) |
 | `hn_delisted` | - | each delisted company, from its last period (DQ94) |
+| `delinquent_filer` | DQ942 | one industrial, still trading, whose last three quarters never arrived: stale at the universe's last session |
+| `mislabelled_quarter` | DQ941 | 2 quarters labelled as the next (Q2 as Q3), one quarter after the one before: a mislabel, told apart from a missing quarter |
 | `hn_backfill` | - | the backfill day, which dates every restatement it found to one day: a cohort of revisions at info (DQ951) |
 | `hn_no_statements_expected` | - | `ETF01` (DQ94) |
 
@@ -356,8 +360,11 @@ bounds:
 - the share counts (DR-0908) at warn: DQ921 and DQ922 at precision and recall 0.9;
 - the knowledge timeline (DR-0909) at warn: DQ931 and DQ932 at precision and recall
   0.9, DQ951 at 1.0. The gate also holds the backfill day to one DQ951, at info;
+- coverage and freshness (DR-0910) at warn, with `--as-of 2026-10-30`, the
+  universe's last session: DQ941 at precision and recall 0.9, DQ942 and DQ943 at
+  1.0, and no DQ944 at warn (a foreign filer's currency is info);
 - the value model (DR-0906) at warn: DQ912 at precision 0.95 and recall 0.9, DQ911
-  at precision 0.85 and DQ913 at precision 0.9. Their recall otherwise is left to
+  at precision 0.75 and DQ913 at precision 0.9. Their recall otherwise is left to
   the evidence a single value leaves: a value in no identity and no quarter sum
   has only its series;
 - no report at warn on any hard negative.

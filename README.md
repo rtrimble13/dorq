@@ -53,9 +53,12 @@ Lines and JSON arrays, and reports in five formats. It runs:
   date, and large changes the evidence calls real), DQ921 and DQ922 the share
   counts, in one share terms with the splits on file (a split missing from the
   actions, a count in the wrong terms, and counts that disagree), and DQ931, DQ932
-  and DQ951 the knowledge timeline: a filing date too early or an amendment's, a
-  version stored wrong (the new one, or the old one a restatement corrected), and a
-  backfill or a load fault across many series.
+  and DQ951 the knowledge timeline (a filing date too early or an amendment's, a
+  version stored wrong, the new one or the old one a restatement corrected, and a
+  backfill or a load fault across many series), and DQ941 to DQ944 coverage and
+  freshness: a period missing while the security traded, a series stale by the
+  as-of date, statements the metadata expects and the input lacks, and another
+  reporting currency.
 
 `dorq calibrate` fits the price model's priors and its `p_error` map to labelled
 history: fafnir's own repair decisions ([doc/calibration.md](doc/calibration.md),
@@ -193,6 +196,10 @@ including the `fafnir` format that maps onto `ops.data_quality_flag`.
 | [DQ922](doc/checks/DQ922.md) | share-count-mismatch | statements: a period's weighted-average and outstanding shares a split's ratio or a power of ten apart (`--items`) |
 | [DQ931](doc/checks/DQ931.md) | filing-date-implausible | statements: a filing date too early for the issuer's own lags (a look-ahead), or an amendment's date taken for the original's |
 | [DQ932](doc/checks/DQ932.md) | restatement-implausible | statements: a new version that differs from the old by a power of ten, a sign, a swap or a total alone: the new version wrong, or the old one |
+| [DQ941](doc/checks/DQ941.md) | period-gap | statements: a period missing while the security traded, told apart from a change of fiscal year and a mislabelled quarter (`--meta`) |
+| [DQ942](doc/checks/DQ942.md) | statements-stale | statements: no newer period by the as-of date, by the issuer's own cadence and lag (`--as-of`, `--meta`) |
+| [DQ943](doc/checks/DQ943.md) | statements-missing | statements: a security the metadata expects statements for, with none in the input (`--meta`) |
+| [DQ944](doc/checks/DQ944.md) | reporting-currency | statements, info: statements in another currency than the one the security trades in (`--meta`) |
 | [DQ951](doc/checks/DQ951.md) | revision-cohort | statements, across the input: many series revised on one day (a backfill, info), or one finding in rows loaded the same day (a load fault) |
 | [DQ701](doc/checks/DQ701.md) | split-misdated | a split on file the bars show a few sessions away (`--actions`) |
 | [DQ702](doc/checks/DQ702.md) | split-without-jump | a split on file the bars do not show: not real, already applied, or a duplicate row |
@@ -229,7 +236,7 @@ archive, plus a `SHA256SUMS` file:
 | `dorq-<version>-linux-x86_64.tar.gz` | Linux x86-64 with glibc 2.39 or newer (Ubuntu 24.04+). The C++ runtime is linked in |
 
 ```bash
-version=0.12.0
+version=0.13.0
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/dorq-${version}-linux-x86_64.tar.gz"
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
@@ -254,7 +261,7 @@ Clang 18+).
 ```bash
 sudo apt-get install -y build-essential cmake ninja-build git
 git clone https://github.com/rtrimble13/dorq.git && cd dorq
-git checkout v0.12.0                       # or stay on main for the latest
+git checkout v0.13.0                       # or stay on main for the latest
 cmake --workflow --preset release          # configure, build, run the tests
 sudo cmake --install build/release --prefix /opt/dorq
 /opt/dorq/bin/dorq version                 # names the commit it was built from

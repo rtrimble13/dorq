@@ -390,6 +390,7 @@ std::optional<ShareFinding> judge_step(const ShareContext& sc, std::size_t item,
   const double noise = trend.noise;
   ShareFinding f;
   const std::size_t earlier = set_window(st, a, b, d, f);
+  f.implied_raw = st.known_from[a] <= st.known_from[b] ? step : -step;
   double multiple = 0.0;
   const double sd_ratio = ratio_sd(noise);
   const SplitAction* on_file = split_in(sc, f.window_from, f.window_to, d, sd_ratio, &multiple);
@@ -689,6 +690,7 @@ std::optional<ShareFinding> judge_pair(const ShareContext& sc, std::size_t i, st
   f.power = near.power;
   // d = log(w / o), so the window's orientation is income row against balance row.
   const std::size_t earlier = set_window(st, b, i, d, f);
+  f.implied_raw = f.implied;
   const SplitFit fit = split_fit(f.implied, s.close[earlier], sc.price, sd_ratio);
   f.split = fit.ratio;
   const double p_split = f.same_known ? 0.0 : missing_split_prior(f.window_from, f.window_to);
@@ -788,7 +790,9 @@ constexpr double kFoldMax = 0.2;
 
 bool explained_by(const ShareFinding& f, const MissingSplit& m) {
   const double tolerance = std::min(kFoldMax, kMatch + 2.0 * f.spread);
-  return !f.same_known && std::fabs(f.implied - m.implied) < tolerance &&
+  const double off =
+      std::min(std::fabs(f.implied - m.implied), std::fabs(f.implied_raw - m.implied));
+  return !f.same_known && off < tolerance &&
          std::max(f.window_from, m.from) < std::min(f.window_to, m.to);
 }
 

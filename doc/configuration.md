@@ -197,9 +197,10 @@ file that includes itself, is an error. This is how a calibration from
 ## Profiles
 
 A profile applies settings to the series it matches. It can match on
-`kind = "ohlcv" | "point"`, on a list of series ids, and on the fields of a
-`--meta` file: `asset_type`, `nav_priced`, `exchange` and `peer_group` (each a
-value or a list, but `nav_priced`, which is true or false). Every key given must
+`kind = "ohlcv" | "point" | "statements"`, on a list of series ids, and on the
+fields of a `--meta` file: `asset_type`, `nav_priced`, `exchange`, `peer_group` and
+`sector` (each a value or a list, but `nav_priced`, which is true or false;
+`asset_type` and `sector` are matched ignoring case and spaces). Every key given must
 hold, and a key on a metadata field never holds for a series the file does not
 list. A profile with no `match` table applies to every series.
 
@@ -218,6 +219,10 @@ integrity = { positive_point_series = true }
 [profiles.etfs]
 match = { asset_type = ["etf"], exchange = "ARCX" }
 priors = { unreported_split = 0.05 }     # fund families split more often
+
+[profiles.banks]
+match = { kind = "statements", sector = "Financial Services" }
+ignore = ["DQ903"]                       # a bank carries no current and noncurrent split
 ```
 
 A profile's `select` and `ignore` entries are **added** to the global lists. Its

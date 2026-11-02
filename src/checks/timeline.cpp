@@ -109,18 +109,32 @@ struct Filing {
   double lag = 0.0;
 };
 
-Form form_of(const StatementRows& st, std::size_t r) {
-  if (st.period_type[r] == PeriodType::kAnnual || st.fiscal_period[r] == FiscalPeriod::kQ4 ||
-      st.fiscal_period[r] == FiscalPeriod::kFY) {
-    return Form::k10K;  // a year's last quarter is known from the 10-K, with the year
+// A year, and a year's last quarter (a quarter ending the day a year does), are known
+// from the 10-K. By the dates, not the label, so that a mislabelled quarter is still
+// a 10-Q; by the label (Q4) only in a series with no years to go by.
+Form form_of(const Series& s, std::size_t r, const std::vector<Date>& year_ends) {
+  const StatementRows& st = s.statements;
+  if (st.period_type[r] == PeriodType::kAnnual) {
+    return Form::k10K;
   }
-  return Form::k10Q;
+  if (year_ends.empty()) {
+    return st.fiscal_period[r] == FiscalPeriod::kQ4 ? Form::k10K : Form::k10Q;
+  }
+  return std::binary_search(year_ends.begin(), year_ends.end(), s.date[r]) ? Form::k10K
+                                                                           : Form::k10Q;
 }
 
 // The series' filings: each period's first version that was filed, one filing per
 // period type and knowledge date, in period order.
 std::vector<Filing> filings_of(const Series& s) {
   const StatementRows& st = s.statements;
+  std::vector<Date> year_ends;
+  for (std::size_t r = 0; r < st.size(); ++r) {
+    if (st.period_type[r] == PeriodType::kAnnual) {
+      year_ends.push_back(s.date[r]);
+    }
+  }
+  std::sort(year_ends.begin(), year_ends.end());
   // The first version of each period: (date, statement, type) -> row.
   std::map<std::tuple<std::int32_t, int, int>, std::size_t> first;
   for (std::size_t r = 0; r < st.size(); ++r) {
@@ -139,7 +153,7 @@ std::vector<Filing> filings_of(const Series& s) {
     const auto filing_key = std::make_tuple(s.date[r].days(), static_cast<int>(st.period_type[r]),
                                             st.known_from[r].days());
     Filing f{r,
-             form_of(st, r),
+             form_of(s, r, year_ends),
              st.period_type[r],
              s.date[r],
              st.known_from[r],
@@ -631,7 +645,53 @@ const char* pattern_name(Pattern p) {
   return "none";
 }
 
-std::array<double, 3> revision_posterior(const Revision& rev, const std::optional<Fit>& fit) {
+// For a power of ten: how far each version's magnitudes sit from each item's usual
+// magnitude on its line, in powers of ten (the median over the pattern's items).
+// A version at x1000 is three powers off whatever the item's swings; the other sits
+// at its item's level. Decisive where the periods around cannot be (a cash flow
+// that crosses zero predicts near nothing).
+struct Magnitude {
+  double old_off = 0.0;
+  double new_off = 0.0;
+};
+
+std::optional<Magnitude> magnitude_of(const Series& s, const Lines& in_force, std::size_t a,
+                                      std::size_t b, const Revision& rev) {
+  if (rev.pattern != Pattern::kPower) {
+    return std::nullopt;
+  }
+  const StatementRows& st = s.statements;
+  const auto it =
+      in_force.find({static_cast<int>(st.statement[b]), static_cast<int>(st.period_type[b])});
+  if (it == in_force.end()) {
+    return std::nullopt;
+  }
+  std::vector<double> old_off;
+  std::vector<double> new_off;
+  for (const std::size_t k : rev.pattern_items) {
+    // The item's usual magnitude: the median of its other periods' on the line.
+    std::vector<double> sizes;
+    for (const std::size_t r : it->second) {
+      const double x = st.items[k][r];
+      if (s.date[r] != s.date[b] && std::isfinite(x) && x != 0.0) {
+        sizes.push_back(std::fabs(x));
+      }
+    }
+    if (sizes.size() < 4) {
+      continue;
+    }
+    const double usual = median_of(sizes);
+    old_off.push_back(std::fabs(std::log10(std::fabs(st.items[k][a]) / usual)));
+    new_off.push_back(std::fabs(std::log10(std::fabs(st.items[k][b]) / usual)));
+  }
+  if (old_off.empty()) {
+    return std::nullopt;
+  }
+  return Magnitude{median_of(old_off), median_of(new_off)};
+}
+
+std::array<double, 3> revision_posterior(const Revision& rev, const std::optional<Fit>& fit,
+                                         const std::optional<Magnitude>& magnitude) {
   const auto pattern = static_cast<std::size_t>(rev.pattern);
   std::array<double, 3> log{};
   log[0] = std::log(1.0 - 2.0 * kVersionErrorPrior) + std::log(kPatternRestated.at(pattern));
@@ -641,6 +701,17 @@ std::array<double, 3> revision_posterior(const Revision& rev, const std::optiona
     log[0] += fits(fit->old_z) + fits(fit->new_z);
     log[1] += fits(fit->old_z) + off(fit->new_z);
     log[2] += off(fit->old_z) + fits(fit->new_z);
+  }
+  if (magnitude) {
+    // The wrong version sits the pattern's power from the item's usual magnitude,
+    // the right one within half a power of it (an item's own range), give or take.
+    constexpr double kSd = 0.5;
+    const double k = std::fabs(static_cast<double>(rev.power));
+    const double old_usual = normal_log_pdf(magnitude->old_off, 0.0, kSd);
+    const double new_usual = normal_log_pdf(magnitude->new_off, 0.0, kSd);
+    log[0] += old_usual + new_usual;
+    log[1] += old_usual + normal_log_pdf(magnitude->new_off, k, kSd);
+    log[2] += normal_log_pdf(magnitude->old_off, k, kSd) + new_usual;
   }
   return softmax(log);
 }
@@ -805,7 +876,8 @@ void RestatementImplausible::run(const SeriesContext& context, std::vector<Viola
         continue;
       }
       const std::optional<Fit> fit = fit_of(s, *first, *in_force, a, b, rev.changed);
-      const std::array<double, 3> p = revision_posterior(rev, fit);
+      const std::array<double, 3> p =
+          revision_posterior(rev, fit, magnitude_of(s, *in_force, a, b, rev));
       const std::optional<Severity> severity = context.thresholds.for_probability(p[1] + p[2]);
       if (!severity) {
         continue;

@@ -99,6 +99,30 @@ class RestatementImplausible final : public Check {
   void run(const SeriesContext& context, std::vector<Violation>& out) const override;
 };
 
+class PeriodGap final : public Check {
+ public:
+  [[nodiscard]] const CheckInfo& info() const noexcept override;
+  void run(const SeriesContext& context, std::vector<Violation>& out) const override;
+};
+
+class StatementsStale final : public Check {
+ public:
+  [[nodiscard]] const CheckInfo& info() const noexcept override;
+  void run(const SeriesContext& context, std::vector<Violation>& out) const override;
+};
+
+class StatementsMissing final : public Check {
+ public:
+  [[nodiscard]] const CheckInfo& info() const noexcept override;
+  void run(const SeriesContext& context, std::vector<Violation>& out) const override;
+};
+
+class ReportingCurrency final : public Check {
+ public:
+  [[nodiscard]] const CheckInfo& info() const noexcept override;
+  void run(const SeriesContext& context, std::vector<Violation>& out) const override;
+};
+
 class LargeChange final : public Check {
  public:
   [[nodiscard]] const CheckInfo& info() const noexcept override;

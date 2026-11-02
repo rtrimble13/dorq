@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -328,18 +329,110 @@ void restore_actions(std::istream& in, const std::string& source, Context& conte
   sort_actions(context);
 }
 
+namespace {
+
+// The meta's columns for a security's trading life and its statements (DQ94x).
+struct LifeColumns {
+  int currency = -1;
+  int first = -1;
+  int last = -1;
+  int active = -1;
+  int is_delisted = -1;
+  int delisted = -1;
+  int sector = -1;
+  int industry = -1;
+  int expected = -1;
+  int first_quarter = -1;
+};
+
+void read_life(Row fields, const LifeColumns& c, SeriesMeta& meta,
+               const std::function<void(const std::string&)>& note) {
+  std::string currency{cell(fields, c.currency)};
+  std::transform(currency.begin(), currency.end(), currency.begin(),
+                 [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
+  meta.currency = std::move(currency);
+  // A timestamp is read as its day.
+  const auto date = [&](int col, const char* what) -> std::optional<Date> {
+    const std::string_view text = cell(fields, col);
+    if (text.empty()) {
+      return std::nullopt;
+    }
+    const std::optional<Date> d = parse_date(text.substr(0, 10));
+    if (!d) {
+      note(std::string{what} + " \"" + std::string{text} + "\" is not a date; it is left unset");
+    }
+    return d;
+  };
+  const auto flag = [&](int col, const char* what) -> std::optional<bool> {
+    const std::string_view text = cell(fields, col);
+    bool value = false;
+    if (text.empty()) {
+      return std::nullopt;
+    }
+    if (parse_bool(text, value)) {
+      return value;
+    }
+    note(std::string{what} + " \"" + std::string{text} +
+         "\" is not true or false; it is left unset");
+    return std::nullopt;
+  };
+  meta.first_trade = date(c.first, "first_trade_date");
+  meta.last_trade = date(c.last, "last_trade_date");
+  meta.delisted = date(c.delisted, "delisted_date");
+  meta.active = flag(c.active, "active");
+  if (!meta.active) {
+    if (const std::optional<bool> gone = flag(c.is_delisted, "is_delisted")) {
+      meta.active = !*gone;
+    }
+  }
+  meta.sector = std::string{cell(fields, c.sector)};
+  meta.industry = std::string{cell(fields, c.industry)};
+  meta.statements_expected = flag(c.expected, "statements_expected");
+  if (!meta.statements_expected && c.first_quarter >= 0) {
+    // fafnir's vendor master: the first fiscal quarter with fundamentals, or none.
+    meta.statements_expected = !cell(fields, c.first_quarter).empty();
+  }
+}
+
+}  // namespace
+
 void read_meta(std::istream& in, const std::string& source, Context& context) {
   constexpr std::array<std::string_view, 2> kAssetType = {"assettype", "type"};
   constexpr std::array<std::string_view, 2> kNav = {"navpriced", "nav"};
   constexpr std::array<std::string_view, 2> kTick = {"ticksize", "tick"};
   constexpr std::array<std::string_view, 2> kPeer = {"peergroup", "family"};
   constexpr std::array<std::string_view, 3> kExchange = {"exchange", "exchangecode", "mic"};
+  // fafnir's core.security and core.vendor_security names beside dorq's.
+  constexpr std::array<std::string_view, 3> kCurrency = {"currency", "tradingcurrency",
+                                                         "tradecurrency"};
+  constexpr std::array<std::string_view, 4> kFirstTrade = {"firsttradedate", "firstpricedate",
+                                                           "firsttrade", "ipodate"};
+  constexpr std::array<std::string_view, 3> kLastTrade = {"lasttradedate", "lastpricedate",
+                                                          "lasttrade"};
+  constexpr std::array<std::string_view, 3> kActive = {"active", "isactivelytrading", "isactive"};
+  constexpr std::array<std::string_view, 1> kIsDelisted = {"isdelisted"};
+  constexpr std::array<std::string_view, 3> kDelisted = {"delisteddate", "delistedon",
+                                                         "delistdate"};
+  constexpr std::array<std::string_view, 2> kSector = {"sector", "sectorname"};
+  constexpr std::array<std::string_view, 2> kIndustry = {"industry", "industryname"};
+  constexpr std::array<std::string_view, 2> kExpected = {"statementsexpected", "hasstatements"};
+  constexpr std::array<std::string_view, 1> kFirstQuarter = {"firstquarter"};
   int series_col = -1;
   int asset_col = -1;
   int nav_col = -1;
   int tick_col = -1;
   int peer_col = -1;
   int exchange_col = -1;
+  int currency_col = -1;
+  int first_col = -1;
+  int last_col = -1;
+  int active_col = -1;
+  int is_delisted_col = -1;
+  int delisted_col = -1;
+  int sector_col = -1;
+  int industry_col = -1;
+  int expected_col = -1;
+  int first_quarter_col = -1;
   context.have_meta = true;
   const std::string name = file_name(source);
   read_table(
@@ -351,6 +444,16 @@ void read_meta(std::istream& in, const std::string& source, Context& context) {
         tick_col = find_column(names, kTick);
         peer_col = find_column(names, kPeer);
         exchange_col = find_column(names, kExchange);
+        currency_col = find_column(names, kCurrency);
+        first_col = find_column(names, kFirstTrade);
+        last_col = find_column(names, kLastTrade);
+        active_col = find_column(names, kActive);
+        is_delisted_col = find_column(names, kIsDelisted);
+        delisted_col = find_column(names, kDelisted);
+        sector_col = find_column(names, kSector);
+        industry_col = find_column(names, kIndustry);
+        expected_col = find_column(names, kExpected);
+        first_quarter_col = find_column(names, kFirstQuarter);
         if (series_col < 0) {
           fail(source, line, "a metadata file needs a series column (or security_id)");
         }
@@ -394,7 +497,12 @@ void read_meta(std::istream& in, const std::string& source, Context& context) {
         }
         meta.peer_group = std::string{cell(fields, peer_col)};
         meta.exchange = std::string{cell(fields, exchange_col)};
+        read_life(fields,
+                  {currency_col, first_col, last_col, active_col, is_delisted_col, delisted_col,
+                   sector_col, industry_col, expected_col, first_quarter_col},
+                  meta, note);
         context.meta.emplace(id, std::move(meta));
+        context.meta_order.push_back(id);
       });
 }
 
