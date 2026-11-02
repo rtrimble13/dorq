@@ -83,6 +83,12 @@ With `--actions`:
   replace the `--actions` rows, and a row marked `added_by_repair` only takes them
   out (doc/labels.md).
 - A split the bars show but the file does not have is still DQ203.
+- **On statements, the splits put the share counts into one terms** (DQ921,
+  DQ922): a count stored at its version's `known_from` is multiplied by the splits
+  with later ex-dates. A count that still steps by a clean ratio is a split missing
+  from the file (a context gap, with `add_split` and the window its ex-date is in),
+  or a count stored in the wrong terms ([statements.md](statements.md#share-counts)).
+  Without `--actions`, DQ921 judges nothing.
 
 ## Metadata: `--meta`
 

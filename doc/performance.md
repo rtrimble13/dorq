@@ -97,6 +97,24 @@ judges both views, and a line the two views hold alike once; its cost is the
 predictions and the local scale of each value, a few passes each where outliers
 are found.
 
+## Statements (DR-0908)
+
+The share terms model (DQ921, DQ922), measured on the same 6M rows, with an
+`--actions` file holding no splits so that DQ921 runs. Each line puts its counts
+into one terms, measures its own trend and market cap spread, and pairs each
+period's two counts; it finds nothing to report.
+
+| Run | Rows | Series | Threads | Time | Peak memory |
+|---|---|---|---|---|---|
+| Piped into `dorq --select DQ104`: the reader | 6.0M | 20,000 | 4 | 18.7 s | 11 MB |
+| Piped into `dorq --select DQ92`: the share terms model | 6.0M | 20,000 | 4 | 17.0 s | 11 MB |
+| Piped into `dorq --select DQ9`: every statement check | 6.0M | 20,000 | 4 | **41.3 s** | 12 MB |
+
+The same 4-core machine and `release` build (2026-11-02). The share terms model's
+cost is within the reader's own spread from run to run: a series has three counts,
+against the value model's dozens of money items. Every statement check together,
+DQ901 to DQ922, runs in 41 seconds, inside the plan's two minutes.
+
 ## The profile
 
 The profile is a callgrind run on one copy (230,000 rows, one thread), before

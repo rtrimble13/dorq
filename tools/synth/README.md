@@ -207,10 +207,12 @@ generated data.
   - from 2018 the cash flow's cash includes restricted cash, and the balance
     sheet's does not.
 - **Shares.** Counts grow by stock compensation and by shares sold, and fall with
-  buybacks.
+  buybacks. A quarter's weighted average is the mean of its start and end.
   - An industrial returns cash beyond three quarters of revenue as buybacks, a tenth
     of its market cap a quarter at most.
-  - The market cap is the company's scale at a multiple that wanders and reverts.
+  - The market cap is the company's scale at a multiple that wanders and reverts,
+    plus the cash its share sales raised: shares sell at the market price, which
+    holds.
     The `close` column is the market cap over the shares, in that day's terms.
   - A company splits when its raw price passes $200, half the time: 2:1, 3:1, 3:2
     or 4:1, at most three times. A biotech below $1 may reverse split.
@@ -258,6 +260,7 @@ has one.
 | `identity_dropped_field`, `identity_doubled_field` | DQ903, DQ911 | 4 totals missing one of their terms, and 4 counting one twice. The term's label expects DQ903, which names it; a second, on the total, DQ911, which sees the total off its series where the term is a large part of it (and DQ915, where the total is left at 0) |
 | `split_missing` | DQ921 | 3 splits that are not on file (a context gap) |
 | `counts_wrong_terms` | DQ921 | 3 quarters, the first known after a split on file, whose share counts are left in the old terms |
+| `share_count_unit` | DQ922, DQ921 | 4 runs of 1–3 quarters whose weighted-average shares are at ×1,000 or ×0.001, against the outstanding count of the same filings |
 | `filing_at_period_end` | DQ931 | 3 periods whose filing date, and `known_from`, is the period end |
 | `amendment_date` | DQ931 | 3 10-Qs dated 20–60 days after the next quarter's filing |
 | `missing_quarter` | DQ941 | 4 quarters missing from all three statements |
@@ -346,6 +349,7 @@ bounds:
   recall is not gated: its consequence labels cover rows other faults break
   without its reporting each one;
 - the quarterly structure (DR-0907) at warn: DQ914, DQ915 and DQ916 at precision 0.9;
+- the share counts (DR-0908) at warn: DQ921 and DQ922 at precision and recall 0.9;
 - the value model (DR-0906) at warn: DQ912 at precision 0.95 and recall 0.9, DQ911
   at precision 0.85 and DQ913 at precision 0.9. Their recall otherwise is left to
   the evidence a single value leaves: a value in no identity and no quarter sum

@@ -471,7 +471,7 @@ std::optional<ShareFinding> judge_step(const ShareContext& sc, std::size_t item,
   }
   if (cap) {
     f.evidence.push_back({"market_cap_step", *cap, cap_level - cap_moved,
-                          "level for a split, a step for a count stored wrong"});
+                          "level for a split, a step for an issuance or a count stored wrong"});
   }
   if (usable(s.close[earlier])) {
     f.evidence.push_back({"close_before", s.close[earlier], 0.0,
@@ -627,29 +627,51 @@ void judge_steps(const ShareContext& sc, const Line& line, std::size_t item,
 // DQ922: one period's weighted-average count (income row i, item w) against its
 // outstanding count (balance-sheet row b, item o); nullopt when they agree, or a
 // split on file explains them.
-std::optional<ShareFinding> judge_pair(const ShareContext& sc, std::size_t i, std::size_t b,
-                                       std::size_t w, std::size_t o) {
-  const Series& s = sc.series;
-  const StatementRows& st = s.statements;
+// A pair of counts' usual relation over the series: the median log(weighted /
+// outstanding), and its spread. Two counts a vendor measures differently, or an
+// outstanding count dated weeks after the period, spread it.
+struct PairNorm {
+  double offset = 0.0;
+  double sd = kPairSd;
+};
+
+// The log ratio of a period's weighted-average count (income row i, item w) to its
+// outstanding count (balance-sheet row b, item o), each put into the latest terms
+// from its own version's knowledge date; nullopt without both.
+std::optional<double> pair_ratio(const ShareContext& sc, std::size_t i, std::size_t b,
+                                 std::size_t w, std::size_t o) {
+  const StatementRows& st = sc.series.statements;
   const double wv = st.items[w][i];
   const double ov = st.items[o][b];
   if (!usable(wv) || !usable(ov)) {
     return std::nullopt;
   }
-  // Each in the terms of its own version's knowledge date: put into one.
-  const double d =
-      std::log(wv * to_latest(sc, st.known_from[i]) / (ov * to_latest(sc, st.known_from[b])));
-  if (std::fabs(d) < kMinStep) {
+  return std::log(wv * to_latest(sc, st.known_from[i]) / (ov * to_latest(sc, st.known_from[b])));
+}
+
+std::optional<ShareFinding> judge_pair(const ShareContext& sc, std::size_t i, std::size_t b,
+                                       std::size_t w, std::size_t o, const PairNorm& norm) {
+  const Series& s = sc.series;
+  const StatementRows& st = s.statements;
+  const std::optional<double> ratio = pair_ratio(sc, i, b, w, o);
+  if (!ratio) {
     return std::nullopt;
   }
-  const Nearest near = nearest(d, sc.price, kStepSd);
+  const double wv = st.items[w][i];
+  const double ov = st.items[o][b];
+  const double d = *ratio - norm.offset;  // off the pair's usual relation
+  if (std::fabs(d) < std::max(kMinStep, 5.0 * norm.sd)) {
+    return std::nullopt;
+  }
+  const double sd_ratio = ratio_sd(norm.sd);
+  const Nearest near = nearest(d, sc.price, sd_ratio);
   if (!near.ratio && near.power == 0) {
     return std::nullopt;
   }
   const int length = st.period_type[i] == PeriodType::kAnnual ? 366 : 92;
   const Date start = Date::from_days(s.date[i].days() - length);
   const Date filed = std::max(st.known_from[i], st.known_from[b]);
-  if (near.power == 0 && split_in(sc, start, filed, d, kStepSd) != nullptr) {
+  if (near.power == 0 && split_in(sc, start, filed, d, sd_ratio) != nullptr) {
     return std::nullopt;  // a split in the period, or before its filing, explains it
   }
   ShareFinding f;
@@ -658,20 +680,20 @@ std::optional<ShareFinding> judge_pair(const ShareContext& sc, std::size_t i, st
   f.before = b;
   f.item = w;
   f.other = o;
-  f.factor = std::exp(d);
+  f.factor = std::exp(*ratio);
   f.value = wv;
   f.other_value = ov;
-  f.spread = kPairSd;
+  f.spread = norm.sd;
   f.ratio = near.ratio;
   f.power = near.power;
   // d = log(w / o), so the window's orientation is income row against balance row.
   const std::size_t earlier = set_window(st, b, i, d, f);
-  const SplitFit fit = split_fit(f.implied, s.close[earlier], sc.price, kStepSd);
+  const SplitFit fit = split_fit(f.implied, s.close[earlier], sc.price, sd_ratio);
   f.split = fit.ratio;
   const double p_split = f.same_known ? 0.0 : missing_split_prior(f.window_from, f.window_to);
   // Real: the period's issuance between its average and its end, now and then an
   // offering or a merger.
-  const double real = log_add(std::log(1.0 - kLargeIssuance) + normal_log_pdf(d, 0.0, kPairSd),
+  const double real = log_add(std::log(1.0 - kLargeIssuance) + normal_log_pdf(d, 0.0, norm.sd),
                               std::log(kLargeIssuance) + normal_log_pdf(d, 0.0, kRealSd));
   std::array<double, 4> log{};
   log[0] = std::log(1.0 - kMismatchPrior - p_split) + real;
@@ -707,15 +729,41 @@ void judge_mismatch(const ShareContext& sc, const std::vector<std::size_t>& view
       balance = r;
     }
   }
+  std::vector<std::pair<std::size_t, std::size_t>> pairs;
   for (const auto& [key, rows] : periods) {
-    const auto [i, b] = rows;
-    if (i == kNone || b == kNone) {
-      continue;
+    if (rows.first != kNone && rows.second != kNone) {
+      pairs.push_back(rows);
     }
-    for (const std::size_t w : weighted) {
-      for (const std::size_t o : outstanding) {
-        if (std::optional<ShareFinding> f = judge_pair(sc, i, b, w, o)) {
-          out.push_back(std::move(*f));
+  }
+  // Each pair of counts, and each period type: a year's average against its end
+  // has its own relation.
+  for (const std::size_t w : weighted) {
+    for (const std::size_t o : outstanding) {
+      for (const PeriodType type : {PeriodType::kQuarter, PeriodType::kAnnual}) {
+        std::vector<double> ratios;
+        for (const auto& [i, b] : pairs) {
+          if (st.period_type[i] != type) {
+            continue;
+          }
+          if (const std::optional<double> r = pair_ratio(sc, i, b, w, o)) {
+            ratios.push_back(*r);
+          }
+        }
+        PairNorm norm;
+        if (ratios.size() >= 4) {
+          norm.offset = median_of(ratios);
+          for (double& x : ratios) {
+            x = std::fabs(x - norm.offset);
+          }
+          norm.sd = std::max(kPairSd, 1.4826 * median_of(ratios));
+        }
+        for (const auto& [i, b] : pairs) {
+          if (st.period_type[i] != type) {
+            continue;
+          }
+          if (std::optional<ShareFinding> f = judge_pair(sc, i, b, w, o, norm)) {
+            out.push_back(std::move(*f));
+          }
         }
       }
     }
