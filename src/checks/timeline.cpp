@@ -110,13 +110,18 @@ struct Filing {
 };
 
 // A year, and a year's last quarter (a quarter ending the day a year does), are known
-// from the 10-K. By the dates, not the label: a mislabelled quarter is still a 10-Q.
+// from the 10-K. By the dates, not the label, so that a mislabelled quarter is still
+// a 10-Q; by the label (Q4) only in a series with no years to go by.
 Form form_of(const Series& s, std::size_t r, const std::vector<Date>& year_ends) {
-  if (s.statements.period_type[r] == PeriodType::kAnnual ||
-      std::binary_search(year_ends.begin(), year_ends.end(), s.date[r])) {
+  const StatementRows& st = s.statements;
+  if (st.period_type[r] == PeriodType::kAnnual) {
     return Form::k10K;
   }
-  return Form::k10Q;
+  if (year_ends.empty()) {
+    return st.fiscal_period[r] == FiscalPeriod::kQ4 ? Form::k10K : Form::k10Q;
+  }
+  return std::binary_search(year_ends.begin(), year_ends.end(), s.date[r]) ? Form::k10K
+                                                                           : Form::k10Q;
 }
 
 // The series' filings: each period's first version that was filed, one filing per

@@ -388,8 +388,12 @@ void StatementsStale::run(const SeriesContext& context, std::vector<Violation>& 
   // The next quarter is a year's last when the series' latest year ends a year before it.
   bool ten_k = !quarters;
   if (quarters) {
-    const std::vector<Period> years = periods_of(s, PeriodType::kAnnual);
-    ten_k = !years.empty() && std::abs(next_end.days() - years.back().end.days() - 365) <= 20;
+    std::vector<Period> years = periods_of(s, PeriodType::kAnnual);
+    while (!years.empty() && s.statements.known_from[years.back().row] > as_of) {
+      years.pop_back();
+    }
+    ten_k = years.empty() ? latest.label == FiscalPeriod::kQ3
+                          : std::abs(next_end.days() - years.back().end.days() - 365) <= 20;
   }
   const Lag lag = usual_lag(s, ten_k);
   const auto due = Date::from_days(next_end.days() + static_cast<int>(std::lround(lag.median)));
