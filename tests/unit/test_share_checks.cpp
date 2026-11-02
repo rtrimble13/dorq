@@ -290,7 +290,12 @@ TEST_CASE("DQ921: no warn on a split on file, an offering or a merger") {
   Company offer;
   offer.id = "OFFER";
   offer.outstanding = [](int q) { return 1e8 * (q >= 10 ? 1.5 : 1.0); };
-  offer.weighted = [](int q) { return 1e8 * (q > 10 ? 1.5 : (q == 10 ? 1.2 : 1.0)); };
+  offer.weighted = [](int q) {
+    if (q == 10) {
+      return 1.2e8;  // the quarter of the offering: part of it
+    }
+    return 1e8 * (q > 10 ? 1.5 : 1.0);
+  };
   offer.price = [](int) { return 40.0; };
   csv += company(offer);
   // A merger paid in shares at the start of 2013 Q3: the count doubles for the
