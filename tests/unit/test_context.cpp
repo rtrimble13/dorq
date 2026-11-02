@@ -317,9 +317,69 @@ match = { asset_type = ["ETF", "etn"], exchange = "ARCX", kind = "ohlcv" }
 
   const dorq::Config again = dorq::parse_config(dorq::to_toml(config), "again.toml", false);
   CHECK(dorq::to_toml(again) == dorq::to_toml(config));
-  CHECK_THROWS_AS(static_cast<void>(dorq::parse_config("[profiles.x]\nmatch = { sector = \"a\" }",
+  CHECK_THROWS_AS(static_cast<void>(dorq::parse_config("[profiles.x]\nmatch = { colour = \"a\" }",
                                                        "d.toml", false)),
                   dorq::ConfigError);
+
+  // A sector, matched ignoring case and spaces (DR-0910).
+  const dorq::Config banks = dorq::parse_config(
+      "[profiles.banks]\nmatch = { sector = \"Financial Services\" }\n", "b.toml", false);
+  REQUIRE(banks.profiles.size() == 1);
+  dorq::SeriesMeta bank;
+  bank.sector = "financial services";
+  CHECK(banks.profiles[0].matches(s, &bank));
+  bank.sector = "Technology";
+  CHECK_FALSE(banks.profiles[0].matches(s, &bank));
+  CHECK_FALSE(banks.profiles[0].matches(s, nullptr));
+  const dorq::Config banks_again = dorq::parse_config(dorq::to_toml(banks), "b2.toml", false);
+  CHECK(dorq::to_toml(banks_again) == dorq::to_toml(banks));
+}
+
+TEST_CASE("the metadata's trading life and statements, under dorq's names and fafnir's") {
+  dorq::Context ours;
+  std::istringstream mine(
+      "security_id,currency,first_trade_date,last_trade_date,active,delisted_date,sector,"
+      "industry,statements_expected\n"
+      "A,usd,2001-02-03,2020-05-06,false,2020-05-07,Technology,Software,true\n"
+      "B,EUR,,,,,,,no\n"
+      "C,USD,soon,,maybe,,,,\n");
+  dorq::read_meta(mine, "meta.csv", ours);
+  REQUIRE(ours.meta_order == std::vector<std::string>{"A", "B", "C"});
+  const dorq::SeriesMeta& a = ours.meta.at("A");
+  CHECK(a.currency == "USD");
+  CHECK(a.first_trade == dorq::Date::from_ymd(2001, 2, 3));
+  CHECK(a.last_trade == dorq::Date::from_ymd(2020, 5, 6));
+  CHECK(a.active == false);
+  CHECK(a.delisted == dorq::Date::from_ymd(2020, 5, 7));
+  CHECK(a.sector == "Technology");
+  CHECK(a.industry == "Software");
+  CHECK(a.statements_expected == true);
+  const dorq::SeriesMeta& b = ours.meta.at("B");
+  CHECK(b.currency == "EUR");
+  CHECK_FALSE(b.first_trade.has_value());
+  CHECK_FALSE(b.active.has_value());
+  CHECK(b.statements_expected == false);
+  REQUIRE(ours.issues.size() == 2);  // C's first_trade_date and active
+  CHECK(ours.issues[0].message == "first_trade_date \"soon\" is not a date; it is left unset");
+  CHECK(ours.issues[1].message == "active \"maybe\" is not true or false; it is left unset");
+
+  // fafnir's core.security and core.vendor_security names.
+  dorq::Context theirs;
+  std::istringstream fafnir(
+      "security_id,currency,first_price_date,last_price_date,is_delisted,delisted_date,"
+      "sector_name,industry_name,first_quarter\n"
+      "7,USD,2001-02-03,2020-05-06 00:00:00+00,true,2020-05-07,Technology,Software,2001-03-31\n"
+      "8,USD,2010-01-04,,false,,,,\n");
+  dorq::read_meta(fafnir, "meta.csv", theirs);
+  CHECK(theirs.issues.empty());
+  const dorq::SeriesMeta& seven = theirs.meta.at("7");
+  CHECK(seven.last_trade == dorq::Date::from_ymd(2020, 5, 6));
+  CHECK(seven.active == false);
+  CHECK(seven.sector == "Technology");
+  CHECK(seven.statements_expected == true);
+  const dorq::SeriesMeta& eight = theirs.meta.at("8");
+  CHECK(eight.active == true);
+  CHECK(eight.statements_expected == false);  // no first quarter with fundamentals
 }
 
 TEST_CASE("context files that cannot be used are input errors") {

@@ -413,11 +413,16 @@ Profile read_profile(std::string name, const toml::table& table, const std::stri
           profile.match_exchange = read_string_list(match_node, where, match_path);
         } else if (match_key == "peer_group") {
           profile.match_peer_group = read_string_list(match_node, where, match_path);
+        } else if (match_key == "sector") {
+          profile.match_sector = read_string_list(match_node, where, match_path);
+          for (std::string& sector : profile.match_sector) {
+            sector = normalize_name(sector);
+          }
         } else {
           fail(where, match_node,
                "unknown key \"" + match_path +
-                   "\" (a profile matches on kind, series, asset_type, nav_priced, exchange or "
-                   "peer_group)");
+                   "\" (a profile matches on kind, series, asset_type, nav_priced, exchange, "
+                   "peer_group or sector)");
         }
       }
     } else if (key == "select") {
@@ -1448,7 +1453,8 @@ bool Profile::matches(const Series& series, const SeriesMeta* meta) const {
   }
   return listed(match_asset_type, meta->asset_type) &&
          (!match_nav_priced || meta->nav_priced == match_nav_priced) &&
-         listed(match_exchange, meta->exchange) && listed(match_peer_group, meta->peer_group);
+         listed(match_exchange, meta->exchange) && listed(match_peer_group, meta->peer_group) &&
+         listed(match_sector, normalize_name(meta->sector));
 }
 
 std::optional<fs::path> discover_config(const fs::path& start) {
@@ -1687,6 +1693,7 @@ std::string render(const Config& config, bool all_sections) {
     }
     match_list("exchange", profile.match_exchange);
     match_list("peer_group", profile.match_peer_group);
+    match_list("sector", profile.match_sector);
     std::string integrity;
     append_integrity_patch(integrity, profile.integrity);
     if (!integrity.empty()) {

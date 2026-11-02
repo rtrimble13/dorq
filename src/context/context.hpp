@@ -53,6 +53,15 @@ struct SeriesMeta {
   std::optional<double> tick_size;
   std::string peer_group;
   std::string exchange;
+  // The security's trading life and its statements (DQ94x).
+  std::string currency;  // the currency it trades in (upper case), or empty
+  std::optional<Date> first_trade;
+  std::optional<Date> last_trade;
+  std::optional<bool> active;  // still trading
+  std::optional<Date> delisted;
+  std::string sector;
+  std::string industry;
+  std::optional<bool> statements_expected;  // the vendor files statements for it
 };
 
 // A line item of the statements, from --items (fafnir's ref.statement_line_item).
@@ -95,6 +104,7 @@ struct Context {
   bool have_items = false;
   std::unordered_map<std::string, SeriesActions> actions;  // by series id
   std::unordered_map<std::string, SeriesMeta> meta;        // by series id
+  std::vector<std::string> meta_order;                     // the ids, in the file's order
   std::optional<MarketSeries> market;
   std::vector<LineItem> items;       // in the items file's order
   std::vector<ContextIssue> issues;  // in the order the files were read
