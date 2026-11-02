@@ -151,8 +151,6 @@ double split_weight(const SplitRatio& ratio) noexcept {
   return 0.005;
 }
 
-namespace {
-
 // How a split's direction depends on the price before it: companies split forward
 // to bring a high price down, and reverse-split to lift a low one (often to keep a
 // listing). Returns the share of forward splits at `price`, between 0.05 and 0.95:
@@ -161,6 +159,8 @@ double split_level_weights(double price) noexcept {
   const double share = (std::log(price) - std::log(5.0)) / (std::log(40.0) - std::log(5.0));
   return std::clamp(share, 0.05, 0.95);
 }
+
+namespace {
 
 // Powers of ten a scale error multiplies by, and their weights (each sign half).
 constexpr std::array<double, 6> kPowerWeights = {0.5, 0.3, 0.1, 0.05, 0.03, 0.02};

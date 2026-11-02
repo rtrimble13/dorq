@@ -55,15 +55,20 @@ Violation step_violation(const CheckInfo& info, const SeriesContext& context,
   switch (f.explanation()) {
     case ShareHypothesis::kUnreportedSplit: {
       v.classification = Classification::kContextGap;
+      const std::string split = f.split ? f.split->to_string() : step;
       v.message = item + " steps by " + step + " from " + from + " to " + to +
-                  ", with no split on file: a split missing from the actions, its ex-date "
-                  "between " +
-                  f.window_from.to_string() + " and " + f.window_to.to_string();
+                  ", with no split on file: a " + split +
+                  " split missing from the actions, its ex-date after " +
+                  f.window_from.to_string() + " and on or before " + f.window_to.to_string();
+      if (f.explains > 0) {
+        v.message += "; it explains " + std::to_string(f.explains) + " other step" +
+                     (f.explains == 1 ? "" : "s") + " in the counts";
+      }
       SuggestedAction action{"add_split", {}, {}};
-      action.fields.push_back({"ratio", step});
+      action.fields.push_back({"ratio", split});
       action.fields.push_back({"ex_date_after", f.window_from.to_string()});
       action.fields.push_back({"ex_date_on_or_before", f.window_to.to_string()});
-      action.text = "add a " + step + " split, its ex-date after " + f.window_from.to_string() +
+      action.text = "add a " + split + " split, its ex-date after " + f.window_from.to_string() +
                     " and on or before " + f.window_to.to_string() + ", to the actions";
       v.suggested_action = std::move(action);
       break;
@@ -131,7 +136,10 @@ Violation mismatch_violation(const CheckInfo& info, const SeriesContext& context
   v.detail.push_back({"other_value", f.other_value});
   v.detail.push_back({"ratio", by});
   v.detail.push_back({"views", views_text(f)});
-  v.hypotheses = {{"real", f.posterior[0]}, {"mismatch", f.posterior[1]}};
+  v.hypotheses = {{"real", f.posterior[0]},
+                  {"mismatch", f.posterior[1]},
+                  {"unreported_split", f.posterior[2]}};
+  v.evidence = f.evidence;
   SuggestedAction action{"check_share_terms", {}, {}};
   action.fields.push_back({"item", item});
   action.fields.push_back({"fiscal_date", s.date[f.row].to_string()});

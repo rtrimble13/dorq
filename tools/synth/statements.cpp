@@ -1096,14 +1096,20 @@ void Simulation::close_books(std::size_t t, Values& v, Books& next, double price
 }
 
 // Shares, in the company's first terms: employee plans add a little each quarter,
-// and shares are sold and bought back at the day's price.
+// and shares are sold and bought back at the day's price. A sale's cash adds to the
+// market cap (the price holds); a buyback's leaves it to the business's value.
 void Simulation::count_shares(std::size_t t, Values& v, const Trades& trades) {
-  const double price = mcap_at(c_, c_.quarters[t].end) / shares_;
+  const Date end = c_.quarters[t].end;
+  const double price = mcap_at(c_, end) / shares_;
   const double before = shares_;
   shares_ = std::max(before * 0.5,
                      before * (1.0015 + 0.002 * rng_.normal()) +
                          (trades.issuance - trades.repurchase + 0.5 * trades.compensation) / price);
   c_.shares[t] = shares_;
+  for (auto d = static_cast<std::size_t>(std::max(0, end.days() - c_.day0.days() + 1));
+       trades.issuance > 0.0 && d < c_.mcap.size(); ++d) {
+    c_.mcap[d] += trades.issuance;
+  }
   v[kSharesWeighted] = 0.5 * (before + shares_);
   v[kSharesDiluted] = v[kSharesWeighted] * (1.0 + (v[kNetIncome] > 0 ? p_.dilution : 0.0));
   v[kSharesOutstanding] = shares_ * 1.001;
@@ -1153,6 +1159,7 @@ class Universe {
   void cumulative_quarters();
   void identity_breaks();
   void share_faults();
+  void share_count_units();
   void filing_faults();
   void missing_quarters();
   void restated_at_scale();
@@ -1908,6 +1915,33 @@ void Universe::share_faults() {
   }
 }
 
+// Weighted-average shares stored at a power of ten for one to three quarters,
+// against the outstanding count the same filings give (DQ922), and a step in the
+// count's own line (DQ921).
+void Universe::share_count_units() {
+  for (int done = 0, tries = 0; done < 4 && tries < 5000; ++tries) {
+    Company& c = any();
+    const std::size_t t = pick_quarter(c);
+    const auto length = static_cast<std::size_t>(rng_.integer(1, 3));
+    if (t == kNoQuarter || t + length + 5 > c.quarters.size() || !reserve(c, t, t + length - 1)) {
+      continue;
+    }
+    const double f = rng_.chance(0.5) ? 1000.0 : 0.001;
+    for (std::size_t q = t; q < t + length; ++q) {
+      double& value = row_of(c, kInc, PeriodType::kQuarter, q, 1).values[kSharesWeighted];
+      value = std::round(value * f);
+    }
+    Label label{c.id,         c.quarters[t].end, c.quarters[t + length - 1].end,
+                "share_count_unit", "DQ922|DQ921", ""};
+    label.statement = kInc;
+    label.type = PeriodType::kQuarter;
+    label.version = 1;
+    label.item = "weighted_average_shares";
+    labels_.push_back(label);
+    ++done;
+  }
+}
+
 // Filing dates: the period end recorded as the filing date, and an amendment's
 // date taken for the original's.
 void Universe::filing_faults() {
@@ -2390,6 +2424,7 @@ void Universe::faults() {
   key_faults();
   impossible_values();
   restated_at_scale();
+  share_count_units();
   mark_impossible();
   mark_identities();
   mark_ties();

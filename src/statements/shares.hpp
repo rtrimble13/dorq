@@ -37,14 +37,25 @@ struct ShareFinding {
   std::size_t before = 0;    // DQ921: the period before the step
   std::size_t item = kNoItem;
   std::size_t other = kNoItem;  // DQ922: the count compared with
-  std::array<double, 4> posterior{};  // by ShareHypothesis (DQ922: [0] innocent, [1] error)
+  // By ShareHypothesis; DQ922: [0] real, [1] a count stored wrong, [2] a split missing
+  // from the actions between the two counts' knowledge dates.
+  std::array<double, 4> posterior{};
   double factor = 1.0;  // DQ921: the step, after / before; DQ922: item / other
   double value = 0.0;   // the stored count
   double other_value = 0.0;
   std::optional<SplitRatio> ratio;  // the clean ratio the factor is (shares after:before)
   int power = 0;                    // a power of ten the factor is
-  Date window_from;                 // DQ921: the window a missing split's ex-date is in
+  // The two counts' knowledge dates, earlier first: the window a split missing from
+  // the actions has its ex-date in, (window_from, window_to].
+  Date window_from;
   Date window_to;
+  bool same_known = false;  // both counts known on one date, in one terms: no split between
+  // The log ratio of the later-known count to the earlier-known one, and the split
+  // that ratio is: what a split missing from the actions would be.
+  double implied = 0.0;
+  std::optional<SplitRatio> split;
+  int explains = 0;  // DQ921: the other steps and mismatches the same missing split explains
+  double spread = 0.0;  // the real step's spread on the count's line, on the log scale
   std::optional<double> cap_step;  // the log step of the implied market cap, with close
   std::string split_on_file;       // the split on file in the window, if any: "2:1 2018-12-06"
   bool provisional = false;
@@ -53,8 +64,10 @@ struct ShareFinding {
   std::vector<Evidence> evidence;
 
   // DQ921: the probability that the step is not the company's (a split missing
-  // from the actions, or a count stored wrong); DQ922: of the mismatch being wrong.
-  [[nodiscard]] double p_not_real() const noexcept { return 1.0 - posterior[0]; }
+  // from the actions, or a count stored wrong); DQ922: that a count is stored wrong.
+  [[nodiscard]] double p_not_real() const noexcept {
+    return kind == Kind::kMismatch ? posterior[1] : 1.0 - posterior[0];
+  }
   // DQ921: the likeliest explanation other than a real issuance.
   [[nodiscard]] ShareHypothesis explanation() const noexcept;
 };

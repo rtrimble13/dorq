@@ -194,6 +194,11 @@ struct PriceContext {
 // model's split mixture and the share terms model (DQ921) share it.
 [[nodiscard]] double split_weight(const SplitRatio& ratio) noexcept;
 
+// The share of forward splits among the splits at a price before them, between 0.05
+// and 0.95: companies split forward to bring a high price down, and reverse-split to
+// lift a low one. Shared with the share terms model, like split_weight.
+[[nodiscard]] double split_level_weights(double price) noexcept;
+
 [[nodiscard]] PriceAnalysis analyze_prices(const Series& series, const Calendar& calendar,
                                            const PriceSettings& settings,
                                            const PriceContext& context = {});
