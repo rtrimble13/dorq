@@ -50,9 +50,12 @@ Lines and JSON arrays, and reports in five formats. It runs:
   identities that fail and why, DQ904 ties across periods that fail, DQ911 to
   DQ919 values over time (a bad value, a unit error in a value, a row or an era, a
   sign flipped, a copied quarter, a value written as 0, quarters stored year to
-  date, and large changes the evidence calls real), and DQ921 and DQ922 the share
-  counts, in one share terms with the splits on file: a split missing from the
-  actions, a count in the wrong terms, and counts that disagree.
+  date, and large changes the evidence calls real), DQ921 and DQ922 the share
+  counts, in one share terms with the splits on file (a split missing from the
+  actions, a count in the wrong terms, and counts that disagree), and DQ931, DQ932
+  and DQ951 the knowledge timeline: a filing date too early or an amendment's, a
+  version stored wrong (the new one, or the old one a restatement corrected), and a
+  backfill or a load fault across many series.
 
 `dorq calibrate` fits the price model's priors and its `p_error` map to labelled
 history: fafnir's own repair decisions ([doc/calibration.md](doc/calibration.md),
@@ -188,6 +191,9 @@ including the `fafnir` format that maps onto `ops.data_quality_flag`.
 | [DQ919](doc/checks/DQ919.md) | large-change | statements: a large change the evidence calls real (an acquisition, a write-down), at info |
 | [DQ921](doc/checks/DQ921.md) | share-terms-step | statements: a share count that steps by a split's ratio in one share terms: a split missing from the actions, or a count in the wrong terms (`--actions`, `--items`) |
 | [DQ922](doc/checks/DQ922.md) | share-count-mismatch | statements: a period's weighted-average and outstanding shares a split's ratio or a power of ten apart (`--items`) |
+| [DQ931](doc/checks/DQ931.md) | filing-date-implausible | statements: a filing date too early for the issuer's own lags (a look-ahead), or an amendment's date taken for the original's |
+| [DQ932](doc/checks/DQ932.md) | restatement-implausible | statements: a new version that differs from the old by a power of ten, a sign, a swap or a total alone: the new version wrong, or the old one |
+| [DQ951](doc/checks/DQ951.md) | revision-cohort | statements, across the input: many series revised on one day (a backfill, info), or one finding in rows loaded the same day (a load fault) |
 | [DQ701](doc/checks/DQ701.md) | split-misdated | a split on file the bars show a few sessions away (`--actions`) |
 | [DQ702](doc/checks/DQ702.md) | split-without-jump | a split on file the bars do not show: not real, already applied, or a duplicate row |
 | [DQ703](doc/checks/DQ703.md) | split-ratio-mismatch | a split on file at the wrong ratio (often inverted) |

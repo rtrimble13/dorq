@@ -119,14 +119,14 @@ Values values_of(int q, const std::string& statement) {
   }
   const double assets = 1e10 * (1.0 + 0.01 * t) * (1.0 + 0.004 * std::sin(t * 2.3));
   const double liabilities = 0.6 * assets * (1.0 + 0.003 * std::cos(t * 1.3));
-  return {std::round(assets), std::round(liabilities), std::round(assets) - std::round(liabilities)};
+  return {std::round(assets), std::round(liabilities),
+          std::round(assets) - std::round(liabilities)};
 }
 
 std::string number(double v) { return std::to_string(std::llround(v)); }
 
-std::string row(const std::string& id, int q, const std::string& statement, int version,
-                Date known, const std::optional<Date>& known_to, const char* source,
-                const Values& v) {
+std::string row(const std::string& id, int q, const std::string& statement, int version, Date known,
+                const std::optional<Date>& known_to, const char* source, const Values& v) {
   const Date end = quarter_end(q);
   std::string text = id + "," + statement + ",quarter," + end.to_string() + "," +
                      std::to_string(2010 + q / 4) + ",Q" + std::to_string(q % 4 + 1) + "," +
@@ -182,15 +182,16 @@ Result check(const TempDir& dir, const std::string& csv) {
   const std::string file = (dir.path() / "s.csv").string();
   const std::string items = (dir.path() / "items.csv").string();
   const std::string config = (dir.path() / "st.toml").string();
-  return run_in(dir.path(), {"--config", config.c_str(), "--items", items.c_str(), "--select",
-                             "DQ93,DQ951", "--show-info", "--format", "jsonl", "--exit-zero",
-                             file.c_str()});
+  return run_in(dir.path(),
+                {"--config", config.c_str(), "--items", items.c_str(), "--select", "DQ93,DQ951",
+                 "--show-info", "--format", "jsonl", "--exit-zero", file.c_str()});
 }
 
 }  // namespace
 
-TEST_CASE("DQ931: a filing date at the period end is an error, an amendment's a warn, a late "
-          "filing info") {
+TEST_CASE(
+    "DQ931: a filing date at the period end is an error, an amendment's a warn, a late "
+    "filing info") {
   const TempDir dir;
   std::string csv;
   Company early;  // 2013 Q2's 10-Q dated its period's end
@@ -223,7 +224,8 @@ TEST_CASE("DQ931: a filing date at the period end is an error, an amendment's a 
   const std::vector<std::string> a = reports(r.out, "DQ931", "AMENDED");
   REQUIRE_FALSE(a.empty());
   CHECK(contains(a[0], R"("severity":"warn")"));
-  CHECK(contains(a[0], "an amendment's date taken for the original's, known after the next period"));
+  CHECK(
+      contains(a[0], "an amendment's date taken for the original's, known after the next period"));
   CHECK(contains(a[0], R"("misdated_amendment")"));
 
   CHECK(reports(r.out, "DQ931", "LATE").empty());
@@ -282,8 +284,9 @@ TEST_CASE("DQ932: a new version at x1000 is the new version's error, a corrected
   const std::vector<std::string> f = reports(r.out, "DQ932", "FIXED");
   REQUIRE(f.size() == 1);
   CHECK(contains(f[0], R"("version_no":1)"));
-  CHECK(contains(f[0], "v1, in force from 2013-05-10 to 2014-02-20, differs from the restated v2 "
-                       "by x0.001 on 3 of 3 items"));
+  CHECK(contains(f[0],
+                 "v1, in force from 2013-05-10 to 2014-02-20, differs from the restated v2 "
+                 "by x0.001 on 3 of 3 items"));
   CHECK(contains(f[0], "the old version was wrong while in force"));
   CHECK(contains(f[0], R"("in_force_to":"2014-02-20")"));
 
