@@ -189,6 +189,11 @@ struct PriceContext {
 [[nodiscard]] double calibrated(const std::vector<std::pair<double, double>>& map,
                                 double p) noexcept;
 
+// The prior weight of a split ratio among the clean ratios a split takes: forward
+// 2:1 dominates, and 1:10, 1:5 and 1:20 are the usual reverse splits. The price
+// model's split mixture and the share terms model (DQ921) share it.
+[[nodiscard]] double split_weight(const SplitRatio& ratio) noexcept;
+
 [[nodiscard]] PriceAnalysis analyze_prices(const Series& series, const Calendar& calendar,
                                            const PriceSettings& settings,
                                            const PriceContext& context = {});

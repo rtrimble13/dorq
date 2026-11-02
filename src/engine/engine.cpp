@@ -157,6 +157,9 @@ const Engine::Settings& Engine::settings_for(const Series& series) {
       if (info.code.starts_with("DQ91")) {
         slot->value_model = true;
       }
+      if (info.code == "DQ921" || info.code == "DQ922") {
+        slot->share_model = true;
+      }
       if (info.cross_sectional ||
           (info.applies == Applies::kOhlcvOnly && series.kind != SeriesKind::kOhlcv)) {
         continue;
@@ -201,6 +204,12 @@ Engine::Processed Engine::process(Work& work) const {
     values = analyze_statement_values(series, *views, config_.statements,
                                       context_.have_items ? &context_.items : nullptr);
   }
+  std::optional<StatementShareAnalysis> shares;
+  if (statements && settings.share_model) {
+    shares = analyze_statement_shares(series, *views, config_.statements, settings.price,
+                                      context_.have_items ? &context_.items : nullptr,
+                                      context_.actions_for(series), context_.have_actions);
+  }
   std::optional<PriceAnalysis> price;
   if (settings.price_model) {
     price = analyze_prices(series, calendar_, settings.price,
@@ -230,6 +239,7 @@ Engine::Processed Engine::process(Work& work) const {
       .statement_settings = &config_.statements,
       .items = context_.have_items ? &context_.items : nullptr,
       .values = values ? &*values : nullptr,
+      .shares = shares ? &*shares : nullptr,
   };
   for (const Check* check : settings.checks) {
     check->run(context, result.violations);

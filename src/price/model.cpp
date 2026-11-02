@@ -126,6 +126,9 @@ double log_flat_top(double x, double a, double b, double sd) noexcept {
   return log_normal_pdf(y, lo, sd) + std::log(sd / (std::fabs(z) * (hi - lo)));
 }
 
+}  // namespace
+
+// The prior weight of a split ratio (price/model.hpp).
 double split_weight(const SplitRatio& ratio) noexcept {
   struct Known {
     SplitRatio ratio;
@@ -147,6 +150,8 @@ double split_weight(const SplitRatio& ratio) noexcept {
   }
   return 0.005;
 }
+
+namespace {
 
 // How a split's direction depends on the price before it: companies split forward
 // to bring a high price down, and reverse-split to lift a low one (often to keep a

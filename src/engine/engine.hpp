@@ -97,6 +97,7 @@ class Engine {
     bool coverage_model = false;       // a DQ30x check needs the coverage analysis
     bool price_model = false;          // a DQ2xx price check needs the price analysis
     bool value_model = false;          // DQ911 to DQ919 need the statement value model
+    bool share_model = false;          // DQ921 and DQ922 need the share terms model
     bool cohort = false;               // DQ303 enabled
     bool stale = false;                // DQ304 enabled
     bool cohort_move = false;          // DQ601 enabled

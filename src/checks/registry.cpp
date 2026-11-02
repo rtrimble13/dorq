@@ -99,7 +99,9 @@ std::span<const Check* const> all_checks() {
   static const AbsentAsZero kAbsentAsZero;
   static const CumulativeQuarters kCumulativeQuarters;
   static const LargeChange kLargeChange;
-  static const std::array<const Check*, 44> kChecks = {&kOhlcBounds,
+  static const ShareTermsStep kShareTermsStep;
+  static const ShareCountMismatch kShareCountMismatch;
+  static const std::array<const Check*, 46> kChecks = {&kOhlcBounds,
                                                        &kNonPositive,
                                                        &kDuplicateDate,
                                                        &kMissingField,
@@ -142,7 +144,7 @@ std::span<const Check* const> all_checks() {
                                                        &kCopiedPeriod,
                                                        &kAbsentAsZero,
                                                        &kCumulativeQuarters,
-                                                       &kLargeChange};
+                                                       &kLargeChange, &kShareTermsStep, &kShareCountMismatch};
   return kChecks;
 }
 
