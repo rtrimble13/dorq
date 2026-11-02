@@ -87,6 +87,18 @@ class ShareCountMismatch final : public Check {
   void run(const SeriesContext& context, std::vector<Violation>& out) const override;
 };
 
+class FilingDateImplausible final : public Check {
+ public:
+  [[nodiscard]] const CheckInfo& info() const noexcept override;
+  void run(const SeriesContext& context, std::vector<Violation>& out) const override;
+};
+
+class RestatementImplausible final : public Check {
+ public:
+  [[nodiscard]] const CheckInfo& info() const noexcept override;
+  void run(const SeriesContext& context, std::vector<Violation>& out) const override;
+};
+
 class LargeChange final : public Check {
  public:
   [[nodiscard]] const CheckInfo& info() const noexcept override;
