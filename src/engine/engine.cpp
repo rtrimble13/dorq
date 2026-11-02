@@ -438,6 +438,12 @@ void Engine::deliver(Processed processed) {
 }
 
 void Engine::submit(Series&& series) {
+  if (series.kind == SeriesKind::kStatements) {
+    saw_statements_ = true;
+    if (!context_.meta.empty()) {
+      seen_.insert(series.id);
+    }
+  }
   const Settings& settings = settings_for(series);
   Work work{next_sequence_++, std::move(series), &settings};
   if (workers_.empty()) {
@@ -502,7 +508,24 @@ void Engine::deliver_ready() {
   }
 }
 
+void Engine::visit_meta_only() {
+  if (!saw_statements_) {
+    return;  // a bars input: the metadata's other series are not its business
+  }
+  for (const std::string& id : context_.meta_order) {
+    if (seen_.contains(id)) {
+      continue;
+    }
+    Series series;
+    series.id = id;
+    series.kind = SeriesKind::kStatements;
+    submit(std::move(series));
+  }
+  seen_.clear();
+}
+
 void Engine::finish() {
+  visit_meta_only();
   if (!workers_.empty()) {
     while (true) {
       {

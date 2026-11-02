@@ -11,6 +11,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "checks/check.hpp"
@@ -83,6 +84,10 @@ class Engine {
 
   // Takes the next series. Blocks while too many are in flight.
   void submit(Series&& series);
+  // After the last series of a statements input: each --meta series the input did
+  // not have, in the meta file's order, as a statements series with no rows (DQ943).
+  // finish() calls it.
+  void visit_meta_only();
   // Waits for every submitted series and delivers the remaining results.
   void finish();
 
@@ -130,6 +135,10 @@ class Engine {
   const Context& context_;
   std::unordered_map<std::string, std::unique_ptr<Settings>> settings_;
   std::size_t next_sequence_ = 0;
+  // Statements: the series the input had, so that a series known only from --meta
+  // can be visited once it ends (DQ943).
+  bool saw_statements_ = false;
+  std::unordered_set<std::string> seen_;
 
   // Cross-sectional checks. Results are held from the first series of a kind that an
   // enabled cross-sectional check (DQ303, DQ304, DQ601, DQ951) applies to, and for
