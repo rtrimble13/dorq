@@ -105,6 +105,11 @@ DQ912 precision 0.95
 DQ912 recall 0.9
 DQ911 precision 0.85
 DQ913 precision 0.9
+# The quarterly structure (DR-0907), at warn: a copied period, a zero where the item
+# is reported either side, and quarters stored year to date or holding the year.
+DQ914 precision 0.9
+DQ915 precision 0.9
+DQ916 precision 0.9
 # Real events and real data, which no statement check may report at warn.
 hn_acquisition max 0
 hn_writedown max 0

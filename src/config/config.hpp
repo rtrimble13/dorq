@@ -324,6 +324,8 @@ struct StatementSettings {
   std::pair<int, int> quarter_spacing = {56, 126};   // days between consecutive quarter ends
   std::pair<int, int> year_spacing = {300, 430};     // and year ends
   Date coverage_floor = Date::from_ymd(1998, 1, 1);  // no period is expected before this
+  // DQ914: a row that repeats the period before it on at least this many items.
+  int copy_min_items = 5;
   // DQ903: by identity name (sorted), the items whose non-zero value in a period
   // explains that identity's gap there, as noncontrolling interests' income explains
   // the balance sheet's.

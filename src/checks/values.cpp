@@ -38,6 +38,17 @@ std::string ratio_text(double ratio) {
 // The code a finding is reported under: its most probable error, or DQ919 where a
 // real change is likelier than any error.
 std::string_view code_of(const ValueFinding& f) {
+  switch (f.kind) {
+    case ValueKind::kCopied:
+      return "DQ914";
+    case ValueKind::kAbsentZero:
+      return "DQ915";
+    case ValueKind::kCumulative:
+    case ValueKind::kAnnualInQuarter:
+      return "DQ916";
+    case ValueKind::kModel:
+      break;
+  }
   if (f.scope != ValueScope::kValue) {
     return "DQ912";
   }
@@ -94,6 +105,79 @@ std::string message_of(std::string_view code, const Series& s, const ValueFindin
          " times): a change the evidence calls real";
 }
 
+// DQ914 to DQ916: the quarterly structure's findings.
+Violation structure_violation(const CheckInfo& info, const SeriesContext& context,
+                              const ValueFinding& f, Severity severity) {
+  const Series& s = context.series;
+  const StatementRows& st = s.statements;
+  Violation v = statement_finding(info, s, f.row, true);
+  v.severity = severity;
+  v.p_error = f.p_error();
+  v.provisional = f.provisional;
+  const std::string fy = "FY" + std::to_string(f.fiscal_year);
+  const std::string of = " (" + std::to_string(f.items) + " of " + std::to_string(f.present);
+  std::string_view innocent = "real_change";
+  std::string_view error;
+  switch (f.kind) {
+    case ValueKind::kCopied:
+      error = "copied_period";
+      v.message = "the row repeats the period before it, to the unit, on " +
+                  std::to_string(f.items) + " of " + std::to_string(f.present) +
+                  " items: a copy, against this series' own repeats";
+      v.detail.push_back({"items", static_cast<std::int64_t>(f.items)});
+      v.detail.push_back({"present", static_cast<std::int64_t>(f.present)});
+      v.detail.push_back({"chance", f.chance});
+      break;
+    case ValueKind::kAbsentZero: {
+      innocent = "real_zero";
+      error = "absent_as_zero";
+      const std::string& item = st.item_names[f.item];
+      v.message = item + " is 0, reported either side (expected about " +
+                  amount_text(std::round(f.expected)) + "): a value the filing did not carry";
+      v.key.push_back({"item", item});
+      v.detail.push_back({"item", item});
+      v.detail.push_back({"expected", f.expected});
+      v.detail.push_back({"repaired", f.repaired});
+      break;
+    }
+    case ValueKind::kCumulative:
+      error = "cumulative_quarter";
+      v.end_date = s.date[f.last_row];
+      v.known = std::max(known_of(s, f.row), known_of(s, f.last_row));
+      v.message = "the quarters of " + fy +
+                  " are stored year to date: Q2 to Q4 hold the sums from Q1, and Q4 the year" +
+                  of + " flows)";
+      v.detail.push_back({"fiscal_year", static_cast<std::int64_t>(f.fiscal_year)});
+      v.detail.push_back({"items", static_cast<std::int64_t>(f.items)});
+      v.detail.push_back({"present", static_cast<std::int64_t>(f.present)});
+      break;
+    case ValueKind::kAnnualInQuarter:
+      error = "annual_in_quarter";
+      v.message = "the quarter holds " + fy + "'s flows" + of + " equal the year's)";
+      v.detail.push_back({"fiscal_year", static_cast<std::int64_t>(f.fiscal_year)});
+      v.detail.push_back({"items", static_cast<std::int64_t>(f.items)});
+      v.detail.push_back({"present", static_cast<std::int64_t>(f.present)});
+      break;
+    case ValueKind::kModel:
+      break;
+  }
+  v.hypotheses = {{innocent, f.posterior[0]}, {error, f.posterior[1]}};
+  v.evidence = f.evidence;
+  SuggestedAction action{"check_filing", {}, {}};
+  if (f.item != kNoItem) {
+    action.fields.push_back({"item", st.item_names[f.item]});
+  }
+  action.fields.push_back({"fiscal_date", s.date[f.row].to_string()});
+  if (const std::optional<Date>& filed = st.filing_date[f.row]) {
+    action.fields.push_back({"filing_date", filed->to_string()});
+  }
+  action.text = "check " + std::string{f.item == kNoItem ? "the row" : st.item_names[f.item]} +
+                " for " + s.date[f.row].to_string() +
+                " against its filing, and report a vendor error to the vendor";
+  v.suggested_action = std::move(action);
+  return v;
+}
+
 std::string views_text(const ValueFinding& f) {
   if (f.in_force && f.first_reported) {
     return "both";
@@ -110,6 +194,18 @@ void report(const CheckInfo& info, const SeriesContext& context, std::vector<Vio
   for (const ValueFinding& f : context.values->findings) {
     const std::string_view code = code_of(f);
     if (code != info.code) {
+      continue;
+    }
+    if (f.kind != ValueKind::kModel) {
+      std::optional<Severity> severity = context.thresholds.for_probability(f.p_error());
+      if (severity && f.provisional && *severity == Severity::kError) {
+        severity = Severity::kWarn;
+      }
+      if (severity) {
+        Violation v = structure_violation(info, context, f, *severity);
+        v.detail.push_back({"views", views_text(f)});
+        out.push_back(std::move(v));
+      }
       continue;
     }
     const bool large_change = code == "DQ919";
@@ -239,6 +335,54 @@ const CheckInfo& SignError::info() const noexcept {
 }
 
 void SignError::run(const SeriesContext& context, std::vector<Violation>& out) const {
+  report(info(), context, out);
+}
+
+const CheckInfo& CopiedPeriod::info() const noexcept {
+  static const CheckInfo kInfo{
+      .code = "DQ914",
+      .name = "copied-period",
+      .summary = "a row that repeats the period before it, to the unit, on most of its items, "
+                 "against the series' own repeats ([statements] copy_min_items)",
+      .default_severity = Severity::kWarn,
+      .applies = Applies::kStatements,
+  };
+  return kInfo;
+}
+
+void CopiedPeriod::run(const SeriesContext& context, std::vector<Violation>& out) const {
+  report(info(), context, out);
+}
+
+const CheckInfo& AbsentAsZero::info() const noexcept {
+  static const CheckInfo kInfo{
+      .code = "DQ915",
+      .name = "absent-as-zero",
+      .summary = "a 0 where the item is reported in the periods either side: a value the "
+                 "filing did not carry ([statements] never_absent)",
+      .default_severity = Severity::kWarn,
+      .applies = Applies::kStatements,
+  };
+  return kInfo;
+}
+
+void AbsentAsZero::run(const SeriesContext& context, std::vector<Violation>& out) const {
+  report(info(), context, out);
+}
+
+const CheckInfo& CumulativeQuarters::info() const noexcept {
+  static const CheckInfo kInfo{
+      .code = "DQ916",
+      .name = "cumulative-quarters",
+      .summary = "a fiscal year's quarters stored year to date, or a quarter holding its year's "
+                 "flows (--items)",
+      .default_severity = Severity::kWarn,
+      .applies = Applies::kStatements,
+  };
+  return kInfo;
+}
+
+void CumulativeQuarters::run(const SeriesContext& context, std::vector<Violation>& out) const {
   report(info(), context, out);
 }
 

@@ -644,6 +644,8 @@ void read_statements(const toml::table& table, const std::string& where, Config&
                                            read_string_list(items, where, key_path(path, name)));
       }
       std::sort(settings.explained_by.begin(), settings.explained_by.end());
+    } else if (key == "copy_min_items") {
+      settings.copy_min_items = read_int(node, where, path, 2, 1000);
     } else if (key == "priors") {
       read_statement_priors(read_table(node, where, path), where, settings.priors);
     } else {
@@ -1034,6 +1036,10 @@ void append_statements(std::string& out, const StatementSettings& settings, bool
   }
   out += "\nbounds = ";
   append_toml_list(out, bounds);
+  // Left out of config_hash at its default, as [statements.priors] is.
+  if (all_sections || settings.copy_min_items != StatementSettings{}.copy_min_items) {
+    out += "\ncopy_min_items = " + std::to_string(settings.copy_min_items);
+  }
   out += "\n";
   if (!settings.identities.empty()) {
     out += "\n[statements.identities]\n";

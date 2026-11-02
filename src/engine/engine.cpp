@@ -154,8 +154,7 @@ const Engine::Settings& Engine::settings_for(const Series& series) {
           (info.code.starts_with("DQ70") && info.code != "DQ705")) {
         slot->price_model = true;
       }
-      if (info.code == "DQ911" || info.code == "DQ912" || info.code == "DQ913" ||
-          info.code == "DQ919") {
+      if (info.code.starts_with("DQ91")) {
         slot->value_model = true;
       }
       if (info.cross_sectional ||
