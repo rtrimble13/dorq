@@ -14,6 +14,7 @@
 #include "dorq/series.hpp"
 #include "dorq/violation.hpp"
 #include "price/model.hpp"
+#include "statements/values.hpp"
 #include "statements/views.hpp"
 
 namespace dorq {
@@ -46,6 +47,9 @@ struct SeriesContext {
   const StatementSettings* statement_settings = nullptr;
   // The line items --items lists (their statement and class), or nullptr without it.
   const std::vector<LineItem>* items = nullptr;
+  // The statement value model's findings, computed once when any of DQ911 to DQ919
+  // runs; nullptr otherwise.
+  const StatementValueAnalysis* values = nullptr;
 
   // The exchange tick from --meta, if given.
   [[nodiscard]] std::optional<double> meta_tick() const noexcept {

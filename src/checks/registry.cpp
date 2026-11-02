@@ -92,7 +92,11 @@ std::span<const Check* const> all_checks() {
   static const ImpossibleValue kImpossibleValue;
   static const IdentityBreak kIdentityBreak;
   static const PeriodTie kPeriodTie;
-  static const std::array<const Check*, 37> kChecks = {
+  static const BadValue kBadValue;
+  static const UnitError kUnitError;
+  static const SignError kSignError;
+  static const LargeChange kLargeChange;
+  static const std::array<const Check*, 41> kChecks = {
       &kOhlcBounds,     &kNonPositive,     &kDuplicateDate, &kMissingField,   &kNonSession,
       &kPrecisionShift, &kZeroRange,       &kOutOfBounds,   &kBadContextRow,  &kBadPrint,
       &kScaleShift,     &kUnreportedSplit, &kCloseMismatch, &kHistorySegment, &kDateShift,
@@ -100,7 +104,8 @@ std::span<const Check* const> all_checks() {
       &kFrequencyGap,   &kVolumeShift,     &kVolumeSpike,   &kZeroVolumeMove, &kRepeatedPrice,
       &kCarryBar,       &kCohortMove,      &kMarketDay,     &kSplitMisdated,  &kSplitNoJump,
       &kSplitRatio,     &kSplitDouble,     &kDividend,      &kStatementKey,   &kImpossibleValue,
-      &kIdentityBreak,  &kPeriodTie};
+      &kIdentityBreak,  &kPeriodTie,       &kBadValue,      &kUnitError,      &kSignError,
+      &kLargeChange};
   return kChecks;
 }
 

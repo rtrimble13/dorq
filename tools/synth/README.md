@@ -255,20 +255,20 @@ has one.
 | `absent_as_zero` | DQ915 | 6 items, reported in the quarters either side, set to 0 |
 | `cumulative_quarters` | DQ916 | 3 fiscal years whose Q2 to Q4 hold the year to date (flows) |
 | `annual_in_quarter` | DQ916 | 3 quarters holding their fiscal year's flows |
-| `identity_dropped_field`, `identity_doubled_field` | DQ903 | 4 totals missing one of their terms, and 4 counting one twice |
+| `identity_dropped_field`, `identity_doubled_field` | DQ903, DQ911 | 4 totals missing one of their terms, and 4 counting one twice. The term's label expects DQ903, which names it; a second, on the total, DQ911, which sees the total off its series where the term is a large part of it |
 | `split_missing` | DQ921 | 3 splits that are not on file (a context gap) |
 | `counts_wrong_terms` | DQ921 | 3 quarters, the first known after a split on file, whose share counts are left in the old terms |
 | `filing_at_period_end` | DQ931 | 3 periods whose filing date, and `known_from`, is the period end |
 | `amendment_date` | DQ931 | 3 10-Qs dated 20–60 days after the next quarter's filing |
 | `missing_quarter` | DQ941 | 4 quarters missing from all three statements |
-| `restatement_x1000` | DQ932 | 3 restatements whose new version is the old one at ×1,000 |
+| `restatement_x1000` | DQ932, DQ912 | 3 restatements whose new version is the old one at ×1,000: a row at ×1,000 in the in-force view too |
 | `statements_missing` | DQ943 | `MIS01`, which expects statements and has none |
 | `duplicate_row` | DQ901 | 3 rows written twice |
 | `chain_gap`, `chain_overlap`, `chain_two_open`, `chain_closed_last` | DQ901 | 7 restated periods whose versions do not chain: the first closed before the next is known (2) or after (2), the first left open (2), and the last closed (1) |
 | `known_before_period` | DQ901 | 3 periods known, and filed, 1–20 days before they end |
 | `filing_date_mismatch` | DQ901 | 3 periods known 3–20 days after their filing date |
-| `negative_impossible` | DQ902 | 4 values that cannot be negative (revenue, a share count, total assets) at a small negative, which is not a clean sign flip |
-| `component_above_total` | DQ902 | 4 components (cash, current assets, goodwill, current liabilities) above their total |
+| `negative_impossible` | DQ902, DQ911 | 4 values that cannot be negative (revenue, a share count, total assets) at a small negative, which is not a clean sign flip: one bad value |
+| `component_above_total` | DQ902, DQ911 | 4 components (cash, current assets, goodwill, current liabilities) above their total: one bad value |
 | `hn_acquisition` | - | about a fifth of the industrials buy a company with debt: goodwill and assets step, and revenue steps 15–50% for good (DQ9) |
 | `hn_writedown` | - | goodwill written down by 50–90% in a quarter, through operating expenses (DQ9) |
 | `hn_fiscal_year_change` | - | the three changes of fiscal year (DQ9) |
@@ -345,6 +345,10 @@ bounds:
 - DQ903 (DR-0905) at precision and recall 0.9, and DQ904 at precision 0.9. DQ904's
   recall is not gated: its consequence labels cover rows other faults break
   without its reporting each one;
+- the value model (DR-0906) at warn: DQ912 at precision 0.95 and recall 0.9, DQ911
+  at precision 0.85 and DQ913 at precision 0.9. Their recall otherwise is left to
+  the evidence a single value leaves: a value in no identity and no quarter sum
+  has only its series;
 - no report at warn on any hard negative.
 
 It also runs dorq with `priors/fafnir-statements.toml`, so that file names only

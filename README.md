@@ -47,7 +47,9 @@ Lines and JSON arrays, and reports in five formats. It runs:
   (DQ9xx) arrive item by item ([the plan](doc/plans/dorq-fundamentals-plan.md)).
   So far DQ104 reports the rows and values that cannot be used, DQ901 versions
   that collide or do not chain, DQ902 values that cannot be right, DQ903
-  identities that fail and why, and DQ904 ties across periods that fail.
+  identities that fail and why, DQ904 ties across periods that fail, and DQ911 to
+  DQ919 values over time: a bad value, a unit error (a value, a row or an era), a
+  sign flipped, and large changes the evidence calls real.
 
 `dorq calibrate` fits the price model's priors and its `p_error` map to labelled
 history: fafnir's own repair decisions ([doc/calibration.md](doc/calibration.md),
@@ -174,6 +176,10 @@ including the `fafnir` format that maps onto `ops.data_quality_flag`.
 | [DQ902](doc/checks/DQ902.md) | impossible-value | statements: a negative where none can be, or a component above its total (`[statements] nonnegative`, `bounds`) |
 | [DQ903](doc/checks/DQ903.md) | identity-break | statements: an identity that fails beyond tolerance, weighed as the company's structure, a reclassification, a field error (named) or unexplained (`[statements.identities]`) |
 | [DQ904](doc/checks/DQ904.md) | period-tie | statements: the change in cash against the cash flow (`[statements] cash_tie`), or a year's four quarters against the year (`--items`) |
+| [DQ911](doc/checks/DQ911.md) | bad-value | statements: one period's value off its item's series, which the periods around it and the row's identities do not bear out |
+| [DQ912](doc/checks/DQ912.md) | unit-error | statements: a value, a whole row or a run of periods at a power of ten (×1,000, ×0.001, ×10⁶) |
+| [DQ913](doc/checks/DQ913.md) | sign-error | statements: a sign flipped against the item's convention and its own history (`--items`) |
+| [DQ919](doc/checks/DQ919.md) | large-change | statements: a large change the evidence calls real (an acquisition, a write-down), at info |
 | [DQ701](doc/checks/DQ701.md) | split-misdated | a split on file the bars show a few sessions away (`--actions`) |
 | [DQ702](doc/checks/DQ702.md) | split-without-jump | a split on file the bars do not show: not real, already applied, or a duplicate row |
 | [DQ703](doc/checks/DQ703.md) | split-ratio-mismatch | a split on file at the wrong ratio (often inverted) |

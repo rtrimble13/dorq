@@ -532,6 +532,38 @@ std::pair<int, int> read_spacing(const toml::node& node, const std::string& wher
   return {*low, *high};
 }
 
+// [statements.priors]. The three error priors leave real_change the rest, so they
+// sum to less than 1.
+void read_statement_priors(const toml::table& table, const std::string& where,
+                           StatementPriors& priors) {
+  for (const auto& [key_node, node] : table) {
+    const std::string_view key = key_node.str();
+    const std::string path = key_path("statements.priors", key);
+    if (key == "bad_value" || key == "unit_error" || key == "sign_error") {
+      const double p = read_double(node, where, path, 1e-6, 0.5);
+      double* target = &priors.sign_error;
+      if (key == "bad_value") {
+        target = &priors.bad_value;
+      } else if (key == "unit_error") {
+        target = &priors.unit_error;
+      }
+      *target = p;
+      if (priors.bad_value + priors.unit_error + priors.sign_error >= 0.95) {
+        fail(where, node,
+             "\"statements.priors\": bad_value, unit_error and sign_error must sum to "
+             "less than 0.95, leaving real_change the rest");
+      }
+    } else if (key == "flow_scale" || key == "stock_scale") {
+      (key == "flow_scale" ? priors.flow_scale : priors.stock_scale) =
+          read_double(node, where, path, 1e-4, 5.0);
+    } else if (key == "prior_weight") {
+      priors.prior_weight = read_double(node, where, path, 0.0, 1000.0);
+    } else {
+      fail(where, node, "unknown key \"" + path + "\"");
+    }
+  }
+}
+
 void read_statements(const toml::table& table, const std::string& where, Config& config) {
   StatementSettings& settings = config.statements;
   for (const auto& [key_node, node] : table) {
@@ -612,6 +644,8 @@ void read_statements(const toml::table& table, const std::string& where, Config&
                                            read_string_list(items, where, key_path(path, name)));
       }
       std::sort(settings.explained_by.begin(), settings.explained_by.end());
+    } else if (key == "priors") {
+      read_statement_priors(read_table(node, where, path), where, settings.priors);
     } else {
       fail(where, node, "unknown key \"" + path + "\"");
     }
@@ -974,7 +1008,7 @@ void append_priors_patch(std::string& out, const PricePatch& patch) {
   append_number(out, "stale_run", patch.stale_run);
 }
 
-void append_statements(std::string& out, const StatementSettings& settings) {
+void append_statements(std::string& out, const StatementSettings& settings, bool all_sections) {
   out += "\n[statements]\nidentity_share = " + format_number(settings.identity_share);
   out += "\ntie_floor = " + format_number(settings.tie_floor);
   out += "\ncash_tie_share = " + format_number(settings.cash_tie_share);
@@ -1016,6 +1050,18 @@ void append_statements(std::string& out, const StatementSettings& settings) {
       append_toml_list(out, items);
       out += "\n";
     }
+  }
+  // Left out of config_hash where they hold their defaults, so the release that
+  // added them changed no hash.
+  if (all_sections || settings.priors != StatementPriors{}) {
+    const StatementPriors& p = settings.priors;
+    out += "\n[statements.priors]\nbad_value = " + format_number(p.bad_value);
+    out += "\nunit_error = " + format_number(p.unit_error);
+    out += "\nsign_error = " + format_number(p.sign_error);
+    out += "\nflow_scale = " + format_number(p.flow_scale);
+    out += "\nstock_scale = " + format_number(p.stock_scale);
+    out += "\nprior_weight = " + format_number(p.prior_weight);
+    out += "\n";
   }
 }
 
@@ -1605,7 +1651,7 @@ std::string render(const Config& config, bool all_sections) {
   }
 
   if (all_sections || config.statements != StatementSettings{}) {
-    append_statements(out, config.statements);
+    append_statements(out, config.statements, all_sections);
   }
 
   for (const Profile& profile : config.profiles) {

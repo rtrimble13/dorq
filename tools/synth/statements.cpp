@@ -1845,9 +1845,11 @@ void Universe::identity_breaks() {
     }
     const bool doubled = done % 2 == 1;
     row.values.at(eq.total) += (doubled ? 1.0 : -1.0) * sign * value;
-    // The gap equals the term: the field DQ903 should name.
-    label_row(c, row, doubled ? "identity_doubled_field" : "identity_dropped_field", "DQ903",
-              std::string{info(term).column});
+    // The gap equals the term: the field DQ903 should name. The total is the value
+    // that is wrong, which DQ911 can see where the term is a large part of it.
+    const char* kind = doubled ? "identity_doubled_field" : "identity_dropped_field";
+    label_row(c, row, kind, "DQ903", std::string{info(term).column});
+    label_row(c, row, kind, "DQ911", std::string{info(eq.total).column});
     ++done;
   }
 }
@@ -1977,7 +1979,8 @@ void Universe::restated_at_scale() {
       }
     }
     c.rows.push_back(restated);
-    label_row(c, restated, "restatement_x1000", "DQ932");
+    // The new version is a whole row at x1000: DQ912's too, in the in-force view.
+    label_row(c, restated, "restatement_x1000", "DQ932|DQ912");
     ++done;
   }
 }
@@ -2096,7 +2099,8 @@ void Universe::impossible_values() {
     }
     // Not a clean sign flip (DQ913's): a small negative, as a sentinel or a slip.
     value = -std::max(unit, std::round(value * rng_.uniform(0.001, 0.2) / unit) * unit);
-    label_row(c, row, "negative_impossible", "DQ902", std::string{info(item).column});
+    // A small negative where the item is large: one bad value (DQ911) as well.
+    label_row(c, row, "negative_impossible", "DQ902|DQ911", std::string{info(item).column});
     ++done;
   }
   static const std::array<std::pair<Item, Item>, 4> kParts{{{kCash, kAssets},
@@ -2116,7 +2120,7 @@ void Universe::impossible_values() {
       continue;
     }
     row.values.at(part) = std::round(whole * rng_.uniform(1.05, 1.6) / c.unit) * c.unit;
-    label_row(c, row, "component_above_total", "DQ902", std::string{info(part).column});
+    label_row(c, row, "component_above_total", "DQ902|DQ911", std::string{info(part).column});
     ++done;
   }
 }

@@ -27,6 +27,7 @@ add_library(
   checks/price.cpp
   checks/registry.cpp
   checks/identities.cpp
+  checks/values.cpp
   checks/stale.cpp
   checks/statement_rows.cpp
   checks/statements.cpp
@@ -60,6 +61,7 @@ add_library(
   stats/special.cpp
   stats/student_t.cpp
   statements/views.cpp
+  statements/values.cpp
   output/writer.cpp
   "${DORQ_BUILD_INFO_CPP}"
   "${DORQ_CHECK_DOCS_CPP}")

@@ -98,6 +98,13 @@ DQ902 recall 1.0
 DQ903 precision 0.9
 DQ903 recall 0.9
 DQ904 precision 0.9
+# The value model (DR-0906), at warn: a whole row or a run at one factor is decisive
+# for DQ912; DQ911 and DQ913 are held to their precision, their recall left to the
+# evidence a single value leaves (a term of no identity, a year with no quarters).
+DQ912 precision 0.95
+DQ912 recall 0.9
+DQ911 precision 0.85
+DQ913 precision 0.9
 # Real events and real data, which no statement check may report at warn.
 hn_acquisition max 0
 hn_writedown max 0

@@ -132,7 +132,8 @@ A price check's record carries its model (wrapped the same way):
 | `evidence` | The evidence terms: `feature`, `value`, `log_bf` (the log Bayes factor for the reported explanation against a real market move) and an optional `note`. `[]` otherwise |
 | `suggested_action` | What would fix it: `kind` (`delete_bars`, `refetch_bar`, `add_split`, `rescale`, `rescale_volume`, `split_history`, `redate_split`, `check_split`, `delete_split`, `fix_split_ratio`, `fix_dividend`, `check_dividend_frequency`, `check_distribution`) and its fields, or `null`. dorq never changes data |
 | `provisional` | `true` when the violation was judged with fewer bars after it than the model needs; a later run may change it. Its severity is at most `warn` |
-| `record_key` | `{"trade_date": "..."}`, or `{"line": N}` when there is no date. A check that can report two rows for one series and date adds what tells them apart: DQ601 adds `"ratio"` (`{"trade_date": "2026-10-06", "ratio": "2:1"}`), since one date can hold a 2:1 cohort and a 3:2 one. A statement finding is keyed by its period: `{"statement": "income", "period_type": "quarter", "fiscal_date": "2024-06-30", "version_no": 1}`, with no `version_no` for a finding on the whole period and an `"item"`, `"identity"` or `"tie"` for one on an item, identity or tie. One whose statement could not be read is keyed `{"fiscal_date": ...}`, or by its line |
+| `record_key` | `{"trade_date": "..."}`, or `{"line": N}` when there is no date. A check that can report two rows for one series and date adds what tells them apart: DQ601 adds `"ratio"` (`{"trade_date": "2026-10-06", "ratio": "2:1"}`), since one date can hold a 2:1 cohort and a 3:2 one. A statement finding is keyed by its period: `{"statement": "income", "period_type": "quarter", "fiscal_date": "2024-06-30", "version_no": 1}`, with no `version_no` for a finding on the whole period and an `"item"`, `"identity"` or `"tie"` for one on an item, identity or tie, or a
+`"scope"` (`"row"`, `"era"`) for one on a whole row or a run of rows (DQ912). One whose statement could not be read is keyed `{"fiscal_date": ...}`, or by its line |
 | `dorq` | The version, and the hash of the settings that can change what is reported. `dorq config show`, given the run's options, prints it; [configuration.md](configuration.md#what-config_hash-covers) lists what it covers. A reference calendar counts by its content, not its path |
 
 Numbers are written in their shortest exact form. A value that is not a finite
@@ -164,7 +165,8 @@ series,label,source,date,end_date,line,code,check,severity,p_error,classificatio
 When the input's first series is statements, six columns follow `message`:
 `statement,period_type,fiscal_year,fiscal_period,version_no,item`, empty on a
 finding about no one period. `item` is the line item a finding names (DQ902's
-item, the field a DQ903 field error names, DQ904's cash), and empty otherwise: an
+item, the field a DQ903 field error names, DQ904's cash, DQ911 to DQ919's item),
+and empty otherwise: an
 identity's or a tie's name is in `record_key`, not here. A bars or point input's columns are as above. The
 columns are decided by the first series because the header comes before the rest
 of the input is read; run statements and bars separately (as fafnir does) to get
