@@ -144,7 +144,9 @@ std::span<const Check* const> all_checks() {
                                                        &kCopiedPeriod,
                                                        &kAbsentAsZero,
                                                        &kCumulativeQuarters,
-                                                       &kLargeChange, &kShareTermsStep, &kShareCountMismatch};
+                                                       &kLargeChange,
+                                                       &kShareTermsStep,
+                                                       &kShareCountMismatch};
   return kChecks;
 }
 

@@ -31,19 +31,20 @@ ShareHypothesis ShareFinding::explanation() const noexcept {
 
 namespace {
 
-constexpr double kStepSd = 0.04;   // a clean step's spread, on the log scale (issuance meanwhile)
-constexpr double kCapSd = 0.25;    // the market cap's move between two filings, without a line's own
-constexpr double kCapFloor = 0.05;  // the least a line's market cap spread is taken to be
-constexpr double kCapTail = 0.15;   // the share of market cap moves from the fat tail
-constexpr double kRealSd = 0.35;   // a real issuance's step (an offering, a merger)
-constexpr double kMinStep = 0.22;  // log 1.25: smaller steps are issuance
-constexpr double kMatch = 0.1;     // a step at a split's ratio, to within this on the log scale
-constexpr double kMatchMax = 0.25;  // ... widened by a line's own real steps, at most this
+constexpr double kStepSd = 0.04;  // a clean step's spread, on the log scale (issuance meanwhile)
+constexpr double kCapSd = 0.25;   // the market cap's move between two filings, without a line's own
+constexpr double kCapFloor = 0.05;   // the least a line's market cap spread is taken to be
+constexpr double kCapTail = 0.15;    // the share of market cap moves from the fat tail
+constexpr double kRealSd = 0.35;     // a real issuance's step (an offering, a merger)
+constexpr double kMinStep = 0.22;    // log 1.25: smaller steps are issuance
+constexpr double kMatch = 0.1;       // a step at a split's ratio, to within this on the log scale
+constexpr double kMatchMax = 0.25;   // ... widened by a line's own real steps, at most this
 constexpr double kSplitRate = 0.04;  // splits missing from the actions a year: 0.01 a quarter
 constexpr double kTermsPrior = 0.01;
 constexpr double kUnitPrior = 0.002;
 constexpr double kMismatchPrior = 0.01;  // DQ922: a period's count stored wrong
-constexpr double kLargeIssuance = 0.05;  // the share of a count's steps that are offerings or mergers
+constexpr double kLargeIssuance =
+    0.05;                         // the share of a count's steps that are offerings or mergers
 constexpr double kPairSd = 0.05;  // DQ922: weighted-average against outstanding, without issuance
 constexpr std::array<int, 4> kPowers{3, -3, 6, -6};
 constexpr double kNegInf = -std::numeric_limits<double>::infinity();
@@ -165,8 +166,8 @@ Nearest nearest(double d, const PriceSettings& price, double sd) {
   }
   double best = std::numeric_limits<double>::infinity();
   for (const SplitRatio& r : price.split_ratios) {
-    n.ratio_ll = log_add(n.ratio_ll, std::log(split_weight(r) / total) +
-                                         normal_log_pdf(d, log_of(r), sd));
+    n.ratio_ll =
+        log_add(n.ratio_ll, std::log(split_weight(r) / total) + normal_log_pdf(d, log_of(r), sd));
     if (std::fabs(d - log_of(r)) < best) {
       best = std::fabs(d - log_of(r));
       n.ratio = r;
@@ -310,14 +311,14 @@ double uniform_normal_log_pdf(double x, double lo, double hi, double sd) {
 // between for an issuance in the period, at the end for a split (its counts all
 // restated) or a filing stored in other terms.
 struct PairAt {
-  double position = 0.0;  // log(weighted / outstanding) at the step's period, less its median
+  double position = 0.0;    // log(weighted / outstanding) at the step's period, less its median
   double other_step = 0.0;  // the partner's step, a to b, in the latest terms
   double sd = 0.02;         // the position's spread along the line
 };
 
-// Two counts' knowledge dates:// Two counts' knowledge dates: the window a missing split would be in, and the
-// ratio of the later-known count to the earlier-known, from `d` = log(b / a).
-// Returns the earlier-known row.
+// Two counts' knowledge dates:// Two counts' knowledge dates: the window a missing split would be
+// in, and the ratio of the later-known count to the earlier-known, from `d` = log(b / a). Returns
+// the earlier-known row.
 std::size_t set_window(const StatementRows& st, std::size_t a, std::size_t b, double d,
                        ShareFinding& f) {
   const bool forward = st.known_from[a] <= st.known_from[b];
@@ -770,10 +771,12 @@ void judge_mismatch(const ShareContext& sc, const std::vector<std::size_t>& view
   }
 }
 
-// One split missing from the actions, as the narrowest step that shows it, and the
-// window every step and mismatch it explains narrows its ex-date to.
+// One split missing from the actions: its likeliest step, the narrowest step that
+// shows it, and the window every step and mismatch it explains narrows its ex-date
+// to.
 struct MissingSplit {
   std::size_t anchor = 0;
+  std::size_t narrowest = 0;
   double implied = 0.0;
   Date from;
   Date to;
@@ -789,10 +792,20 @@ bool explained_by(const ShareFinding& f, const MissingSplit& m) {
          std::max(f.window_from, m.from) < std::min(f.window_to, m.to);
 }
 
+std::int32_t width(const ShareFinding& f) { return f.window_to.days() - f.window_from.days(); }
+
+// A count the evidence says is stored wrong stays its own finding.
+bool stored_wrong(const ShareFinding& f) {
+  return f.kind == ShareFinding::Kind::kMismatch ? f.posterior[1] >= 0.5
+                                                 : f.posterior[2] >= 0.5 || f.posterior[3] >= 0.5;
+}
+
 // A missing split leaves a step at every pair of counts known either side of it: at
 // the period it came in, and again wherever a version filed after it (a
-// restatement) meets one filed before. Each such split is one finding, on its
-// narrowest step; the others it explains, DQ921's and DQ922's, fold into it.
+// restatement) meets one filed before. Each such split is one finding; the others
+// it explains, DQ921's and DQ922's, fold into it. A step at the split's ratio inside
+// its window is the split's, whatever its own evidence says: it narrows the window,
+// and the finding is reported on the narrowest, with the likeliest's posterior.
 void fold_missing_splits(std::vector<ShareFinding>& findings) {
   std::vector<std::size_t> anchors;
   for (std::size_t k = 0; k < findings.size(); ++k) {
@@ -801,47 +814,54 @@ void fold_missing_splits(std::vector<ShareFinding>& findings) {
       anchors.push_back(k);
     }
   }
-  const auto width = [&](std::size_t k) {
-    return findings[k].window_to.days() - findings[k].window_from.days();
-  };
-  std::stable_sort(anchors.begin(), anchors.end(),
-                   [&](std::size_t x, std::size_t y) { return width(x) < width(y); });
+  std::stable_sort(anchors.begin(), anchors.end(), [&](std::size_t x, std::size_t y) {
+    return width(findings[x]) < width(findings[y]);
+  });
   std::vector<MissingSplit> splits;
   std::vector<bool> folded(findings.size(), false);
   std::vector<bool> is_anchor(findings.size(), false);
+  const auto join = [&](std::size_t k, MissingSplit& m) {
+    const ShareFinding& f = findings[k];
+    m.from = std::max(m.from, f.window_from);
+    m.to = std::min(m.to, f.window_to);
+    if (f.kind == ShareFinding::Kind::kStep && width(f) < width(findings[m.narrowest])) {
+      m.narrowest = k;
+    }
+    ++m.explains;
+    folded[k] = true;
+  };
   for (const std::size_t k : anchors) {
     is_anchor[k] = true;
     const ShareFinding& f = findings[k];
     const auto it = std::find_if(splits.begin(), splits.end(),
                                  [&](const MissingSplit& m) { return explained_by(f, m); });
     if (it == splits.end()) {
-      splits.push_back({k, f.implied, f.window_from, f.window_to, 0});
-      continue;
+      splits.push_back({k, k, f.implied, f.window_from, f.window_to, 0});
+    } else {
+      join(k, *it);
     }
-    it->from = std::max(it->from, f.window_from);
-    it->to = std::min(it->to, f.window_to);
-    ++it->explains;
-    folded[k] = true;
   }
   for (std::size_t k = 0; k < findings.size(); ++k) {
-    // A count the evidence says is stored wrong stays its own finding.
-    const ShareFinding& f = findings[k];
-    const bool stored_wrong = f.kind == ShareFinding::Kind::kMismatch
-                                  ? f.posterior[1] >= 0.5
-                                  : f.posterior[2] >= 0.5 || f.posterior[3] >= 0.5;
-    if (is_anchor[k] || stored_wrong) {
+    if (is_anchor[k] || stored_wrong(findings[k])) {
       continue;
     }
     const auto it = std::find_if(splits.begin(), splits.end(), [&](const MissingSplit& m) {
       return explained_by(findings[k], m);
     });
     if (it != splits.end()) {
-      folded[k] = true;
-      it->explains += findings[k].p_not_real() >= 0.5 ? 1 : 0;
+      join(k, *it);
     }
   }
   for (const MissingSplit& m : splits) {
     ShareFinding& f = findings[m.anchor];
+    if (m.narrowest != m.anchor) {
+      // Reported on the narrowest step, with the likeliest's case for the split.
+      ShareFinding at = std::move(findings[m.narrowest]);
+      at.posterior = f.posterior;
+      at.split = f.split;
+      at.implied = f.implied;
+      f = std::move(at);
+    }
     f.window_from = m.from;
     f.window_to = m.to;
     f.explains = m.explains;

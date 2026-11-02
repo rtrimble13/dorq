@@ -120,6 +120,7 @@ DQ922 precision 0.9
 DQ922 recall 0.9
 # Real events and real data, which no statement check may report at warn.
 hn_acquisition max 0
+hn_stock_acquisition max 0
 hn_writedown max 0
 hn_fiscal_year_change max 0
 hn_late_filer max 0

@@ -22,7 +22,12 @@ namespace dorq {
 // version's known_from (fafnir's ADR 0018); put into one terms with the splits on
 // file, a count moves only by issuance and buybacks.
 
-enum class ShareHypothesis : std::uint8_t { kRealIssuance, kUnreportedSplit, kTermsError, kUnitError };
+enum class ShareHypothesis : std::uint8_t {
+  kRealIssuance,
+  kUnreportedSplit,
+  kTermsError,
+  kUnitError
+};
 inline constexpr std::array<const char*, 4> kShareHypothesisNames{
     "real_issuance", "unreported_split", "terms_error", "unit_error"};
 
@@ -54,7 +59,7 @@ struct ShareFinding {
   // that ratio is: what a split missing from the actions would be.
   double implied = 0.0;
   std::optional<SplitRatio> split;
-  int explains = 0;  // DQ921: the other steps and mismatches the same missing split explains
+  int explains = 0;     // DQ921: the other steps and mismatches the same missing split explains
   double spread = 0.0;  // the real step's spread on the count's line, on the log scale
   std::optional<double> cap_step;  // the log step of the implied market cap, with close
   std::string split_on_file;       // the split on file in the window, if any: "2:1 2018-12-06"

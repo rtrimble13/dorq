@@ -229,8 +229,9 @@ TEST_CASE("DQ921: a split missing from the actions is one context gap, its windo
   const std::string& f = got.front();
   CHECK(contains(f, R"("fiscal_date":"2013-06-30")"));
   CHECK(contains(f, R"("classification":"context_gap")"));
-  CHECK(contains(f, "with no split on file: a 2:1 split missing from the actions, its ex-date "
-                    "after 2013-05-10 and on or before 2013-08-09"));
+  CHECK(contains(f,
+                 "with no split on file: a 2:1 split missing from the actions, its ex-date "
+                 "after 2013-05-10 and on or before 2013-08-09"));
   CHECK(contains(f, "it explains"));
   CHECK(contains(f, R"("suggested_action":{"kind":"add_split","ratio":"2:1",)"
                     R"("ex_date_after":"2013-05-10","ex_date_on_or_before":"2013-08-09")"));
@@ -267,8 +268,9 @@ TEST_CASE("DQ921: a count stored in the terms before a split on file is a data e
   for (const std::string& f : got) {
     CHECK(contains(f, R"("fiscal_date":"2012-06-30")"));
     CHECK(contains(f, R"("classification":"data_error")"));
-    CHECK(contains(f, "against the split on file (2:1 2012-08-01): a count stored in the wrong "
-                      "share terms"));
+    CHECK(contains(f,
+                   "against the split on file (2:1 2012-08-01): a count stored in the wrong "
+                   "share terms"));
     CHECK(contains(f, R"("kind":"check_share_terms")"));
   }
   CHECK(reports(r.out, "DQ922", "TERMS").empty());
@@ -299,8 +301,7 @@ TEST_CASE("DQ921: no warn on a split on file, an offering or a merger") {
   merger.weighted = merger.outstanding;
   merger.price = [](int) { return 80.0; };
   csv += company(merger);
-  const std::string on_file =
-      actions({{"SPLIT", split.splits[0]}, {"SPLIT", split.splits[1]}});
+  const std::string on_file = actions({{"SPLIT", split.splits[0]}, {"SPLIT", split.splits[1]}});
   const Result r = check(dir, csv, &on_file);
   INFO(r.err);
   REQUIRE(r.status == 0);

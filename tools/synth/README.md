@@ -258,7 +258,7 @@ has one.
 | `cumulative_quarters` | DQ916 | 3 fiscal years whose Q2 to Q4 hold the year to date (flows) |
 | `annual_in_quarter` | DQ916 | 3 quarters holding their fiscal year's flows |
 | `identity_dropped_field`, `identity_doubled_field` | DQ903, DQ911 | 4 totals missing one of their terms, and 4 counting one twice. The term's label expects DQ903, which names it; a second, on the total, DQ911, which sees the total off its series where the term is a large part of it (and DQ915, where the total is left at 0) |
-| `split_missing` | DQ921 | 3 splits that are not on file (a context gap) |
+| `split_missing` | DQ921 | 3 splits that are not on file (a context gap). A split whose quarters an event already holds is always on file and its counts right |
 | `counts_wrong_terms` | DQ921 | 3 quarters, the first known after a split on file, whose share counts are left in the old terms |
 | `share_count_unit` | DQ922, DQ921 | 4 runs of 1–3 quarters whose weighted-average shares are at ×1,000 or ×0.001, against the outstanding count of the same filings |
 | `filing_at_period_end` | DQ931 | 3 periods whose filing date, and `known_from`, is the period end |
@@ -272,7 +272,8 @@ has one.
 | `filing_date_mismatch` | DQ901 | 3 periods known 3–20 days after their filing date |
 | `negative_impossible` | DQ902, DQ911 | 4 values that cannot be negative (revenue, a share count, total assets) at a small negative, which is not a clean sign flip: one bad value |
 | `component_above_total` | DQ902, DQ911 | 4 components (cash, current assets, goodwill, current liabilities) above their total: one bad value |
-| `hn_acquisition` | - | about a fifth of the industrials buy a company with debt: goodwill and assets step, and revenue steps 15–50% for good (DQ9) |
+| `hn_acquisition` | - | about a tenth of the industrials buy a company with debt: goodwill and assets step, and revenue steps 15–50% for good (DQ9) |
+| `hn_stock_acquisition` | - | as many again pay with new shares, issued at the market price: the counts and the market cap step together, the weighted average by part of the step that quarter (DQ9) |
 | `hn_writedown` | - | goodwill written down by 50–90% in a quarter, through operating expenses (DQ9) |
 | `hn_fiscal_year_change` | - | the three changes of fiscal year (DQ9) |
 | `hn_late_filer` | - | 4 10-Qs filed 15–40 days after their deadline (DQ9) |

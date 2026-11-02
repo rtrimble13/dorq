@@ -1,6 +1,8 @@
 // DQ921 share-terms-step and DQ922 share-count-mismatch: the share terms model's
 // findings (statements/shares.cpp; doc/checks/DQ921.md, DQ922.md).
 
+#include "statements/shares.hpp"
+
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -11,7 +13,6 @@
 #include "checks/statement_rows.hpp"
 #include "checks/statements.hpp"
 #include "dorq/series.hpp"
-#include "statements/shares.hpp"
 
 namespace dorq {
 namespace {
@@ -40,8 +41,8 @@ std::string views_text(const ShareFinding& f) {
   return f.in_force ? "in_force" : "first_reported";
 }
 
-Violation step_violation(const CheckInfo& info, const SeriesContext& context,
-                         const ShareFinding& f, Severity severity) {
+Violation step_violation(const CheckInfo& info, const SeriesContext& context, const ShareFinding& f,
+                         Severity severity) {
   const Series& s = context.series;
   const StatementRows& st = s.statements;
   const std::string& item = st.item_names[f.item];
@@ -136,9 +137,8 @@ Violation mismatch_violation(const CheckInfo& info, const SeriesContext& context
   v.detail.push_back({"other_value", f.other_value});
   v.detail.push_back({"ratio", by});
   v.detail.push_back({"views", views_text(f)});
-  v.hypotheses = {{"real", f.posterior[0]},
-                  {"mismatch", f.posterior[1]},
-                  {"unreported_split", f.posterior[2]}};
+  v.hypotheses = {
+      {"real", f.posterior[0]}, {"mismatch", f.posterior[1]}, {"unreported_split", f.posterior[2]}};
   v.evidence = f.evidence;
   SuggestedAction action{"check_share_terms", {}, {}};
   action.fields.push_back({"item", item});
@@ -168,8 +168,9 @@ void report(const CheckInfo& info, const SeriesContext& context, ShareFinding::K
     if (f.provisional && *severity == Severity::kError) {
       severity = Severity::kWarn;
     }
-    out.push_back(kind == ShareFinding::Kind::kStep ? step_violation(info, context, f, *severity)
-                                                     : mismatch_violation(info, context, f, *severity));
+    out.push_back(kind == ShareFinding::Kind::kStep
+                      ? step_violation(info, context, f, *severity)
+                      : mismatch_violation(info, context, f, *severity));
   }
 }
 
@@ -179,9 +180,10 @@ const CheckInfo& ShareTermsStep::info() const noexcept {
   static const CheckInfo kInfo{
       .code = "DQ921",
       .name = "share-terms-step",
-      .summary = "share counts, put into one share terms with the splits on file, that step by "
-                 "a clean split ratio: a split missing from the actions, or a count stored in "
-                 "the wrong terms (--actions, --items)",
+      .summary =
+          "share counts, put into one share terms with the splits on file, that step by "
+          "a clean split ratio: a split missing from the actions, or a count stored in "
+          "the wrong terms (--actions, --items)",
       .default_severity = Severity::kWarn,
       .applies = Applies::kStatements,
   };
@@ -196,8 +198,9 @@ const CheckInfo& ShareCountMismatch::info() const noexcept {
   static const CheckInfo kInfo{
       .code = "DQ922",
       .name = "share-count-mismatch",
-      .summary = "a period's weighted-average and outstanding shares apart by a clean split "
-                 "ratio or a power of ten, which no split on file explains (--items)",
+      .summary =
+          "a period's weighted-average and outstanding shares apart by a clean split "
+          "ratio or a power of ten, which no split on file explains (--items)",
       .default_severity = Severity::kWarn,
       .applies = Applies::kStatements,
   };

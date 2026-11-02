@@ -256,7 +256,10 @@ const std::vector<Equation>& equations() {
 enum class Kind : std::uint8_t { kIndustrial, kBank, kPreRevenue };
 
 // What happens to a company in a quarter, decided before it is simulated.
-enum class Event : std::uint8_t { kNone, kAcquisition, kWritedown };
+// An acquisition paid with debt, or with new shares; a goodwill write-down.
+enum class Event : std::uint8_t { kNone, kAcquisition, kStockAcquisition, kWritedown };
+
+bool acquires(Event e) { return e == Event::kAcquisition || e == Event::kStockAcquisition; }
 
 struct Quarter {
   Date end;
@@ -857,7 +860,7 @@ void Simulation::plan_scales() {
   for (std::size_t t = 0; t < n(); ++t) {
     level *= p_.grow_q * std::exp(0.01 * rng_.normal());
     scales_[t] = level * step;
-    if (c_.events[t] == Event::kAcquisition) {
+    if (acquires(c_.events[t])) {
       steps_[t] = rng_.uniform(1.15, 1.5);
       step *= steps_[t];
     }
@@ -898,7 +901,7 @@ void Simulation::quarter(std::size_t t) {
   Values& v = c_.values[t];
   double price = 0.0;  // an acquisition's
   double impairment = 0.0;
-  if (c_.events[t] == Event::kAcquisition) {
+  if (acquires(c_.events[t])) {
     price = r(scales_[t] * (steps_[t] - 1.0) * rng_.uniform(6.0, 14.0));
   }
   if (c_.events[t] == Event::kWritedown) {
@@ -1007,11 +1010,15 @@ Trades Simulation::cash_flow(std::size_t t, Values& v, Books& next, double price
       capex - price - investment_change - (restricted_in_cash ? 0.0 : restricted_change);
   trades.dividends = r(std::max(0.0, v[kNetIncome]) * p_.payout);
   trades.repurchase = r(std::max(0.0, v[kNetIncome]) * p_.buyback * rng_.uniform(0.0, 2.0));
-  double debt_change = std::max(-b.debt, pre_ ? 0.0 : r(b.debt * 0.03 * rng_.normal()) + price);
+  // An acquisition is paid with debt, or with shares issued at the day's price.
+  const bool in_shares = c_.events[t] == Event::kStockAcquisition;
+  trades.issuance = in_shares ? price : 0.0;
+  double debt_change =
+      std::max(-b.debt, pre_ ? 0.0 : r(b.debt * 0.03 * rng_.normal()) + (in_shares ? 0.0 : price));
   const double fx = c_.currency == "USD" ? 0.0 : r(b.cash * 0.015 * rng_.normal());
   const double deposit_change = bank_ ? next.deposits - b.deposits : 0.0;
   const double preferred = v[kPreferredDividends];
-  double cash = b.cash + operating + investing + debt_change - trades.repurchase -
+  double cash = b.cash + operating + investing + debt_change + trades.issuance - trades.repurchase -
                 trades.dividends - preferred + deposit_change + fx -
                 (restricted_in_cash ? restricted_change : 0.0);
   // Short of cash, a company borrows, or a biotech sells shares.
@@ -1338,9 +1345,10 @@ void Universe::plan_events(Company& c) {
     const std::size_t next_year_end =
         year_last(c, std::min(year_last(c, t) + 1, c.quarters.size() - 1));
     if (reserve(c, t, next_year_end)) {
-      c.events[t] = Event::kAcquisition;
-      labels_.emplace_back(c.id, c.quarters[t].end, c.quarters[next_year_end].end, "hn_acquisition",
-                           "", "DQ9");
+      const bool in_shares = rng_.chance(0.5);
+      c.events[t] = in_shares ? Event::kStockAcquisition : Event::kAcquisition;
+      labels_.emplace_back(c.id, c.quarters[t].end, c.quarters[next_year_end].end,
+                           in_shares ? "hn_stock_acquisition" : "hn_acquisition", "", "DQ9");
     }
   }
   if (c.writedown_ready && rng_.chance(0.6)) {
@@ -1879,18 +1887,20 @@ void Universe::share_faults() {
         continue;
       }
       const std::size_t before = after - 1;
-      reserve(c, before, after);  // a split's quarters are its own, whatever else is there
+      // A split's quarters are its own; where an event already holds them, the
+      // split is on file and its counts right.
+      const bool free = reserve(c, before, after);
       for (std::size_t t = year_first(c, before); t <= year_last(c, after); ++t) {
         c.busy[t] = true;
       }
-      if (c.kind == Kind::kIndustrial && missing < 3 && rng_.chance(0.3)) {
+      if (free && c.kind == Kind::kIndustrial && missing < 3 && rng_.chance(0.3)) {
         s.on_file = false;
         Label label{c.id, c.quarters[before].end, c.quarters[after].end, "split_missing", "DQ921",
                     ""};
         label.context = true;
         labels_.push_back(label);
         ++missing;
-      } else if (wrong_terms < 3 && rng_.chance(0.3)) {
+      } else if (free && wrong_terms < 3 && rng_.chance(0.3)) {
         // The first quarter after the split keeps its counts in the old terms.
         for (Row& row : c.rows) {
           if (row.quarter != after || row.version != 1) {
@@ -1931,8 +1941,9 @@ void Universe::share_count_units() {
       double& value = row_of(c, kInc, PeriodType::kQuarter, q, 1).values[kSharesWeighted];
       value = std::round(value * f);
     }
-    Label label{c.id,         c.quarters[t].end, c.quarters[t + length - 1].end,
-                "share_count_unit", "DQ922|DQ921", ""};
+    Label label{
+        c.id, c.quarters[t].end, c.quarters[t + length - 1].end, "share_count_unit", "DQ922|DQ921",
+        ""};
     label.statement = kInc;
     label.type = PeriodType::kQuarter;
     label.version = 1;
