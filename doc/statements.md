@@ -186,6 +186,7 @@ prior_weight = 6              # in periods, against the item's own residuals
 | DQ904 | the periods in force: the change in cash (`cash_tie`), and a year's quarters against the year (`--items`' flows) |
 | DQ911, DQ912, DQ913, DQ919 | both views, in force and as first reported: each money item over time (the value model, below) |
 | DQ914, DQ915, DQ916 | both views: copied rows, zeros where the item is reported either side, and quarters to date (`--items`' flows) |
+| DQ921, DQ922 | both views: the share counts `--items` lists, in one share terms with `--actions`' splits (share counts, below) |
 | the other DQ9xx | only on statements, as the plan adds them |
 | DQ104 | on every kind: a field that cannot be used |
 | DQ109 | on every context file, `--items` included |
@@ -279,6 +280,37 @@ lines, predictions and identities:
 
 The rows DQ914 and DQ916 explain are not reported again by DQ911 or DQ919, and
 DQ911 leaves zeros, and values next to one, to DQ915.
+
+## Share counts
+
+DQ921 share-terms-step and DQ922 share-count-mismatch judge the counts `--items`
+lists as `share_count`: the income statement's weighted averages and the balance
+sheet's outstanding shares (fundamentals plan §4.3).
+
+- **One terms.** A count is stored in the terms of its version's `known_from`
+  (fafnir's ADR 0018). dorq multiplies each count by the splits on file with
+  ex-dates after its `known_from`, up to the latest knowledge date in the series.
+  After that, a count moves only by issuance and buybacks, and the periods' two
+  counts can be compared.
+- **DQ921.** A count that still steps by a clean ratio or a power of ten is weighed
+  as four things:
+  - a real issuance;
+  - a split missing from the actions, its ex-date between the two counts'
+    knowledge dates (a context gap, with `add_split`);
+  - a count stored in the wrong terms against a split on file;
+  - a count stored at a power of ten.
+
+  The evidence: the step net of the count's trend; where the period's weighted
+  average sits between its outstanding counts; the market cap the count implies
+  with `close`; and the price before the step. Each missing split is one report,
+  on its narrowest step, with the steps it explains folded in. That includes the
+  ones a restatement filed years later leaves.
+- **DQ922.** A period whose weighted average and outstanding count are a clean
+  ratio or a power of ten apart, which no split on file explains.
+
+DQ921 needs `--actions`: without it there are no splits to put the counts into one
+terms, and it judges nothing. DQ922 runs with `--items` alone, and then weighs a
+missing split wherever the two counts were known on different dates.
 
 ## Output
 

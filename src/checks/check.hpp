@@ -14,6 +14,7 @@
 #include "dorq/series.hpp"
 #include "dorq/violation.hpp"
 #include "price/model.hpp"
+#include "statements/shares.hpp"
 #include "statements/values.hpp"
 #include "statements/views.hpp"
 
@@ -50,6 +51,8 @@ struct SeriesContext {
   // The statement value model's findings, computed once when any of DQ911 to DQ919
   // runs; nullptr otherwise.
   const StatementValueAnalysis* values = nullptr;
+  // The share terms model's findings, computed once when DQ921 or DQ922 runs.
+  const StatementShareAnalysis* shares = nullptr;
 
   // The exchange tick from --meta, if given.
   [[nodiscard]] std::optional<double> meta_tick() const noexcept {

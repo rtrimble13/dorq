@@ -126,6 +126,9 @@ double log_flat_top(double x, double a, double b, double sd) noexcept {
   return log_normal_pdf(y, lo, sd) + std::log(sd / (std::fabs(z) * (hi - lo)));
 }
 
+}  // namespace
+
+// The prior weight of a split ratio (price/model.hpp).
 double split_weight(const SplitRatio& ratio) noexcept {
   struct Known {
     SplitRatio ratio;
@@ -156,6 +159,8 @@ double split_level_weights(double price) noexcept {
   const double share = (std::log(price) - std::log(5.0)) / (std::log(40.0) - std::log(5.0));
   return std::clamp(share, 0.05, 0.95);
 }
+
+namespace {
 
 // Powers of ten a scale error multiplies by, and their weights (each sign half).
 constexpr std::array<double, 6> kPowerWeights = {0.5, 0.3, 0.1, 0.05, 0.03, 0.02};

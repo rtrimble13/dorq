@@ -47,10 +47,12 @@ Lines and JSON arrays, and reports in five formats. It runs:
   (DQ9xx) arrive item by item ([the plan](doc/plans/dorq-fundamentals-plan.md)).
   So far DQ104 reports the rows and values that cannot be used, DQ901 versions
   that collide or do not chain, DQ902 values that cannot be right, DQ903
-  identities that fail and why, DQ904 ties across periods that fail, and DQ911 to
-  DQ919 values over time: a bad value, a unit error (a value, a row or an era), a
+  identities that fail and why, DQ904 ties across periods that fail, DQ911 to
+  DQ919 values over time (a bad value, a unit error in a value, a row or an era, a
   sign flipped, a copied quarter, a value written as 0, quarters stored year to
-  date, and large changes the evidence calls real.
+  date, and large changes the evidence calls real), and DQ921 and DQ922 the share
+  counts, in one share terms with the splits on file: a split missing from the
+  actions, a count in the wrong terms, and counts that disagree.
 
 `dorq calibrate` fits the price model's priors and its `p_error` map to labelled
 history: fafnir's own repair decisions ([doc/calibration.md](doc/calibration.md),
@@ -184,6 +186,8 @@ including the `fafnir` format that maps onto `ops.data_quality_flag`.
 | [DQ915](doc/checks/DQ915.md) | absent-as-zero | statements: a 0 where the item is reported either side: a value the filing did not carry |
 | [DQ916](doc/checks/DQ916.md) | cumulative-quarters | statements: a year's quarters stored year to date, or a quarter holding its year (`--items`) |
 | [DQ919](doc/checks/DQ919.md) | large-change | statements: a large change the evidence calls real (an acquisition, a write-down), at info |
+| [DQ921](doc/checks/DQ921.md) | share-terms-step | statements: a share count that steps by a split's ratio in one share terms: a split missing from the actions, or a count in the wrong terms (`--actions`, `--items`) |
+| [DQ922](doc/checks/DQ922.md) | share-count-mismatch | statements: a period's weighted-average and outstanding shares a split's ratio or a power of ten apart (`--items`) |
 | [DQ701](doc/checks/DQ701.md) | split-misdated | a split on file the bars show a few sessions away (`--actions`) |
 | [DQ702](doc/checks/DQ702.md) | split-without-jump | a split on file the bars do not show: not real, already applied, or a duplicate row |
 | [DQ703](doc/checks/DQ703.md) | split-ratio-mismatch | a split on file at the wrong ratio (often inverted) |
@@ -219,7 +223,7 @@ archive, plus a `SHA256SUMS` file:
 | `dorq-<version>-linux-x86_64.tar.gz` | Linux x86-64 with glibc 2.39 or newer (Ubuntu 24.04+). The C++ runtime is linked in |
 
 ```bash
-version=0.11.0
+version=0.12.0
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/dorq-${version}-linux-x86_64.tar.gz"
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
@@ -244,7 +248,7 @@ Clang 18+).
 ```bash
 sudo apt-get install -y build-essential cmake ninja-build git
 git clone https://github.com/rtrimble13/dorq.git && cd dorq
-git checkout v0.11.0                       # or stay on main for the latest
+git checkout v0.12.0                       # or stay on main for the latest
 cmake --workflow --preset release          # configure, build, run the tests
 sudo cmake --install build/release --prefix /opt/dorq
 /opt/dorq/bin/dorq version                 # names the commit it was built from

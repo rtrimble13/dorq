@@ -110,8 +110,17 @@ DQ913 precision 0.9
 DQ914 precision 0.9
 DQ915 precision 0.9
 DQ916 precision 0.9
+# Share counts (DR-0908), at warn, with the actions: a split missing from the
+# actions, a context gap, on the narrowest step it leaves, and a count stored in
+# the wrong terms; a period's weighted-average and outstanding counts a power of ten
+# apart.
+DQ921 precision 0.9
+DQ921 recall 0.9
+DQ922 precision 0.9
+DQ922 recall 0.9
 # Real events and real data, which no statement check may report at warn.
 hn_acquisition max 0
+hn_stock_acquisition max 0
 hn_writedown max 0
 hn_fiscal_year_change max 0
 hn_late_filer max 0

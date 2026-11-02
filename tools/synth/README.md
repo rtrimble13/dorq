@@ -207,10 +207,12 @@ generated data.
   - from 2018 the cash flow's cash includes restricted cash, and the balance
     sheet's does not.
 - **Shares.** Counts grow by stock compensation and by shares sold, and fall with
-  buybacks.
+  buybacks. A quarter's weighted average is the mean of its start and end.
   - An industrial returns cash beyond three quarters of revenue as buybacks, a tenth
     of its market cap a quarter at most.
-  - The market cap is the company's scale at a multiple that wanders and reverts.
+  - The market cap is the company's scale at a multiple that wanders and reverts,
+    plus the cash its share sales raised: shares sell at the market price, which
+    holds.
     The `close` column is the market cap over the shares, in that day's terms.
   - A company splits when its raw price passes $200, half the time: 2:1, 3:1, 3:2
     or 4:1, at most three times. A biotech below $1 may reverse split.
@@ -256,8 +258,9 @@ has one.
 | `cumulative_quarters` | DQ916 | 3 fiscal years whose Q2 to Q4 hold the year to date (flows) |
 | `annual_in_quarter` | DQ916 | 3 quarters holding their fiscal year's flows |
 | `identity_dropped_field`, `identity_doubled_field` | DQ903, DQ911 | 4 totals missing one of their terms, and 4 counting one twice. The term's label expects DQ903, which names it; a second, on the total, DQ911, which sees the total off its series where the term is a large part of it (and DQ915, where the total is left at 0) |
-| `split_missing` | DQ921 | 3 splits that are not on file (a context gap) |
+| `split_missing` | DQ921 | 3 splits that are not on file (a context gap). A split whose quarters an event already holds is always on file and its counts right |
 | `counts_wrong_terms` | DQ921 | 3 quarters, the first known after a split on file, whose share counts are left in the old terms |
+| `share_count_unit` | DQ922, DQ921 | 4 runs of 1–3 quarters whose weighted-average shares are at ×1,000 or ×0.001, against the outstanding count of the same filings |
 | `filing_at_period_end` | DQ931 | 3 periods whose filing date, and `known_from`, is the period end |
 | `amendment_date` | DQ931 | 3 10-Qs dated 20–60 days after the next quarter's filing |
 | `missing_quarter` | DQ941 | 4 quarters missing from all three statements |
@@ -269,7 +272,8 @@ has one.
 | `filing_date_mismatch` | DQ901 | 3 periods known 3–20 days after their filing date |
 | `negative_impossible` | DQ902, DQ911 | 4 values that cannot be negative (revenue, a share count, total assets) at a small negative, which is not a clean sign flip: one bad value |
 | `component_above_total` | DQ902, DQ911 | 4 components (cash, current assets, goodwill, current liabilities) above their total: one bad value |
-| `hn_acquisition` | - | about a fifth of the industrials buy a company with debt: goodwill and assets step, and revenue steps 15–50% for good (DQ9) |
+| `hn_acquisition` | - | about a tenth of the industrials buy a company with debt: goodwill and assets step, and revenue steps 15–50% for good (DQ9) |
+| `hn_stock_acquisition` | - | as many again pay with new shares, issued at the market price: the counts and the market cap step together, the weighted average by part of the step that quarter (DQ9) |
 | `hn_writedown` | - | goodwill written down by 50–90% in a quarter, through operating expenses (DQ9) |
 | `hn_fiscal_year_change` | - | the three changes of fiscal year (DQ9) |
 | `hn_late_filer` | - | 4 10-Qs filed 15–40 days after their deadline (DQ9) |
@@ -346,6 +350,7 @@ bounds:
   recall is not gated: its consequence labels cover rows other faults break
   without its reporting each one;
 - the quarterly structure (DR-0907) at warn: DQ914, DQ915 and DQ916 at precision 0.9;
+- the share counts (DR-0908) at warn: DQ921 and DQ922 at precision and recall 0.9;
 - the value model (DR-0906) at warn: DQ912 at precision 0.95 and recall 0.9, DQ911
   at precision 0.85 and DQ913 at precision 0.9. Their recall otherwise is left to
   the evidence a single value leaves: a value in no identity and no quarter sum
