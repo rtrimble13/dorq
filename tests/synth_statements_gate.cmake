@@ -29,7 +29,7 @@ endif()
 execute_process(
   COMMAND "${DORQ}" "${OUT}/statements.csv" --items "${OUT}/items.csv" --actions
           "${OUT}/actions.csv" --meta "${OUT}/meta.csv" --config "${CONFIG}"
-          --exit-zero --format csv --show-info --threads 4
+          --exit-zero --format csv --show-info --threads 4 --as-of 2026-10-30
   OUTPUT_FILE "${OUT}/results.csv"
   RESULT_VARIABLE status)
 if(NOT status EQUAL 0)

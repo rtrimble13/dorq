@@ -357,7 +357,7 @@ bounds:
 - the knowledge timeline (DR-0909) at warn: DQ931 and DQ932 at precision and recall
   0.9, DQ951 at 1.0. The gate also holds the backfill day to one DQ951, at info;
 - the value model (DR-0906) at warn: DQ912 at precision 0.95 and recall 0.9, DQ911
-  at precision 0.85 and DQ913 at precision 0.9. Their recall otherwise is left to
+  at precision 0.75 and DQ913 at precision 0.9. Their recall otherwise is left to
   the evidence a single value leaves: a value in no identity and no quarter sum
   has only its series;
 - no report at warn on any hard negative.

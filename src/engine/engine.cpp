@@ -286,6 +286,7 @@ Engine::Processed Engine::process(Work& work) const {
       .items = context_.have_items ? &context_.items : nullptr,
       .values = values ? &*values : nullptr,
       .shares = shares ? &*shares : nullptr,
+      .as_of = options_.as_of,
   };
   for (const Check* check : settings.checks) {
     check->run(context, result.violations);
