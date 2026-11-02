@@ -228,7 +228,7 @@ std::array<double, 4> successor_log_likelihoods(bool after) {
 }
 
 Violation filing_violation(const CheckInfo& info, const SeriesContext& context, const Filing& f,
-                           const UsualLag& usual, const std::optional<Filing>& next,
+                           const UsualLag& usual, const Filing* next,
                            const std::array<double, 4>& p) {
   const Series& s = context.series;
   Violation v = statement_finding(info, s, f.row, true);
@@ -251,7 +251,7 @@ Violation filing_violation(const CheckInfo& info, const SeriesContext& context, 
                 "every backtest knows the figures too soon";
   } else {
     v.message = head + ": an amendment's date taken for the original's";
-    if (next) {
+    if (next != nullptr) {
       v.message += ", known after the next period (" + next->end.to_string() + ", known from " +
                    next->known.to_string() + ")";
     }
@@ -261,7 +261,7 @@ Violation filing_violation(const CheckInfo& info, const SeriesContext& context, 
   v.detail.push_back({"usual_lag_sd", usual.sd});
   v.detail.push_back({"form", std::string{form_text(f.form)}});
   v.detail.push_back({"known_from", f.known.to_string()});
-  if (next) {
+  if (next != nullptr) {
     v.detail.push_back({"next_known_from", next->known.to_string()});
   }
   for (std::size_t h = 0; h < 4; ++h) {
@@ -721,10 +721,10 @@ void FilingDateImplausible::run(const SeriesContext& context, std::vector<Violat
       continue;  // known before the period ends: DQ901's
     }
     // The next period of the same type.
-    std::optional<Filing> next;
+    const Filing* next = nullptr;
     for (std::size_t j = k + 1; j < filings.size(); ++j) {
       if (filings[j].type == f.type && filings[j].end > f.end) {
-        next = filings[j];
+        next = &filings[j];
         break;
       }
     }
@@ -733,9 +733,9 @@ void FilingDateImplausible::run(const SeriesContext& context, std::vector<Violat
     const std::array<double, 4> priors{1.0 - kLatePrior - kEarlyPrior - kAmendmentPrior, kLatePrior,
                                        kEarlyPrior, kAmendmentPrior};
     const std::array<double, 4> after =
-        successor_log_likelihoods(next.has_value() && f.known > next->known);
+        successor_log_likelihoods(next != nullptr && f.known > next->known);
     for (std::size_t h = 0; h < 4; ++h) {
-      log.at(h) += std::log(priors.at(h)) + (next ? after.at(h) : 0.0);
+      log.at(h) += std::log(priors.at(h)) + (next != nullptr ? after.at(h) : 0.0);
     }
     const std::array<double, 4> p = softmax(log);
     const double p_error = p[2] + p[3];
