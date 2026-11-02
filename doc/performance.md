@@ -133,7 +133,10 @@ nothing measurable over the reader. Every statement check together runs in 45
 seconds, inside the plan's two minutes. The full run's memory is the 800,000
 findings at warn and above that this input's random values make (identity and tie
 breaks on nearly every series), held for DQ951: about 1.7 KB each. fafnir's own
-history makes a few per cent of that. `--ignore DQ951` streams the results again.
+history makes a few per cent of that. A run on the default selection held them
+before DQ951 too, since DQ303, DQ304 and DQ601 are on by default and the engine
+holds for any cross-sectional check selected, whatever the input's kind. `--select
+DQ9 --ignore DQ951` streams them.
 
 ## The profile
 
