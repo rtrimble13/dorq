@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <limits>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -44,11 +45,11 @@ constexpr std::size_t kMinMapClass = 2;
 // The three models whose priors are fitted: their codes and hypotheses, in the
 // order the checks report them; which of them are errors.
 struct ModelSpec {
-  const char* name;
-  std::array<std::string_view, 4> codes;  // the codes whose candidates it scores
-  std::array<std::string_view, 4> hypotheses;
-  std::array<bool, 4> error;
-  std::array<std::string_view, 4> expect;  // a fault label's code naming each hypothesis
+  const char* name = "";
+  std::array<std::string_view, 4> codes{};  // the codes whose candidates it scores
+  std::array<std::string_view, 4> hypotheses{};
+  std::array<bool, 4> error{};
+  std::array<std::string_view, 4> expect{};  // a fault label's code naming each hypothesis
 };
 
 constexpr std::array<ModelSpec, 3> kModels{{
@@ -147,16 +148,17 @@ class Collect final : public ResultSink {
  public:
   explicit Collect(std::vector<Candidate>& out) : out_(out) {}
   void series_done(SeriesResult&& result) override {
-    if (result.kind != SeriesKind::kStatements || result.from_context) {
+    SeriesResult done = std::move(result);
+    if (done.kind != SeriesKind::kStatements || done.from_context) {
       return;
     }
-    for (Violation& v : result.violations) {
+    for (Violation& v : done.violations) {
       if (v.check == nullptr || !v.date || !StatementCalibration::family(v.check->code)) {
         continue;
       }
       Candidate c;
-      c.series = result.id;
-      c.label = result.label;
+      c.series = done.id;
+      c.label = done.label;
       c.code = std::string{v.check->code};
       c.first = *v.date;
       c.last = v.end_date.value_or(*v.date);
@@ -506,16 +508,286 @@ std::string fixed(double value, int decimals) {
   if (!std::isfinite(value)) {
     return "nan";
   }
-  char buffer[64];
-  std::snprintf(buffer, sizeof buffer, "%.*f", decimals, value);
-  return buffer;
+  std::ostringstream out;
+  out.setf(std::ios::fixed);
+  out.precision(decimals);
+  out << value;
+  return out.str();
 }
 
 // A prior to four significant figures.
 std::string weight(double value) {
-  char buffer[64];
-  std::snprintf(buffer, sizeof buffer, "%.4g", value);
-  return buffer;
+  if (value <= 0.0) {
+    return "0";
+  }
+  const double magnitude = std::floor(std::log10(value));
+  const double scale = std::pow(10.0, 3.0 - magnitude);
+  return format_number(std::round(value * scale) / scale);
+}
+
+// Every candidate, as the model scores it: no threshold, the innocent shown, no
+// map applied.
+std::vector<Candidate> collect_candidates(const std::vector<Series>& series, const Config& config,
+                                          const Calendar& calendar, const Context& context,
+                                          const StatementCalibrateOptions& options) {
+  Config run = config;
+  run.severity.info = 0.0;
+  run.min_severity = Severity::kInfo;
+  run.statements.report_all = true;
+  run.statements.calibration = {};
+  std::vector<Candidate> candidates;
+  Collect sink(candidates);
+  Engine engine(run,
+                {.threads = options.threads,
+                 .min_severity = Severity::kInfo,
+                 .since = std::nullopt,
+                 .as_of = options.as_of,
+                 .calendar = &calendar,
+                 .context = &context},
+                sink);
+  for (const Series& s : series) {
+    if (s.kind == SeriesKind::kStatements) {
+      engine.submit(Series{s});
+    }
+  }
+  engine.finish();
+  return candidates;
+}
+
+// The statements labels by series, so each candidate meets only its own: its
+// series' and its label's.
+class LabelIndex {
+ public:
+  explicit LabelIndex(const std::vector<const Label*>& labels) {
+    by_series_.reserve(labels.size());
+    for (const Label* l : labels) {
+      by_series_.emplace_back(l->series, l);
+    }
+    std::sort(by_series_.begin(), by_series_.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+  }
+
+  [[nodiscard]] std::vector<const Label*> of(const Candidate& c) const {
+    std::vector<const Label*> out = lookup(c.series);
+    if (!c.label.empty() && c.label != c.series) {
+      const std::vector<const Label*> by_label = lookup(c.label);
+      out.insert(out.end(), by_label.begin(), by_label.end());
+    }
+    return out;
+  }
+
+ private:
+  [[nodiscard]] std::vector<const Label*> lookup(const std::string& id) const {
+    std::vector<const Label*> out;
+    auto it = std::lower_bound(
+        by_series_.begin(), by_series_.end(), id,
+        [](const auto& entry, const std::string& key) { return entry.first < key; });
+    for (; it != by_series_.end() && it->first == id; ++it) {
+      out.push_back(it->second);
+    }
+    return out;
+  }
+
+  std::vector<std::pair<std::string, const Label*>> by_series_;
+};
+
+// The fitted model whose priors score a candidate, or -1.
+int model_of(const Candidate& c) {
+  if (!c.scope.empty()) {
+    return -1;  // a row's or an era's posterior is not the value model's priors'
+  }
+  for (std::size_t m = 0; m < kModels.size(); ++m) {
+    const auto& codes = kModels.at(m).codes;
+    if (std::find(codes.begin(), codes.end(), c.code) != codes.end()) {
+      return static_cast<int>(m);
+    }
+  }
+  return -1;
+}
+
+// A candidate of a fitted model as an observation: the evidence under each
+// hypothesis (its posterior over its prior) and the hypotheses the label allows.
+// None when the label allows no hypothesis the check considered.
+std::optional<ModelObservation> observation_of(const Candidate& c, const Judgement& j,
+                                               const ModelSpec& spec, const Vec& prior, bool test) {
+  ModelObservation o;
+  // An error for the model: a fault label naming one of its error hypotheses (a
+  // DQ912 label on a DQ911 candidate is the value model's unit_error).
+  o.error = fault_of(j, spec);
+  o.test = test;
+  bool any = false;
+  for (std::size_t h = 0; h < 4; ++h) {
+    const auto it = std::find_if(c.hypotheses.begin(), c.hypotheses.end(),
+                                 [&](const auto& x) { return x.name == spec.hypotheses.at(h); });
+    if (it != c.hypotheses.end() && it->probability > 0.0 && prior.at(h) > 0.0) {
+      o.considered.at(h) = true;
+      o.log_likelihood.at(h) = std::log(it->probability) - std::log(prior.at(h));
+    }
+    o.allowed.at(h) = j.allowed.at(h) && o.considered.at(h);
+    any = any || o.allowed.at(h);
+  }
+  if (!any) {
+    return std::nullopt;
+  }
+  return o;
+}
+
+// A sub-family's point: the model's p_error and whether it was an error, with the
+// candidate's model and observation where its p_error is refitted.
+struct Point {
+  double p = 0.0;
+  bool error = false;
+  bool test = false;
+  int model = -1;
+  std::size_t index = 0;
+};
+
+struct Observations {
+  std::array<std::vector<ModelObservation>, 3> models;
+  std::array<std::vector<Point>, StatementCalibration::kFamilies> points;
+  std::size_t matched_labels = 0;
+};
+
+// What the labels say of every candidate.
+Observations observe(const std::vector<Candidate>& candidates, const LabelIndex& index,
+                     const Config& config, const StatementCalibrateOptions& options) {
+  Observations out;
+  std::vector<const Label*> matched;
+  for (const Candidate& c : candidates) {
+    const bool test = options.holdout > 0.0 &&
+                      static_cast<double>(fnv(c.series) % 1000) < options.holdout * 1000.0;
+    const std::vector<const Label*> own = index.of(c);
+    const int model = model_of(c);
+    const ModelSpec* spec = model >= 0 ? &kModels.at(static_cast<std::size_t>(model)) : nullptr;
+    Judgement j = judge(c, own, spec);
+    for (const Label* l : own) {
+      if (covers(*l, c, kSlackDays) &&
+          std::find(matched.begin(), matched.end(), l) == matched.end()) {
+        matched.push_back(l);
+      }
+    }
+    if (!j.labelled) {
+      if (!options.clean_unlabelled) {
+        continue;
+      }
+      j.error = false;  // innocent: every fault is labelled
+      if (spec != nullptr) {
+        for (std::size_t h = 0; h < 4; ++h) {
+          j.allowed.at(h) = !spec->error.at(h);
+        }
+      }
+    }
+    Point point{c.p_error, j.error, test, -1, 0};
+    if (spec != nullptr) {
+      const auto m = static_cast<std::size_t>(model);
+      if (const auto o =
+              observation_of(c, j, *spec, priors_of(m, config.statements.priors), test)) {
+        point.model = model;
+        point.index = out.models.at(m).size();
+        out.models.at(m).push_back(*o);
+      }
+    }
+    // A map is fitted on the codes that apply it.
+    if (const auto f = StatementCalibration::family(c.code);
+        f && StatementCalibration::mapped(c.code) && !j.other) {
+      out.points.at(*f).push_back(point);
+    }
+  }
+  out.matched_labels = matched.size();
+  return out;
+}
+
+// One model's log priors, fitted to its observations from the configured ones,
+// with its figures in `fit`. The spread: by the held-out log-likelihood when there
+// are enough held-out observations, the default otherwise.
+Vec fit_model(std::size_t m, const std::vector<ModelObservation>& o, const StatementPriors& priors,
+              StatementModelFit& fit) {
+  const ModelSpec& spec = kModels.at(m);
+  fit.name = spec.name;
+  for (const std::string_view h : spec.hypotheses) {
+    fit.hypotheses.emplace_back(h);
+  }
+  const Vec before = priors_of(m, priors);
+  const Vec w0 = log_of(before);
+  fit.observations = o.size();
+  fit.errors = static_cast<std::size_t>(
+      std::count_if(o.begin(), o.end(), [](const ModelObservation& x) { return x.error; }));
+  fit.test_observations = static_cast<std::size_t>(
+      std::count_if(o.begin(), o.end(), [](const ModelObservation& x) { return x.test; }));
+  Vec w = w0;
+  fit.spread = kDefaultSpread;
+  if (!o.empty()) {
+    w = fit_weights(o, w0, kDefaultSpread);
+  }
+  if (!o.empty() && fit.test_observations >= kMinHeldOut) {
+    double best = objective(o, w, w0, true, nullptr).log_lik;
+    for (const double spread : kSpreads) {
+      const Vec trial = fit_weights(o, w0, spread);
+      const double held = objective(o, trial, w0, true, nullptr).log_lik;
+      if (held > best) {
+        best = held;
+        w = trial;
+        fit.spread = spread;
+      }
+    }
+  }
+  fit.before.assign(before.begin(), before.end());
+  const Vec after = normalized(w);
+  fit.after.assign(after.begin(), after.end());
+  const auto mean = [&](const Vec& weights, bool test) {
+    const Objective x = objective(o, weights, w0, test, nullptr);
+    return x.count > 0 ? x.log_lik / static_cast<double>(x.count) : 0.0;
+  };
+  fit.mean_log_lik_before = mean(w0, false);
+  fit.mean_log_lik_after = mean(w, false);
+  fit.test_mean_log_lik_before = mean(w0, true);
+  fit.test_mean_log_lik_after = mean(w, true);
+  return w;
+}
+
+using Pairs = std::vector<std::pair<double, double>>;
+
+// One sub-family's map, fitted on its training points under the fitted priors.
+// Its calibration error before and after is measured on the held-out points, or on
+// the training ones when nothing is held out, which `checked` collects.
+void fit_family(std::size_t f, const Observations& obs, const std::array<Vec, 3>& w_after,
+                bool held_out, const Config& config, const StatementCalibrateOptions& options,
+                StatementFamilyFit& fam, std::array<Pairs, 2>& checked) {
+  Pairs train;
+  Pairs check_before;
+  Pairs check_after;
+  for (const Point& p : obs.points.at(f)) {
+    double refit = p.p;
+    if (p.model >= 0) {
+      const auto m = static_cast<std::size_t>(p.model);
+      refit = p_error_of(obs.models.at(m).at(p.index), kModels.at(m), w_after.at(m));
+    }
+    ++fam.observations;
+    fam.errors += p.error ? 1 : 0;
+    const double y = p.error ? 1.0 : 0.0;
+    if (!p.test) {
+      train.emplace_back(refit, y);
+    }
+    if (p.test == held_out) {
+      check_before.emplace_back(config.statements.calibration.apply_family(f, p.p), y);
+      check_after.emplace_back(refit, y);
+    }
+  }
+  const auto errors = static_cast<std::size_t>(
+      std::count_if(train.begin(), train.end(), [](const auto& x) { return x.second > 0.5; }));
+  if (options.isotonic && train.size() >= kMinMapObservations && errors >= kMinMapClass &&
+      train.size() - errors >= kMinMapClass) {
+    fam.map = pav_map(train);
+  }
+  StatementCalibration only;
+  only.maps.at(f) = fam.map;
+  for (auto& [p, y] : check_after) {
+    p = only.apply_family(f, p);
+  }
+  fam.ece_before = expected_calibration_error(check_before);
+  fam.ece_after = expected_calibration_error(check_after);
+  checked[0].insert(checked[0].end(), check_before.begin(), check_before.end());
+  checked[1].insert(checked[1].end(), check_after.begin(), check_after.end());
 }
 
 }  // namespace
@@ -537,234 +809,31 @@ StatementCalibrationReport calibrate_statements(const std::vector<Series>& serie
   }
   report.statement_labels = statement_labels.size();
 
-  // Every candidate, as the model scores it: no threshold, the innocent shown,
-  // no map applied.
-  Config run = config;
-  run.severity.info = 0.0;
-  run.min_severity = Severity::kInfo;
-  run.statements.report_all = true;
-  run.statements.calibration = {};
-  std::vector<Candidate> candidates;
-  {
-    Collect sink(candidates);
-    Engine engine(run,
-                  {.threads = options.threads,
-                   .min_severity = Severity::kInfo,
-                   .since = std::nullopt,
-                   .as_of = options.as_of,
-                   .calendar = &calendar,
-                   .context = &context},
-                  sink);
-    for (const Series& s : series) {
-      if (s.kind == SeriesKind::kStatements) {
-        engine.submit(Series{s});
-      }
-    }
-    engine.finish();
-  }
+  const std::vector<Candidate> candidates =
+      collect_candidates(series, config, calendar, context, options);
   report.candidates = candidates.size();
-
-  // Labels by series, so each candidate meets only its own.
-  std::vector<std::pair<std::string, const Label*>> by_series;
-  for (const Label* l : statement_labels) {
-    by_series.emplace_back(l->series, l);
-  }
-  std::sort(by_series.begin(), by_series.end(),
-            [](const auto& a, const auto& b) { return a.first < b.first; });
-  const auto labels_of = [&by_series](const std::string& id) {
-    std::vector<const Label*> out;
-    auto it = std::lower_bound(
-        by_series.begin(), by_series.end(), id,
-        [](const auto& entry, const std::string& key) { return entry.first < key; });
-    for (; it != by_series.end() && it->first == id; ++it) {
-      out.push_back(it->second);
-    }
-    return out;
-  };
-
-  std::array<std::vector<ModelObservation>, 3> obs;
-  // Per family: (the model's p_error, error), with the candidate's model and
-  // observation where its p_error is refitted.
-  struct Point {
-    double p = 0.0;
-    bool error = false;
-    bool test = false;
-    int model = -1;
-    std::size_t index = 0;
-  };
-  std::array<std::vector<Point>, StatementCalibration::kFamilies> points;
-  std::vector<const Label*> matched;
-  for (const Candidate& c : candidates) {
-    const bool test = options.holdout > 0.0 &&
-                      static_cast<double>(fnv(c.series) % 1000) < options.holdout * 1000.0;
-    std::vector<const Label*> own = labels_of(c.series);
-    if (!c.label.empty() && c.label != c.series) {
-      const std::vector<const Label*> by_label = labels_of(c.label);
-      own.insert(own.end(), by_label.begin(), by_label.end());
-    }
-    int model = -1;
-    for (std::size_t m = 0; m < kModels.size(); ++m) {
-      if (std::find(kModels.at(m).codes.begin(), kModels.at(m).codes.end(), c.code) !=
-          kModels.at(m).codes.end()) {
-        model = static_cast<int>(m);
-      }
-    }
-    if (!c.scope.empty()) {
-      model = -1;  // a row's or an era's posterior is not the value model's priors'
-    }
-    const ModelSpec* spec = model >= 0 ? &kModels.at(static_cast<std::size_t>(model)) : nullptr;
-    Judgement j = judge(c, own, spec);
-    for (const Label* l : own) {
-      if (covers(*l, c, kSlackDays) &&
-          std::find(matched.begin(), matched.end(), l) == matched.end()) {
-        matched.push_back(l);
-      }
-    }
-    if (!j.labelled) {
-      if (!options.clean_unlabelled) {
-        continue;
-      }
-      j.error = false;
-      if (spec != nullptr) {
-        for (std::size_t h = 0; h < 4; ++h) {
-          j.allowed.at(h) = !spec->error.at(h);
-        }
-      }
-    }
-    Point point{c.p_error, j.error, test, -1, 0};
-    if (spec != nullptr) {
-      // The evidence under each hypothesis: its posterior over its prior.
-      const Vec prior = priors_of(static_cast<std::size_t>(model), config.statements.priors);
-      ModelObservation o;
-      // An error for the model: a fault label naming one of its error hypotheses
-      // (a DQ912 label on a DQ911 candidate is the value model's unit_error).
-      o.error = fault_of(j, *spec);
-      o.test = test;
-      bool any = false;
-      for (std::size_t h = 0; h < 4; ++h) {
-        const auto it = std::find_if(c.hypotheses.begin(), c.hypotheses.end(), [&](const auto& x) {
-          return x.name == spec->hypotheses.at(h);
-        });
-        if (it != c.hypotheses.end() && it->probability > 0.0 && prior.at(h) > 0.0) {
-          o.considered.at(h) = true;
-          o.log_likelihood.at(h) = std::log(it->probability) - std::log(prior.at(h));
-        }
-        o.allowed.at(h) = j.allowed.at(h) && o.considered.at(h);
-        any = any || o.allowed.at(h);
-      }
-      if (any) {
-        point.model = model;
-        point.index = obs.at(static_cast<std::size_t>(model)).size();
-        obs.at(static_cast<std::size_t>(model)).push_back(o);
-      }
-    }
-    // A map is fitted on the codes that apply it.
-    if (const auto f = StatementCalibration::family(c.code);
-        f && StatementCalibration::mapped(c.code) && !j.other) {
-      points.at(*f).push_back(point);
-    }
-  }
-  report.matched_labels = matched.size();
+  const Observations obs = observe(candidates, LabelIndex(statement_labels), config, options);
+  report.matched_labels = obs.matched_labels;
 
   // The priors.
   std::array<Vec, 3> w_after{};
   for (std::size_t m = 0; m < kModels.size(); ++m) {
-    const ModelSpec& spec = kModels.at(m);
-    StatementModelFit& fit = report.models.at(m);
-    fit.name = spec.name;
-    for (const std::string_view h : spec.hypotheses) {
-      fit.hypotheses.emplace_back(h);
-    }
-    const Vec before = priors_of(m, config.statements.priors);
-    const Vec w0 = log_of(before);
-    const std::vector<ModelObservation>& o = obs.at(m);
-    fit.observations = o.size();
-    fit.errors = static_cast<std::size_t>(
-        std::count_if(o.begin(), o.end(), [](const ModelObservation& x) { return x.error; }));
-    fit.test_observations = static_cast<std::size_t>(
-        std::count_if(o.begin(), o.end(), [](const ModelObservation& x) { return x.test; }));
-    // The spread: by the held-out log-likelihood when there are held-out
-    // observations, the default otherwise.
-    Vec w = w0;
-    fit.spread = kDefaultSpread;
-    if (!o.empty()) {
-      w = fit_weights(o, w0, kDefaultSpread);
-      if (fit.test_observations >= kMinHeldOut) {
-        double best = objective(o, w, w0, true, nullptr).log_lik;
-        for (const double spread : kSpreads) {
-          const Vec trial = fit_weights(o, w0, spread);
-          const double held = objective(o, trial, w0, true, nullptr).log_lik;
-          if (held > best) {
-            best = held;
-            w = trial;
-            fit.spread = spread;
-          }
-        }
-      }
-    }
-    w_after.at(m) = w;
-    fit.before.assign(before.begin(), before.end());
-    const Vec after = normalized(w);
-    fit.after.assign(after.begin(), after.end());
-    const auto mean = [&](const Vec& weights, bool test) {
-      const Objective x = objective(o, weights, w0, test, nullptr);
-      return x.count > 0 ? x.log_lik / static_cast<double>(x.count) : 0.0;
-    };
-    fit.mean_log_lik_before = mean(w0, false);
-    fit.mean_log_lik_after = mean(w, false);
-    fit.test_mean_log_lik_before = mean(w0, true);
-    fit.test_mean_log_lik_after = mean(w, true);
-    if (!o.empty()) {
-      set_priors(m, after, report.priors);
+    w_after.at(m) = fit_model(m, obs.models.at(m), config.statements.priors, report.models.at(m));
+    if (!obs.models.at(m).empty()) {
+      set_priors(m, normalized(w_after.at(m)), report.priors);
     }
   }
 
   // The maps: each family's p_error under the fitted priors, against the labels.
-  const bool held_out = std::any_of(points.begin(), points.end(), [](const auto& family) {
+  const bool held_out = std::any_of(obs.points.begin(), obs.points.end(), [](const auto& family) {
     return std::any_of(family.begin(), family.end(), [](const Point& p) { return p.test; });
   });
-  std::vector<std::pair<double, double>> all_before;
-  std::vector<std::pair<double, double>> all_after;
+  std::array<Pairs, 2> checked;  // before, after
   for (std::size_t f = 0; f < StatementCalibration::kFamilies; ++f) {
-    StatementFamilyFit& fam = report.families.at(f);
-    std::vector<std::pair<double, double>> train;
-    std::vector<std::pair<double, double>> check_before;
-    std::vector<std::pair<double, double>> check_after;
-    for (const Point& p : points.at(f)) {
-      double refit = p.p;
-      if (p.model >= 0) {
-        const auto m = static_cast<std::size_t>(p.model);
-        refit = p_error_of(obs.at(m).at(p.index), kModels.at(m), w_after.at(m));
-      }
-      ++fam.observations;
-      fam.errors += p.error ? 1 : 0;
-      const double y = p.error ? 1.0 : 0.0;
-      if (!p.test) {
-        train.emplace_back(refit, y);
-      }
-      if (p.test == held_out) {
-        check_before.emplace_back(config.statements.calibration.apply_family(f, p.p), y);
-        check_after.emplace_back(refit, y);
-      }
-    }
-    const std::size_t errors = static_cast<std::size_t>(
-        std::count_if(train.begin(), train.end(), [](const auto& x) { return x.second > 0.5; }));
-    if (options.isotonic && train.size() >= kMinMapObservations && errors >= kMinMapClass &&
-        train.size() - errors >= kMinMapClass) {
-      fam.map = pav_map(train);
-    }
-    StatementCalibration only;
-    only.maps.at(f) = fam.map;
-    for (auto& [p, y] : check_after) {
-      p = only.apply_family(f, p);
-    }
-    fam.ece_before = expected_calibration_error(check_before);
-    fam.ece_after = expected_calibration_error(check_after);
-    all_before.insert(all_before.end(), check_before.begin(), check_before.end());
-    all_after.insert(all_after.end(), check_after.begin(), check_after.end());
+    fit_family(f, obs, w_after, held_out, config, options, report.families.at(f), checked);
   }
-  report.ece_before = expected_calibration_error(all_before);
-  report.ece_after = expected_calibration_error(all_after);
+  report.ece_before = expected_calibration_error(checked[0]);
+  report.ece_after = expected_calibration_error(checked[1]);
   return report;
 }
 
