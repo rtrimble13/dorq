@@ -150,4 +150,20 @@ foreach(seed 1 2)
       "-DFAFNIR_CONFIG=${PROJECT_SOURCE_DIR}/priors/fafnir-statements.toml"
       "-DOUT=${CMAKE_CURRENT_BINARY_DIR}/statements-${seed}" "-DSEED=${seed}" -P
       "${CMAKE_CURRENT_SOURCE_DIR}/synth_statements_gate.cmake")
+  set_tests_properties(synth.statements-seed-${seed} PROPERTIES FIXTURES_SETUP
+                                                                 statements-seed-${seed})
 endforeach()
+
+# DR-0911: the statement models fitted on seed 1 and applied to seed 2.
+add_test(
+  NAME synth.statements-calibrate
+  COMMAND
+    "${CMAKE_COMMAND}" "-DSYNTH=$<TARGET_FILE:dorq-synth>" "-DDORQ=$<TARGET_FILE:dorq>"
+    "-DEVAL=$<TARGET_FILE:dorq-eval>" "-DGATES=${PROJECT_SOURCE_DIR}/tools/synth/gates.txt"
+    "-DCONFIG=${PROJECT_SOURCE_DIR}/tools/synth/statements.toml"
+    "-DTRAIN=${CMAKE_CURRENT_BINARY_DIR}/statements-1"
+    "-DTEST=${CMAKE_CURRENT_BINARY_DIR}/statements-2"
+    "-DOUT=${CMAKE_CURRENT_BINARY_DIR}/statements-calibrate" -P
+    "${CMAKE_CURRENT_SOURCE_DIR}/synth_statements_calibrate.cmake")
+set_tests_properties(synth.statements-calibrate PROPERTIES FIXTURES_REQUIRED
+                                                           "statements-seed-1;statements-seed-2")

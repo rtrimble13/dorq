@@ -103,7 +103,7 @@ struct CheckOptions {
   std::string market;
   std::string items;            // --items: statements' line items (ADR 0005)
   std::string labels;           // --labels: their `remove` dates, with --restore
-  std::string restore;          // --restore: bars as they stood before repairs
+  std::string restore;          // --restore: bars or statements as they stood before repairs
   std::string restore_actions;  // --restore-actions: actions as they stood before repairs
 };
 
@@ -727,7 +727,8 @@ void add_check_options(CLI::App& cmd, CheckOptions& o) {
                  "Statements' line items (CSV: column, statement, item_class, "
                  "sign_convention, is_subtotal); only these columns are read as items");
   cmd.add_option("--restore", o.restore,
-                 "Bars as they stood before repairs, over the input (doc/labels.md)");
+                 "Bars, or statement rows, as they stood before repairs, over the input "
+                 "(doc/labels.md)");
   cmd.add_option("--restore-actions", o.restore_actions,
                  "Corporate actions as they stood before repairs, over --actions "
                  "(doc/labels.md)");
@@ -758,11 +759,13 @@ int run(std::span<const char* const> args, Io& io) {
   CalibrateCommand calibrate_command;
   CheckOptions& co = calibrate_command.check;
   CLI::App* calibrate_cmd = app.add_subcommand(
-      "calibrate", "Fit the price model's priors to labelled history (doc/calibration.md)");
+      "calibrate",
+      "Fit the price or statement models' priors to labelled history (doc/calibration.md)");
   calibrate_cmd->add_option("files", co.files, "Data files; '-' or none reads stdin");
   calibrate_cmd->add_option("--labels", co.labels, "Labels (JSON Lines; doc/labels.md)")
       ->required();
-  calibrate_cmd->add_option("--restore", co.restore, "Bars as they stood before repairs");
+  calibrate_cmd->add_option("--restore", co.restore,
+                            "Bars, or statement rows, as they stood before repairs");
   calibrate_cmd->add_option("--restore-actions", co.restore_actions,
                             "Corporate actions as they stood before repairs (over --actions)");
   calibrate_cmd->add_option("--out", calibrate_command.out,
