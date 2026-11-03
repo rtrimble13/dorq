@@ -161,7 +161,7 @@ void report(const CheckInfo& info, const SeriesContext& context, ShareFinding::K
     if (kind == ShareFinding::Kind::kStep && f.explanation() == ShareHypothesis::kRealIssuance) {
       continue;
     }
-    const double p_error = context.statement_settings->calibration.apply(info.code, f.p_not_real());
+    const double p_error = context.statement_config().calibration.apply(info.code, f.p_not_real());
     std::optional<Severity> severity = context.thresholds.for_probability(p_error);
     if (!severity) {
       continue;

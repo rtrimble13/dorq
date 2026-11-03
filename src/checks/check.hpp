@@ -56,6 +56,13 @@ struct SeriesContext {
   // --as-of: the date the in-force view and DQ942 judge at; nullopt without it.
   std::optional<Date> as_of = std::nullopt;
 
+  // The [statements] settings, or their defaults where none were given (a check
+  // run outside the engine, as the fuzz harnesses run them).
+  [[nodiscard]] const StatementSettings& statement_config() const noexcept {
+    static const StatementSettings kDefaults;
+    return statement_settings != nullptr ? *statement_settings : kDefaults;
+  }
+
   // The exchange tick from --meta, if given.
   [[nodiscard]] std::optional<double> meta_tick() const noexcept {
     return meta != nullptr ? meta->tick_size : std::nullopt;

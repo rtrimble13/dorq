@@ -385,9 +385,9 @@ std::array<double, 4> posterior(const GapEvidence& e, const StatementPriors& pri
 Violation report_gap(const CheckInfo& info, const SeriesContext& context, const Terms& terms,
                      const Judged& j, const GapEvidence& e, std::size_t i) {
   const Series& s = context.series;
-  const std::array<double, 4> p = posterior(e, context.statement_settings->priors);
+  const std::array<double, 4> p = posterior(e, context.statement_config().priors);
   const auto best = static_cast<Gap>(std::max_element(p.begin(), p.end()) - p.begin());
-  const double p_error = context.statement_settings->calibration.apply(
+  const double p_error = context.statement_config().calibration.apply(
       info.code, p.at(static_cast<std::size_t>(Gap::kFieldError)) +
                      p.at(static_cast<std::size_t>(Gap::kUnexplained)));
   const bool filing_fact = best == Gap::kStructural || best == Gap::kReclassification;
@@ -552,7 +552,7 @@ Violation tie_finding(const CheckInfo& info, const SeriesContext& context, std::
                       double p_error) {
   const Series& s = context.series;
   Violation v = statement_finding(info, s, row, true);
-  v.p_error = context.statement_settings->calibration.apply(info.code, p_error);
+  v.p_error = context.statement_config().calibration.apply(info.code, p_error);
   v.severity = context.thresholds.for_probability(v.p_error).value_or(Severity::kInfo);
   return v;
 }

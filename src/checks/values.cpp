@@ -188,7 +188,7 @@ std::string views_text(const ValueFinding& f) {
 void report_structure(const CheckInfo& info, const SeriesContext& context, const ValueFinding& f,
                       std::vector<Violation>& out) {
   // The sub-family's calibration map ([statements.calibration], `dorq calibrate`).
-  const double p_error = context.statement_settings->calibration.apply(info.code, f.p_error());
+  const double p_error = context.statement_config().calibration.apply(info.code, f.p_error());
   std::optional<Severity> severity = context.thresholds.for_probability(p_error);
   if (severity && f.provisional && *severity == Severity::kError) {
     severity = Severity::kWarn;  // the newest period: nothing after it yet
@@ -217,10 +217,10 @@ void report(const CheckInfo& info, const SeriesContext& context, std::vector<Vio
       continue;
     }
     const bool large_change = code == "DQ919";
-    if (large_change && !f.notable && !context.statement_settings->report_all) {
+    if (large_change && !f.notable && !context.statement_config().report_all) {
       continue;  // a real change of the size the item often makes: nothing to review
     }
-    const double p_error = context.statement_settings->calibration.apply(code, f.p_error());
+    const double p_error = context.statement_config().calibration.apply(code, f.p_error());
     std::optional<Severity> severity =
         large_change ? Severity::kInfo : context.thresholds.for_probability(p_error);
     if (!severity) {
