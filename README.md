@@ -62,7 +62,9 @@ Lines and JSON arrays, and reports in five formats. It runs:
 
 `dorq calibrate` fits the price model's priors and its `p_error` map to labelled
 history: fafnir's own repair decisions ([doc/calibration.md](doc/calibration.md),
-[doc/labels.md](doc/labels.md)). [dorq-eval](tools/eval/README.md) reports
+[doc/labels.md](doc/labels.md)). On statements it fits the value, identity and
+filing-date models' priors and a `p_error` map per sub-family to fafnir's statement
+labels: SF1's corrections and the flags closed on the filing. [dorq-eval](tools/eval/README.md) reports
 precision, recall, calibration and precision@k against labels. fafnir runs dorq as
 a second data-quality engine, in shadow until the cutover criteria are met (fafnir's
 doc/dorq.md), with [priors/fafnir.toml](priors/fafnir.toml) as its configuration.
@@ -236,7 +238,7 @@ archive, plus a `SHA256SUMS` file:
 | `dorq-<version>-linux-x86_64.tar.gz` | Linux x86-64 with glibc 2.39 or newer (Ubuntu 24.04+). The C++ runtime is linked in |
 
 ```bash
-version=0.13.0
+version=0.14.0
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/dorq-${version}-linux-x86_64.tar.gz"
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
@@ -261,7 +263,7 @@ Clang 18+).
 ```bash
 sudo apt-get install -y build-essential cmake ninja-build git
 git clone https://github.com/rtrimble13/dorq.git && cd dorq
-git checkout v0.13.0                       # or stay on main for the latest
+git checkout v0.14.0                       # or stay on main for the latest
 cmake --workflow --preset release          # configure, build, run the tests
 sudo cmake --install build/release --prefix /opt/dorq
 /opt/dorq/bin/dorq version                 # names the commit it was built from
@@ -307,7 +309,8 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 - [Output formats](doc/output.md): text, json, jsonl, csv, fafnir
 - [Context inputs](doc/context.md): corporate actions, series metadata, a market reference
 - [Labels](doc/labels.md) and [calibration](doc/calibration.md): fitting the
-  price model to labelled history, and `--restore` and `--restore-actions`
+  price model and the statement models to labelled history, and `--restore` and
+  `--restore-actions`
 - [Performance](doc/performance.md): throughput, memory, threads and the runtime targets
 - [Checks](doc/checks/): one page per check, also printed by `dorq explain`;
   [DQ201](doc/checks/DQ201.md) describes the price model

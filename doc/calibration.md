@@ -1,7 +1,8 @@
 # Calibration
 
 The price model's priors ship as reasonable guesses: how often a large move is a
-bad print, a scale error or an unreported split rather than a real move.
+bad print, a scale error or an unreported split rather than a real move. The
+statement models' do too ([Statements](#statements)).
 `dorq calibrate` replaces those guesses with what labelled history shows (plan
 section 6, DR-0602). It writes a TOML file that a config file includes.
 
@@ -130,6 +131,106 @@ On dorq-synth, a fit on seed 1 applied to seeds 2–6 removes every report on th
 thin-name and rate hard negatives. DQ201 keeps a precision of 1.0. Precision at
 warn on seed 2 rises from 0.71 to 0.83. To measure a fit on your own labels, run
 [dorq-eval](../tools/eval/README.md) before and after.
+
+## Statements
+
+`dorq calibrate` on a statements input fits the statement checks to labels about
+statements (DR-0911). It takes the same options as `dorq check` on statements:
+`--items` and `--as-of` as well as `--actions` and `--meta`. `--restore` takes
+a statements restore file. One input holds one kind, so bars and statements are
+fitted in separate runs.
+
+```bash
+fafnir dq export-labels --out labels.jsonl --restore-statements before-statements.csv
+dorq calibrate statements.csv --labels labels.jsonl --items items.csv \
+     --actions actions.csv --meta meta.csv --as-of 2026-11-02 \
+     --config /etc/fafnir/dorq-statements.toml --restore before-statements.csv \
+     --holdout 0.3 --out fafnir-statements-calibration.toml
+```
+
+1. **Candidates.** The statement checks run as `dorq check` runs them, with every
+   candidate reported, at any probability. The value model's real changes are
+   reported too. A candidate is an observation when a statements label covers it
+   ([labels.md](labels.md#labels-about-statements)), by series, statement,
+   period type, version and item. A fault label must be within 3 days of the
+   candidate, and a market fact on the candidate itself. With
+   `--clean-unlabelled`, a candidate no label covers is innocent.
+2. **Priors.** Three models' priors are fitted as the price model's are, to the
+   labels' marginal likelihood with a Gaussian penalty about the configured
+   values:
+
+   | Model | Codes | Priors |
+   |---|---|---|
+   | values | DQ911, DQ912, DQ913, DQ919 | `bad_value`, `unit_error`, `sign_error` (a real change has the rest) |
+   | identities | DQ903 | `identity_structural`, `identity_reclassification`, `identity_field_error`, `identity_unexplained` (relative weights) |
+   | filings | DQ931 | `filing_late`, `filing_early`, `filing_amendment` (an ordinary filing has the rest) |
+
+   Each observation's evidence under each hypothesis is read from its
+   posterior over its prior. A fault label names the error it allows by its
+   code: a DQ912 label on a DQ911 candidate is the value model's `unit_error`.
+   A row's or an era's DQ912 is left out, since its posterior is not the value
+   model's. With 30 held-out observations or more, the penalty's width is
+   chosen from {0.25, 0.5, 1, 1.5, 3} e-folds by their log-likelihood.
+   Otherwise it is 1.5.
+3. **The p_error maps.** Each sub-family (DQ90x, DQ91x, DQ92x, DQ93x, DQ94x)
+   gets an isotonic map of its own, fitted on the codes that apply it: DQ903,
+   DQ904, DQ911 to DQ916, DQ919, DQ921, DQ922, DQ931, DQ932 and DQ942. The
+   rules with a fixed `p_error` (DQ901, DQ902, DQ941, DQ943, DQ944) and DQ95x
+   are not mapped.
+   - The regression is pool adjacent violators over the training observations
+     themselves, not over bins. A statements fit sees thousands of innocent
+     candidates near 0 and a few faults near 1, and an equal-count top bin
+     would pool them.
+   - Each block is a knot at its mean `p_error`, as for the price model, with
+     at most 40 knots. Its rate is shrunk toward that mean by two
+     pseudo-observations, so that a few labels cannot pin a range at 0 or 1.
+   - A fitted model's candidates are mapped from their `p_error` under the
+     fitted priors.
+   - A candidate that only a fault label naming another code covers is left
+     out. The fault is real, but whether it is the thing reported is not
+     known; dorq-eval leaves such a report out of its reliability diagram too.
+   - A sub-family is mapped only with 20 training observations, among them 2
+     errors and 2 innocent ones.
+
+The output is a `[statements.priors]` table, with the three models' keys, and
+`[statements.calibration]`, with the fit's summary in comments:
+
+```toml
+# values: 1110 observations (25 errors, 281 held out), spread 0.5; mean log P(label | evidence) -0.0384 before, -0.0339 after; held out -0.0066 before, -0.0062 after
+# DQ91x: 1141 observations (56 errors); expected calibration error 0.0027 before, 0.0024 after
+# ...
+
+[statements.priors]
+bad_value = 0.0008877
+unit_error = 0.0005827
+...
+
+[statements.calibration]
+version = "labels"
+dq90 = [
+  [0.001024, 0.000004],
+  [0.886028, 0.997495],
+]
+...
+```
+
+Include it from the statements config as the bars fit is included
+([configuration.md](configuration.md#include)). On dorq-synth, a fit on
+seed 1 (`--clean-unlabelled --holdout 0.3`) and applied to seeds 2 to 20:
+
+- lowers dorq-eval's expected calibration error over the statement checks
+  with a posterior on every seed (seed 2: 0.007 to 0.004; the largest, seed
+  6: 0.011 to 0.007);
+- raises precision at warn and above on seed 5 (0.989 to 0.996) and leaves it
+  as it was on every other seed: 1 on fifteen, and 0.996, 0.992 and 0.996 on
+  seeds 14, 16 and 18;
+- lowers no seed's recall, and raises seed 9's (0.977 to 0.984);
+- and brings the seeds that failed tools/synth/gates.txt from three to one.
+  Seed 14's DQ915 precision is 0.8 against a gate of 0.9, before the fit and
+  after it.
+
+CTest's `synth.statements-calibrate` holds the seed 1 to seed 2 case. On a
+warehouse, measure the fit with dorq-eval on held-out labels, before and after.
 
 ## Re-calibrating
 

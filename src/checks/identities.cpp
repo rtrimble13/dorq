@@ -348,10 +348,9 @@ GapEvidence gather(const Series& s, const Terms& terms, const std::vector<Judged
 
 std::array<double, 4> posterior(const GapEvidence& e, const StatementPriors& priors) {
   // The configured prior weights ([statements.priors] identity_*), on the log scale.
-  std::array<double, 4> score{std::log(priors.identity_structural),
-                              std::log(priors.identity_reclassification),
-                              std::log(priors.identity_field_error),
-                              std::log(priors.identity_unexplained)};
+  std::array<double, 4> score{
+      std::log(priors.identity_structural), std::log(priors.identity_reclassification),
+      std::log(priors.identity_field_error), std::log(priors.identity_unexplained)};
   const auto at = [&score](Gap g) -> double& { return score.at(static_cast<std::size_t>(g)); };
   at(Gap::kStructural) += e.persistent ? kPersistent : kNotPersistent;
   if (e.neighbours_break) {

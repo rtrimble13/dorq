@@ -331,8 +331,14 @@ struct StatementCalibration {
 
   // The sub-family of a statement code (DQ903 -> 0), or nullopt for another code.
   [[nodiscard]] static std::optional<std::size_t> family(std::string_view code) noexcept;
-  // p_error through its sub-family's map.
+  // Whether a code's p_error goes through its map: a model's or a scored rule's
+  // (DQ903, DQ904, DQ911 to DQ916, DQ919, DQ921, DQ922, DQ931, DQ932, DQ942), not a
+  // rule's fixed one (DQ901, DQ902, DQ941, DQ943, DQ944) nor DQ95x's.
+  [[nodiscard]] static bool mapped(std::string_view code) noexcept;
+  // p_error through its sub-family's map, for a mapped code.
   [[nodiscard]] double apply(std::string_view code, double p) const noexcept;
+  // p through sub-family f's map (DQ90x is 0).
+  [[nodiscard]] double apply_family(std::size_t f, double p) const noexcept;
   [[nodiscard]] bool empty() const noexcept;
   bool operator==(const StatementCalibration&) const = default;
 };

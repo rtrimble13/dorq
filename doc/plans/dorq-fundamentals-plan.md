@@ -284,8 +284,9 @@ and samples nothing.
 - **The expected value.** A quarter is predicted from the adjacent quarters and from the same
   quarter a year before and after (seasonality). A year is predicted from the adjacent years.
   Each item has a discounted robust scale, like DQ2xx's NIG. A quarterly series has only four
-  points a year, so the class prior carries more weight than it does for bars, and `dorq
-  calibrate` fits it.
+  points a year, so the class prior carries more weight than it does for bars. `dorq
+  calibrate` fits the model's error priors (DR-0911); the class prior's scales
+  (`flow_scale`, `stock_scale`) stay as configured.
 - **Screening.** A value becomes a candidate on any of these:
   - a predictive tail probability below 1e-3;
   - a ratio of 5 or more against both sides;
@@ -522,9 +523,9 @@ Sizes as in the development plan: S ≈ ½ day, M ≈ 1 to 2 days, L ≈ 3 to 5 
 | [DR-0908](https://github.com/rtrimble13/dorq/issues/22) | dorq | Share terms: DQ921 share-terms-step, DQ922 share-count-mismatch; v0.12.0 | M | 0906 | ✅ PR #35 |
 | [DR-0909](https://github.com/rtrimble13/dorq/issues/23) | dorq | The knowledge timeline and revisions: DQ931, DQ932, DQ951, and the cross-section's hooks for statements (moved here from DR-0901, which had no check to use them) | L | 0906 | ✅ PR #36 |
 | [DR-0910](https://github.com/rtrimble13/dorq/issues/24) | dorq | Coverage and freshness: DQ941 to DQ944, the new `--meta` fields, series known only from the meta; v0.13.0 | L | 0902 | ✅ PR #37 |
-| [DR-0911](https://github.com/rtrimble13/dorq/issues/25) | dorq | Labels, calibration and dorq-eval for statements; fit on fafnir's labels; v0.14.0 | M | 0906 to 0910, 0913 | ⬜ |
-| [DR-0912](https://github.com/rtrimble13/fafnir/issues/219) | fafnir | Export, run and ingest statements; shadow; `dq compare`; recheck | L | 0902 (v0.11.0) | ⬜ |
-| [DR-0913](https://github.com/rtrimble13/fafnir/issues/220) | fafnir | Fundamentals labels (corrections, closures, stated); playbooks, tiers, `NEVER_AUTO_RESOLVE` | M | 0912 | ⬜ |
+| [DR-0911](https://github.com/rtrimble13/dorq/issues/25) | dorq | Labels, calibration and dorq-eval for statements; fit on fafnir's labels; v0.14.0 | M | 0906 to 0910, 0913 | ✅ PR #38; the host fit follows |
+| [DR-0912](https://github.com/rtrimble13/fafnir/issues/219) | fafnir | Export, run and ingest statements; shadow; `dq compare`; recheck | L | 0902 (v0.11.0) | ✅ fafnir PR #237; the host timing follows |
+| [DR-0913](https://github.com/rtrimble13/fafnir/issues/220) | fafnir | Fundamentals labels (corrections, closures, stated); playbooks, tiers, `NEVER_AUTO_RESOLVE` | M | 0912 | ✅ fafnir PR #239 |
 | [DR-0914](https://github.com/rtrimble13/fafnir/issues/221) | fafnir | Statements shadow period, go/no-go, cutover; the SQL checks retire | M | 0911, 0912, 0913 | ⬜ |
 
 ## 10. Deferred, not planned

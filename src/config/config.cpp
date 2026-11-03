@@ -1122,13 +1122,26 @@ void append_statements(std::string& out, const StatementSettings& settings, bool
     out += "\nflow_scale = " + format_number(p.flow_scale);
     out += "\nstock_scale = " + format_number(p.stock_scale);
     out += "\nprior_weight = " + format_number(p.prior_weight);
-    out += "\nidentity_structural = " + format_number(p.identity_structural);
-    out += "\nidentity_reclassification = " + format_number(p.identity_reclassification);
-    out += "\nidentity_field_error = " + format_number(p.identity_field_error);
-    out += "\nidentity_unexplained = " + format_number(p.identity_unexplained);
-    out += "\nfiling_late = " + format_number(p.filing_late);
-    out += "\nfiling_early = " + format_number(p.filing_early);
-    out += "\nfiling_amendment = " + format_number(p.filing_amendment);
+    // DR-0911's identity and filing priors, likewise: a table that set only the
+    // value model's keys keeps its hash.
+    const StatementPriors d;
+    const bool identities = p.identity_structural != d.identity_structural ||
+                            p.identity_reclassification != d.identity_reclassification ||
+                            p.identity_field_error != d.identity_field_error ||
+                            p.identity_unexplained != d.identity_unexplained;
+    if (all_sections || identities) {
+      out += "\nidentity_structural = " + format_number(p.identity_structural);
+      out += "\nidentity_reclassification = " + format_number(p.identity_reclassification);
+      out += "\nidentity_field_error = " + format_number(p.identity_field_error);
+      out += "\nidentity_unexplained = " + format_number(p.identity_unexplained);
+    }
+    const bool filings = p.filing_late != d.filing_late || p.filing_early != d.filing_early ||
+                         p.filing_amendment != d.filing_amendment;
+    if (all_sections || filings) {
+      out += "\nfiling_late = " + format_number(p.filing_late);
+      out += "\nfiling_early = " + format_number(p.filing_early);
+      out += "\nfiling_amendment = " + format_number(p.filing_amendment);
+    }
     out += "\n";
   }
   if (all_sections || !settings.calibration.empty()) {
@@ -1517,12 +1530,26 @@ std::optional<std::size_t> StatementCalibration::family(std::string_view code) n
   return static_cast<std::size_t>(tens - '0');
 }
 
+bool StatementCalibration::mapped(std::string_view code) noexcept {
+  static constexpr std::array<std::string_view, 14> kMapped = {
+      "DQ903", "DQ904", "DQ911", "DQ912", "DQ913", "DQ914", "DQ915",
+      "DQ916", "DQ919", "DQ921", "DQ922", "DQ931", "DQ932", "DQ942"};
+  return std::find(kMapped.begin(), kMapped.end(), code) != kMapped.end();
+}
+
 double StatementCalibration::apply(std::string_view code, double p) const noexcept {
   const std::optional<std::size_t> f = family(code);
-  if (!f) {
+  if (!f || !mapped(code)) {
     return p;
   }
-  const std::vector<std::pair<double, double>>& map = maps.at(*f);
+  return apply_family(*f, p);
+}
+
+double StatementCalibration::apply_family(std::size_t f, double p) const noexcept {
+  if (f >= kFamilies) {
+    return p;
+  }
+  const std::vector<std::pair<double, double>>& map = maps.at(f);
   if (map.empty()) {
     return p;
   }

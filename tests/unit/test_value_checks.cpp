@@ -4,9 +4,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <functional>
-#include <iterator>
 #include <limits>
 #include <optional>
 #include <set>
@@ -522,6 +522,8 @@ dq93 = [[0.1, 0.05], [0.5, 0.25], [0.9, 0.95]]
   CHECK(c.apply("DQ903", 0.005) == doctest::Approx(0.0));
   CHECK(c.apply("DQ904", 0.455) == doctest::Approx(0.5));
   CHECK(c.apply("DQ912", 0.37) == 0.37);  // DQ91x has no map
+  CHECK(c.apply("DQ901", 0.5) == 0.5);    // a rule's p_error, not a model's
+  CHECK(c.apply("DQ944", 0.5) == 0.5);
   CHECK(c.apply("DQ951", 0.37) == 0.37);  // DQ95x is not mapped
   CHECK(c.apply("DQ201", 0.37) == 0.37);  // nor is a bars check
   CHECK(dorq::StatementCalibration::family("DQ903") == std::optional<std::size_t>{0});
@@ -529,6 +531,15 @@ dq93 = [[0.1, 0.05], [0.5, 0.25], [0.9, 0.95]]
   CHECK_FALSE(dorq::StatementCalibration::family("DQ951").has_value());
   CHECK_FALSE(dorq::StatementCalibration::family("DQ90").has_value());
   CHECK_FALSE(dorq::StatementCalibration::family("DQ203").has_value());
+  for (const char* code :
+       {"DQ903", "DQ904", "DQ911", "DQ916", "DQ919", "DQ921", "DQ922", "DQ931", "DQ932", "DQ942"}) {
+    CAPTURE(code);
+    CHECK(dorq::StatementCalibration::mapped(code));
+  }
+  for (const char* code : {"DQ901", "DQ902", "DQ941", "DQ943", "DQ944", "DQ951", "DQ201"}) {
+    CAPTURE(code);
+    CHECK_FALSE(dorq::StatementCalibration::mapped(code));
+  }
 
   // Both round-trip through config show, and change the hash.
   const dorq::Config again = dorq::parse_config(dorq::to_toml(config), "again.toml", false);
@@ -538,6 +549,13 @@ dq93 = [[0.1, 0.05], [0.5, 0.25], [0.9, 0.95]]
   dorq::Config mapped_only;
   mapped_only.statements.calibration = c;
   CHECK(dorq::config_hash(mapped_only) != dorq::config_hash(dorq::Config{}));
+  // A table that sets only the value model's keys hashes as it did before them.
+  const dorq::Config values_only =
+      dorq::parse_config("[statements.priors]\nbad_value = 0.002\n", "v.toml", false);
+  CHECK(dorq::config_hash(values_only) == "1d37e0c08c3bd549");  // dorq 0.13.0's
+  dorq::Config filings_only;
+  filings_only.statements.priors.filing_late = 0.02;
+  CHECK(dorq::config_hash(filings_only) != dorq::config_hash(dorq::Config{}));
 }
 
 TEST_CASE("DQ914, DQ915 and DQ916: a copied quarter, an absent zero, quarters to date") {
@@ -684,6 +702,13 @@ std::string rows_at(const std::string& csv, const std::string& date,
   return out;
 }
 
+std::string read_text(const std::filesystem::path& path) {
+  const std::ifstream in(path, std::ios::binary);
+  std::ostringstream out;
+  out << in.rdbuf();
+  return out.str();
+}
+
 // `csv` without the rows of fiscal date `date`.
 std::string without(const std::string& csv, const std::string& date) {
   std::string out;
@@ -719,8 +744,7 @@ TEST_CASE("--restore on statements: superseded rows by their key, and missing on
       v[0] *= 1000.0;
     }
   });
-  const std::string restore = std::string{kHeader} +
-                              rows_at(first, quarter_end(10), "income") +
+  const std::string restore = std::string{kHeader} + rows_at(first, quarter_end(10), "income") +
                               rows_at(first, quarter_end(11));
   write_file(dir.path() / "s.csv", std::string{kHeader} + current);
   write_file(dir.path() / "items.csv", kItems);
@@ -803,10 +827,10 @@ TEST_CASE("dorq calibrate on statements: the priors and maps, which dorq check r
   const std::string config = (dir.path() / "st.toml").string();
   const std::string labels_file = (dir.path() / "labels.jsonl").string();
   const auto fit = [&](const char* out, const char* threads) {
-    return run_in(dir.path(), {"calibrate", file.c_str(), "--labels", labels_file.c_str(),
-                               "--items", items.c_str(), "--config", config.c_str(),
-                               "--clean-unlabelled", "--threads", threads, "--name", "synthetic",
-                               "--out", out});
+    return run_in(dir.path(),
+                  {"calibrate", file.c_str(), "--labels", labels_file.c_str(), "--items",
+                   items.c_str(), "--config", config.c_str(), "--clean-unlabelled", "--threads",
+                   threads, "--name", "synthetic", "--out", out});
   };
   const Result first = fit("fit.toml", "2");
   INFO(first.err);
@@ -815,8 +839,7 @@ TEST_CASE("dorq calibrate on statements: the priors and maps, which dorq check r
   CHECK(contains(first.out, "values: 7 observations (7 errors)"));
   CHECK(contains(first.out, "identities: 1 observations (1 errors)"));
   CHECK(contains(first.out, "filings: 0 observations"));
-  std::ifstream in(dir.path() / "fit.toml");
-  const std::string toml{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+  const std::string toml = read_text(dir.path() / "fit.toml");
   CHECK(contains(toml, "[statements.priors]"));
   CHECK(contains(toml, "unit_error = "));
   CHECK(contains(toml, "identity_field_error = "));
@@ -827,9 +850,7 @@ TEST_CASE("dorq calibrate on statements: the priors and maps, which dorq check r
   // Deterministic: one thread writes the same file.
   const Result again = fit("again.toml", "1");
   REQUIRE(again.status == 0);
-  std::ifstream in_again(dir.path() / "again.toml");
-  CHECK(std::string{std::istreambuf_iterator<char>(in_again), std::istreambuf_iterator<char>()} ==
-        toml);
+  CHECK(read_text(dir.path() / "again.toml") == toml);
 
   // dorq check reads it, and still finds the faults.
   write_file(dir.path() / "fitted.toml", "include = \"fit.toml\"\n" + std::string{kConfig});

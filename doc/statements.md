@@ -142,13 +142,24 @@ cash_flow = "net_change_in_cash = net_cash_operating + net_cash_investing + net_
 [statements.explained_by]     # DQ903: items that explain an identity's gap
 balance_sheet = ["net_income_noncontrolling"]
 
-[statements.priors]           # the value model's defaults (DQ911 to DQ919), for DR-0911 to fit
-bad_value = 0.001             # the prior that any one value is wrong in each way
-unit_error = 0.0002
+[statements.priors]           # the models' priors, which dorq calibrate fits (doc/calibration.md)
+bad_value = 0.001             # the value model (DQ911 to DQ919): the prior that any one
+unit_error = 0.0002           # value is wrong in each way
 sign_error = 0.0002
 flow_scale = 0.08             # the class prior on a period's move (asinh scale): flows
 stock_scale = 0.05            # and stocks
 prior_weight = 6              # in periods, against the item's own residuals
+identity_structural = 0.2465969639416065  # DQ903: the weights of a gap's four explanations,
+identity_reclassification = 0.049787068367863944  # relative to each other
+identity_field_error = 0.3499377491111553  # (e^-1.4, e^-3, e^-1.05, e^-1.05)
+identity_unexplained = 0.3499377491111553
+filing_late = 0.01            # DQ931: the prior that a filing is late, dated too early,
+filing_early = 0.002          # or dated as its amendment
+filing_amendment = 0.002
+
+[statements.calibration]      # p_error maps per sub-family, from dorq calibrate
+version = ""
+dq90 = []                     # DQ90x; dq91 to dq94 likewise. Empty: p_error as the model gives it
 ```
 
 - An identity is item names joined by `+` and `-`, with one `=` between the two

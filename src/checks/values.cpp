@@ -188,8 +188,7 @@ std::string views_text(const ValueFinding& f) {
 void report_structure(const CheckInfo& info, const SeriesContext& context, const ValueFinding& f,
                       std::vector<Violation>& out) {
   // The sub-family's calibration map ([statements.calibration], `dorq calibrate`).
-  const double p_error =
-      context.statement_settings->calibration.apply(info.code, f.p_error());
+  const double p_error = context.statement_settings->calibration.apply(info.code, f.p_error());
   std::optional<Severity> severity = context.thresholds.for_probability(p_error);
   if (severity && f.provisional && *severity == Severity::kError) {
     severity = Severity::kWarn;  // the newest period: nothing after it yet

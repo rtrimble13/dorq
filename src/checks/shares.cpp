@@ -161,8 +161,7 @@ void report(const CheckInfo& info, const SeriesContext& context, ShareFinding::K
     if (kind == ShareFinding::Kind::kStep && f.explanation() == ShareHypothesis::kRealIssuance) {
       continue;
     }
-    const double p_error =
-        context.statement_settings->calibration.apply(info.code, f.p_not_real());
+    const double p_error = context.statement_settings->calibration.apply(info.code, f.p_not_real());
     std::optional<Severity> severity = context.thresholds.for_probability(p_error);
     if (!severity) {
       continue;
@@ -170,8 +169,9 @@ void report(const CheckInfo& info, const SeriesContext& context, ShareFinding::K
     if (f.provisional && *severity == Severity::kError) {
       severity = Severity::kWarn;
     }
-    Violation v = kind == ShareFinding::Kind::kStep ? step_violation(info, context, f, *severity)
-                                                    : mismatch_violation(info, context, f, *severity);
+    Violation v = kind == ShareFinding::Kind::kStep
+                      ? step_violation(info, context, f, *severity)
+                      : mismatch_violation(info, context, f, *severity);
     v.p_error = p_error;
     out.push_back(std::move(v));
   }

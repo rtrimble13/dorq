@@ -74,7 +74,9 @@ The matching follows `dorq-synth score`, so the two tools agree on synthetic dat
 ## Calibration
 
 The reliability diagram uses the reports of the checks whose `p_error` is a
-posterior: DQ2xx, DQ301–DQ304, DQ401–DQ403, DQ501 and DQ701–DQ704. It draws on
+posterior: DQ2xx, DQ301–DQ304, DQ401–DQ403, DQ501 and DQ701–DQ704 on bars, and
+DQ903, DQ911–DQ915, DQ919, DQ921, DQ922, DQ931, DQ932 and DQ942 on statements
+(since 0.14.0). It draws on
 reports at every severity, info included. A point is 1 when the report is right
 or is a series' own row on a session that a `*` fault covers (DQ301 rows folded
 into a DQ303 cohort). A point is 0 when the report is false. A report next to a
@@ -83,8 +85,9 @@ whether it is the error it reports.
 
 The expected calibration error is the mean |mean p_error − observed rate| over ten
 equal-width bins, with each bin weighted by its share of the points. It is the same
-measure `dorq calibrate` prints. The calibrate figure covers only price moves,
-though, while this one covers every check listed above.
+measure `dorq calibrate` prints. The calibrate figure covers every candidate of
+the models it fits (price moves, or the statement checks' sub-families), while
+this one covers the reports of every check listed above.
 
 ## Precision@k
 

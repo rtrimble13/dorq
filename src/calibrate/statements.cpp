@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <optional>
 #include <string>
@@ -348,8 +349,8 @@ struct Objective {
   std::size_t count = 0;
 };
 
-Objective objective(const std::vector<ModelObservation>& obs, const Vec& w, const Vec& w0, bool test,
-                    Vec* gradient, double spread = kDefaultSpread) {
+Objective objective(const std::vector<ModelObservation>& obs, const Vec& w, const Vec& w0,
+                    bool test, Vec* gradient, double spread = kDefaultSpread) {
   Objective out;
   for (const ModelObservation& o : obs) {
     if (o.test != test) {
@@ -441,26 +442,36 @@ double p_error_of(const ModelObservation& o, const ModelSpec& model, const Vec& 
 // themselves, not over equal-count bins: a statements fit sees thousands of
 // innocent candidates near p = 0 and a few faults near 1, and an equal-count top
 // bin would pool them, holding every high p_error at the bin's rate. Each block is
-// a knot at its mean x and mean y; at most kMaxKnots, adjacent blocks of the most
-// points merged first beyond that.
+// a knot at its mean x, as the bars fit's isotonic_map writes it, so the map
+// interpolates between blocks rather than stepping at their edges: where the
+// training points are sparse, a step would carry a block's rate across a range it
+// barely saw. A block's rate is shrunk toward its mean x by kPseudoCount
+// observations, so that a few labels cannot pin it at 0 or 1. Beyond kMaxKnots,
+// the adjacent pair of blocks with the fewest points is merged first.
 std::vector<std::pair<double, double>> pav_map(std::vector<std::pair<double, double>> points) {
   constexpr std::size_t kMaxKnots = 40;
+  constexpr double kPseudoCount = 2.0;
   std::sort(points.begin(), points.end());
   struct Block {
     double sx = 0.0;
     double sy = 0.0;
     double n = 0.0;
+    [[nodiscard]] double x() const { return sx / n; }
     [[nodiscard]] double y() const { return sy / n; }
+    [[nodiscard]] double shrunk() const { return (sy + kPseudoCount * x()) / (n + kPseudoCount); }
+    void absorb(const Block& next) {
+      sx += next.sx;
+      sy += next.sy;
+      n += next.n;
+    }
   };
   std::vector<Block> blocks;
   for (const auto& [x, y] : points) {
     blocks.push_back({x, y, 1.0});
     while (blocks.size() > 1 && blocks[blocks.size() - 2].y() >= blocks.back().y()) {
-      Block last = blocks.back();
+      const Block last = blocks.back();
       blocks.pop_back();
-      blocks.back().sx += last.sx;
-      blocks.back().sy += last.sy;
-      blocks.back().n += last.n;
+      blocks.back().absorb(last);
     }
   }
   while (blocks.size() > kMaxKnots) {
@@ -472,20 +483,21 @@ std::vector<std::pair<double, double>> pav_map(std::vector<std::pair<double, dou
         best = i;
       }
     }
-    blocks[best].sx += blocks[best + 1].sx;
-    blocks[best].sy += blocks[best + 1].sy;
-    blocks[best].n += blocks[best + 1].n;
+    blocks[best].absorb(blocks[best + 1]);
     blocks.erase(blocks.begin() + static_cast<std::ptrdiff_t>(best) + 1);
   }
+  // Knots at six decimals, as the file holds them; knots that coincide there
+  // become one, at the higher rate, and the rates never fall.
   std::vector<std::pair<double, double>> knots;
   for (const Block& b : blocks) {
-    const double x = std::round(b.sx / b.n * 1e6) / 1e6;
-    const double y = std::round(b.y() * 1e6) / 1e6;
+    const double x = std::round(b.x() * 1e6) / 1e6;
+    const double y =
+        std::max(std::round(b.shrunk() * 1e6) / 1e6, knots.empty() ? 0.0 : knots.back().second);
     if (!knots.empty() && x <= knots.back().first) {
       knots.back().second = std::max(knots.back().second, y);
       continue;
     }
-    knots.emplace_back(x, std::max(y, knots.empty() ? 0.0 : knots.back().second));
+    knots.emplace_back(x, y);
   }
   return knots;
 }
@@ -561,10 +573,9 @@ StatementCalibrationReport calibrate_statements(const std::vector<Series>& serie
             [](const auto& a, const auto& b) { return a.first < b.first; });
   const auto labels_of = [&by_series](const std::string& id) {
     std::vector<const Label*> out;
-    auto it = std::lower_bound(by_series.begin(), by_series.end(), id,
-                               [](const auto& entry, const std::string& key) {
-                                 return entry.first < key;
-                               });
+    auto it = std::lower_bound(
+        by_series.begin(), by_series.end(), id,
+        [](const auto& entry, const std::string& key) { return entry.first < key; });
     for (; it != by_series.end() && it->first == id; ++it) {
       out.push_back(it->second);
     }
@@ -647,7 +658,9 @@ StatementCalibrationReport calibrate_statements(const std::vector<Series>& serie
         obs.at(static_cast<std::size_t>(model)).push_back(o);
       }
     }
-    if (const auto f = StatementCalibration::family(c.code); f && !j.other) {
+    // A map is fitted on the codes that apply it.
+    if (const auto f = StatementCalibration::family(c.code);
+        f && StatementCalibration::mapped(c.code) && !j.other) {
       points.at(*f).push_back(point);
     }
   }
@@ -717,7 +730,6 @@ StatementCalibrationReport calibrate_statements(const std::vector<Series>& serie
     std::vector<std::pair<double, double>> train;
     std::vector<std::pair<double, double>> check_before;
     std::vector<std::pair<double, double>> check_after;
-    const std::string code = "DQ9" + std::to_string(f) + "0";
     for (const Point& p : points.at(f)) {
       double refit = p.p;
       if (p.model >= 0) {
@@ -731,7 +743,7 @@ StatementCalibrationReport calibrate_statements(const std::vector<Series>& serie
         train.emplace_back(refit, y);
       }
       if (p.test == held_out) {
-        check_before.emplace_back(config.statements.calibration.apply(code, p.p), y);
+        check_before.emplace_back(config.statements.calibration.apply_family(f, p.p), y);
         check_after.emplace_back(refit, y);
       }
     }
@@ -744,7 +756,7 @@ StatementCalibrationReport calibrate_statements(const std::vector<Series>& serie
     StatementCalibration only;
     only.maps.at(f) = fam.map;
     for (auto& [p, y] : check_after) {
-      p = only.apply(code, p);
+      p = only.apply_family(f, p);
     }
     fam.ece_before = expected_calibration_error(check_before);
     fam.ece_after = expected_calibration_error(check_after);
@@ -769,8 +781,8 @@ std::string statements_toml(const StatementCalibrationReport& r) {
     out += "# " + m.name + ": " + std::to_string(m.observations) + " observations (" +
            std::to_string(m.errors) + " errors, " + std::to_string(m.test_observations) +
            " held out), spread " + format_number(m.spread) + "; mean log P(label | evidence) " +
-           fixed(m.mean_log_lik_before, 4) +
-           " before, " + fixed(m.mean_log_lik_after, 4) + " after";
+           fixed(m.mean_log_lik_before, 4) + " before, " + fixed(m.mean_log_lik_after, 4) +
+           " after";
     if (m.test_observations > 0) {
       out += "; held out " + fixed(m.test_mean_log_lik_before, 4) + " before, " +
              fixed(m.test_mean_log_lik_after, 4) + " after";

@@ -164,13 +164,24 @@ restricted_cash_share = 0.1          # up to this share of the balance
 
 [statements.explained_by]  # DQ903: identity name = [items that explain its gap]
 
-[statements.priors]   # the value model (DQ911 to DQ919): see doc/statements.md
-bad_value = 0.001     # the prior that any one value is wrong in each way
-unit_error = 0.0002
+[statements.priors]   # the statement models: see doc/statements.md
+bad_value = 0.001     # the value model (DQ911 to DQ919): the prior that any one
+unit_error = 0.0002   # value is wrong in each way
 sign_error = 0.0002
 flow_scale = 0.08     # the class prior on a period's move (asinh scale)
 stock_scale = 0.05
 prior_weight = 6
+identity_structural = 0.2465969639416065  # DQ903: relative weights, each in [1e-6, 1]
+identity_reclassification = 0.049787068367863944
+identity_field_error = 0.3499377491111553
+identity_unexplained = 0.3499377491111553
+filing_late = 0.01    # DQ931: each in [1e-6, 0.5], the three below 0.95 together
+filing_early = 0.002
+filing_amendment = 0.002
+
+[statements.calibration]  # from dorq calibrate on statements: see doc/calibration.md
+version = ""
+dq90 = []             # a p_error map per sub-family: dq90 (DQ90x) to dq94 (DQ94x)
 ```
 
 Lists can also be written as one comma-separated string (`ignore = "DQ106, DQ107"`).
@@ -179,7 +190,10 @@ Lists can also be written as one comma-separated string (`ignore = "DQ106, DQ107
 rising and calibrated ones never falling, all in [0, 1]. A Bayesian check's
 `p_error` is interpolated linearly between the knots, held at the end values
 beyond them, and then mapped to a severity. An empty map, the default, leaves
-`p_error` as the model computes it.
+`p_error` as the model computes it. `[statements.calibration]`'s `dq90` to `dq94`
+are maps of the same form, one for each statement sub-family. They apply to the
+checks whose `p_error` is a model's or a scored rule's: DQ903, DQ904, DQ911 to
+DQ916, DQ919, DQ921, DQ922, DQ931, DQ932 and DQ942.
 
 ## Include
 
@@ -269,7 +283,8 @@ covers:
 - the `--items` file by its content, in the same way;
 - `[statements]` and `[fafnir.tables]`, but only where they differ from their
   defaults: the releases that added them (DR-0901, DR-0902) left every existing
-  hash as it was.
+  hash as it was. So did DR-0911's identity and filing priors and
+  `[statements.calibration]`.
 
 It does not cover:
 
