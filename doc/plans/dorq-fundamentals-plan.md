@@ -526,7 +526,7 @@ Sizes as in the development plan: S ≈ ½ day, M ≈ 1 to 2 days, L ≈ 3 to 5 
 | [DR-0911](https://github.com/rtrimble13/dorq/issues/25) | dorq | Labels, calibration and dorq-eval for statements; fit on fafnir's labels; v0.14.0 | M | 0906 to 0910, 0913 | ✅ PR #38; the host fit follows |
 | [DR-0912](https://github.com/rtrimble13/fafnir/issues/219) | fafnir | Export, run and ingest statements; shadow; `dq compare`; recheck | L | 0902 (v0.11.0) | ✅ fafnir PR #237; the host timing follows |
 | [DR-0913](https://github.com/rtrimble13/fafnir/issues/220) | fafnir | Fundamentals labels (corrections, closures, stated); playbooks, tiers, `NEVER_AUTO_RESOLVE` | M | 0912 | ✅ fafnir PR #239 |
-| [DR-0914](https://github.com/rtrimble13/fafnir/issues/221) | fafnir | Statements shadow period, go/no-go, cutover; the SQL checks retire | M | 0911, 0912, 0913 | ⬜ |
+| [DR-0914](https://github.com/rtrimble13/fafnir/issues/221) | fafnir | Statements shadow period, go/no-go, cutover; the SQL checks retire | M | 0911, 0912, 0913 | 🔄 fafnir PR #240 (recheck rules, `dq sample`); the cutover is fafnir PR #241, a draft until the go on #221 |
 
 ## 10. Deferred, not planned
 
