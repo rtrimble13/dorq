@@ -8,6 +8,7 @@
 #include <numeric>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -283,10 +284,93 @@ Restorer::Restorer(const std::vector<Label>& labels, std::vector<Series> restore
   std::erase_if(removed_, [](const auto& entry) { return entry.second.empty(); });
 }
 
+namespace {
+
+// A statements series as it stood: each restored row replaces the series' row of
+// its statement, period type, fiscal date and version (a vendor correction keeps
+// the version), or is added where the series has none. A restored item the series
+// lacks is added as a column, NULL on its other rows; an item the restore file
+// lacks keeps the series' value.
+void restore_statements(Series& series, const Series& restore) {
+  StatementRows& st = series.statements;
+  const StatementRows& rs = restore.statements;
+  std::vector<std::size_t> column(rs.item_names.size());
+  for (std::size_t k = 0; k < rs.item_names.size(); ++k) {
+    const auto it = std::find(st.item_names.begin(), st.item_names.end(), rs.item_names[k]);
+    if (it != st.item_names.end()) {
+      column[k] = static_cast<std::size_t>(it - st.item_names.begin());
+      continue;
+    }
+    column[k] = st.item_names.size();
+    st.item_names.push_back(rs.item_names[k]);
+    st.items.emplace_back(series.size(), std::numeric_limits<double>::quiet_NaN());
+  }
+  const auto key = [](const Series& s, std::size_t r) {
+    const StatementRows& rows = s.statements;
+    return std::make_tuple(s.date[r].days(), static_cast<int>(rows.statement[r]),
+                           static_cast<int>(rows.period_type[r]), rows.version[r]);
+  };
+  const bool has_close = series.close.size() == series.size();
+  for (std::size_t r = 0; r < restore.size(); ++r) {
+    std::size_t i = series.size();
+    for (std::size_t j = 0; j < series.size(); ++j) {
+      if (key(series, j) == key(restore, r)) {
+        i = j;
+        break;
+      }
+    }
+    if (i == series.size()) {
+      series.date.push_back(restore.date[r]);
+      series.line.push_back(restore.line[r]);
+      if (has_close) {
+        series.close.push_back(std::numeric_limits<double>::quiet_NaN());
+      }
+      st.statement.push_back(rs.statement[r]);
+      st.period_type.push_back(rs.period_type[r]);
+      st.fiscal_year.push_back(0);
+      st.fiscal_period.push_back(rs.fiscal_period[r]);
+      st.version.push_back(rs.version[r]);
+      st.known_from.push_back(rs.known_from[r]);
+      st.known_to.emplace_back();
+      st.knowledge_source.push_back(rs.knowledge_source[r]);
+      st.filing_date.emplace_back();
+      st.loaded_on.emplace_back();
+      st.currency.emplace_back();
+      for (std::vector<double>& values : st.items) {
+        values.push_back(std::numeric_limits<double>::quiet_NaN());
+      }
+    }
+    series.line[i] = restore.line[r];
+    if (has_close && restore.close.size() == restore.size()) {
+      series.close[i] = restore.close[r];
+    }
+    st.fiscal_year[i] = rs.fiscal_year[r];
+    st.fiscal_period[i] = rs.fiscal_period[r];
+    st.known_from[i] = rs.known_from[r];
+    st.known_to[i] = rs.known_to[r];
+    st.knowledge_source[i] = rs.knowledge_source[r];
+    st.filing_date[i] = rs.filing_date[r];
+    st.loaded_on[i] = rs.loaded_on[r];
+    st.currency[i] = rs.currency[r];
+    for (std::size_t k = 0; k < rs.item_names.size(); ++k) {
+      st.items[column[k]][i] = rs.items[k][r];
+    }
+  }
+  sort_by_date(series);
+}
+
+}  // namespace
+
 void Restorer::apply(Series& series) const {
-  // --restore holds bars; a statements series is not restored from them.
   if (series.kind == SeriesKind::kStatements) {
-    return;
+    auto it = rows_.find(series.id);
+    if (it == rows_.end() && !series.label.empty()) {
+      it = rows_.find(series.label);
+    }
+    if (it != rows_.end() && it->second.kind == SeriesKind::kStatements) {
+      restore_statements(series, it->second);
+    }
+    return;  // a label's `remove` dates are bars' dates
   }
   const auto find = [&series](const auto& map) {
     auto it = map.find(series.id);
@@ -297,7 +381,10 @@ void Restorer::apply(Series& series) const {
   };
   const auto restore_it = find(rows_);
   const auto removed_it = find(removed_);
-  const Series* restore = restore_it != rows_.end() ? &restore_it->second : nullptr;
+  const Series* restore =
+      restore_it != rows_.end() && restore_it->second.kind != SeriesKind::kStatements
+          ? &restore_it->second
+          : nullptr;
   const std::vector<Date>* removed = removed_it != removed_.end() ? &removed_it->second : nullptr;
   if (restore == nullptr && removed == nullptr) {
     return;

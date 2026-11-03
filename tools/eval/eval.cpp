@@ -495,12 +495,20 @@ bool expects(const Label& l, const std::string& code) {
   }
   return false;
 }
-
 // The checks whose p_error is a probability (not a deterministic 1 or 0).
+// The checks whose p_error is a model's posterior: their reports are the
+// calibration points. Statements' (DR-0911): the
+// value model (DQ911 to DQ915, DQ919), the identity model (DQ903), the share
+// models (DQ921, DQ922), the filing-date and restatement models (DQ931, DQ932)
+// and the feed model (DQ942).
 bool bayesian(const std::string& code) {
+  static constexpr std::array<std::string_view, 12> kStatements = {
+      "DQ903", "DQ911", "DQ912", "DQ913", "DQ914", "DQ915",
+      "DQ919", "DQ921", "DQ922", "DQ931", "DQ932", "DQ942"};
   return code.starts_with("DQ2") || code == "DQ301" || code == "DQ302" || code == "DQ303" ||
          code == "DQ304" || code.starts_with("DQ40") || code == "DQ501" ||
-         (code.starts_with("DQ70") && code != "DQ705");
+         (code.starts_with("DQ70") && code != "DQ705") ||
+         std::find(kStatements.begin(), kStatements.end(), code) != kStatements.end();
 }
 
 double ratio(double a, double b) { return b == 0.0 ? 1.0 : a / b; }

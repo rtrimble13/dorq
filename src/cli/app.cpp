@@ -19,6 +19,7 @@
 
 #include "calibrate/calibrate.hpp"
 #include "calibrate/labels.hpp"
+#include "calibrate/statements.hpp"
 #include "checks/check.hpp"
 #include "config/config.hpp"
 #include "context/context.hpp"
@@ -503,15 +504,26 @@ int run_calibrate(const CalibrateCommand& command, CLI::App& cmd, Io& io) {
            << " row(s) of the context files could not be used and were skipped; "
               "dorq check --select DQ109 lists them\n";
   }
+  validate_statement_items(config, context, options.items);
   const std::vector<Label> labels = load_labels(options.labels, io.cwd);
   const Restorer restorer = load_restorer(options, labels, io.cwd);
+  std::optional<Date> as_of;
+  if (!options.as_of.empty()) {
+    as_of = parse_date(options.as_of);
+    if (!as_of) {
+      throw UsageError("--as-of: \"" + options.as_of + "\" is not a date (YYYY-MM-DD)");
+    }
+  }
 
   std::vector<Series> series;
   SeriesAssembler assembler(Grouping::kBuffer, [&](Series&& s) {
     restorer.apply(s);
     series.push_back(std::move(s));
   });
-  const ReadOptions read_options{config.input_format, config.kind, config.columns, std::nullopt};
+  ReadOptions read_options{config.input_format, config.kind, config.columns, std::nullopt};
+  if (context.have_items) {
+    read_options.items = context.item_names();
+  }
   if (options.files.empty()) {
     if (io.stdin_is_tty) {
       throw UsageError("no input: name the data files, or pipe them to stdin");
@@ -537,12 +549,34 @@ int run_calibrate(const CalibrateCommand& command, CLI::App& cmd, Io& io) {
   calibrate_options.threads = config.threads > 0 ? static_cast<unsigned>(config.threads) : hardware;
   calibrate_options.version =
       command.name.empty() ? fs::path(options.labels).stem().string() : command.name;
-  const CalibrationReport report =
-      calibrate(series, labels, config, calendar, context, calibrate_options);
-  const std::string toml = priors_toml(report);
+  // A statements input fits the statement models (DR-0911); the rest, the price
+  // model. One input holds one kind.
+  const bool statements = std::any_of(series.begin(), series.end(), [](const Series& s) {
+    return s.kind == SeriesKind::kStatements;
+  });
+  std::string toml;
+  std::string summary;
+  if (statements) {
+    StatementCalibrateOptions statement_options;
+    statement_options.clean_unlabelled = command.clean_unlabelled;
+    statement_options.isotonic = !command.no_isotonic;
+    statement_options.holdout = command.holdout;
+    statement_options.threads = calibrate_options.threads;
+    statement_options.as_of = as_of;
+    statement_options.version = calibrate_options.version;
+    const StatementCalibrationReport report =
+        calibrate_statements(series, labels, config, calendar, context, statement_options);
+    toml = statements_toml(report);
+    summary = statements_summary(report);
+  } else {
+    const CalibrationReport report =
+        calibrate(series, labels, config, calendar, context, calibrate_options);
+    toml = priors_toml(report);
+    summary = calibration_summary(report);
+  }
   if (command.out.empty()) {
     io.out << toml;
-    io.err << calibration_summary(report);
+    io.err << summary;
   } else {
     fs::path path(command.out);
     if (path.is_relative()) {
@@ -553,7 +587,7 @@ int run_calibrate(const CalibrateCommand& command, CLI::App& cmd, Io& io) {
       throw UsageError(command.out + ": cannot write the file");
     }
     file << toml;
-    io.out << calibration_summary(report) << "wrote " << command.out << "\n";
+    io.out << summary << "wrote " << command.out << "\n";
   }
   return to_int(ExitCode::kOk);
 }
@@ -747,7 +781,10 @@ int run(std::span<const char* const> args, Io& io) {
   calibrate_cmd->add_option("--config", co.config, "Config file to use");
   calibrate_cmd->add_flag("--isolated", co.isolated, "Ignore all config files");
   calibrate_cmd->add_option("--kind", co.kind, "Series kind")
-      ->check(CLI::IsMember({"auto", "ohlcv", "point"}));
+      ->check(CLI::IsMember({"auto", "ohlcv", "point", "statements"}));
+  calibrate_cmd->add_option("--items", co.items,
+                            "Statements' line items (as for check; doc/statements.md)");
+  calibrate_cmd->add_option("--as-of", co.as_of, "Statements: the as-of date (as for check)");
   calibrate_cmd->add_option("--input-format", co.input_format, "Input format")
       ->check(CLI::IsMember({"auto", "csv", "tsv", "jsonl", "json"}));
   calibrate_cmd->add_option("--columns", co.columns, "Column names, e.g. date=trade_date");

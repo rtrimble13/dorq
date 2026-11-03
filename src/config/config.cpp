@@ -563,9 +563,57 @@ void read_statement_priors(const toml::table& table, const std::string& where,
           read_double(node, where, path, 1e-4, 5.0);
     } else if (key == "prior_weight") {
       priors.prior_weight = read_double(node, where, path, 0.0, 1000.0);
+    } else if (key == "identity_structural" || key == "identity_reclassification" ||
+               key == "identity_field_error" || key == "identity_unexplained") {
+      // Relative weights: only their ratios matter.
+      const double w = read_double(node, where, path, 1e-6, 1.0);
+      if (key == "identity_structural") {
+        priors.identity_structural = w;
+      } else if (key == "identity_reclassification") {
+        priors.identity_reclassification = w;
+      } else if (key == "identity_field_error") {
+        priors.identity_field_error = w;
+      } else {
+        priors.identity_unexplained = w;
+      }
+    } else if (key == "filing_late" || key == "filing_early" || key == "filing_amendment") {
+      const double w = read_double(node, where, path, 1e-6, 0.5);
+      if (key == "filing_late") {
+        priors.filing_late = w;
+      } else if (key == "filing_early") {
+        priors.filing_early = w;
+      } else {
+        priors.filing_amendment = w;
+      }
+      if (priors.filing_late + priors.filing_early + priors.filing_amendment >= 0.95) {
+        fail(where, node,
+             "\"statements.priors\": filing_late, filing_early and filing_amendment must "
+             "sum to less than 0.95, leaving an ordinary filing the rest");
+      }
     } else {
       fail(where, node, "unknown key \"" + path + "\"");
     }
+  }
+}
+
+// [statements.calibration]: `version`, and a p_error map per sub-family (dq90 to
+// dq94), as `dorq calibrate` writes them.
+void read_statement_calibration(const toml::table& table, const std::string& where,
+                                StatementCalibration& calibration) {
+  for (const auto& [key_node, node] : table) {
+    const std::string_view key = key_node.str();
+    const std::string path = key_path("statements.calibration", key);
+    if (key == "version") {
+      calibration.version = read_string(node, where, path);
+      continue;
+    }
+    if (key.size() == 4 && key.starts_with("dq9") && key[3] >= '0' &&
+        key[3] < static_cast<char>('0' + StatementCalibration::kFamilies)) {
+      calibration.maps.at(static_cast<std::size_t>(key[3] - '0')) =
+          read_p_error_map(node, where, path);
+      continue;
+    }
+    fail(where, node, "unknown key \"" + path + "\" (version, or dq90 to dq94)");
   }
 }
 
@@ -653,6 +701,8 @@ void read_statements(const toml::table& table, const std::string& where, Config&
       settings.copy_min_items = read_int(node, where, path, 2, 1000);
     } else if (key == "priors") {
       read_statement_priors(read_table(node, where, path), where, settings.priors);
+    } else if (key == "calibration") {
+      read_statement_calibration(read_table(node, where, path), where, settings.calibration);
     } else {
       fail(where, node, "unknown key \"" + path + "\"");
     }
@@ -1072,6 +1122,27 @@ void append_statements(std::string& out, const StatementSettings& settings, bool
     out += "\nflow_scale = " + format_number(p.flow_scale);
     out += "\nstock_scale = " + format_number(p.stock_scale);
     out += "\nprior_weight = " + format_number(p.prior_weight);
+    out += "\nidentity_structural = " + format_number(p.identity_structural);
+    out += "\nidentity_reclassification = " + format_number(p.identity_reclassification);
+    out += "\nidentity_field_error = " + format_number(p.identity_field_error);
+    out += "\nidentity_unexplained = " + format_number(p.identity_unexplained);
+    out += "\nfiling_late = " + format_number(p.filing_late);
+    out += "\nfiling_early = " + format_number(p.filing_early);
+    out += "\nfiling_amendment = " + format_number(p.filing_amendment);
+    out += "\n";
+  }
+  if (all_sections || !settings.calibration.empty()) {
+    const StatementCalibration& c = settings.calibration;
+    out += "\n[statements.calibration]\nversion = ";
+    append_toml_string(out, c.version);
+    for (std::size_t f = 0; f < StatementCalibration::kFamilies; ++f) {
+      out += "\ndq9" + std::to_string(f) + " = [";
+      for (std::size_t i = 0; i < c.maps.at(f).size(); ++i) {
+        const auto& [x, y] = c.maps.at(f)[i];
+        out += (i == 0 ? "[" : ", [") + format_number(x) + ", " + format_number(y) + "]";
+      }
+      out += "]";
+    }
     out += "\n";
   }
 }
@@ -1433,6 +1504,44 @@ std::optional<Severity> SeverityThresholds::for_probability(double p) const noex
     return Severity::kInfo;
   }
   return std::nullopt;
+}
+
+std::optional<std::size_t> StatementCalibration::family(std::string_view code) noexcept {
+  if (code.size() != 5 || !code.starts_with("DQ9")) {
+    return std::nullopt;
+  }
+  const char tens = code[3];
+  if (tens < '0' || tens >= static_cast<char>('0' + kFamilies)) {
+    return std::nullopt;
+  }
+  return static_cast<std::size_t>(tens - '0');
+}
+
+double StatementCalibration::apply(std::string_view code, double p) const noexcept {
+  const std::optional<std::size_t> f = family(code);
+  if (!f) {
+    return p;
+  }
+  const std::vector<std::pair<double, double>>& map = maps.at(*f);
+  if (map.empty()) {
+    return p;
+  }
+  if (p <= map.front().first) {
+    return map.front().second;
+  }
+  for (std::size_t i = 1; i < map.size(); ++i) {
+    const auto& [x0, y0] = map[i - 1];
+    const auto& [x1, y1] = map[i];
+    if (p <= x1) {
+      return y0 + (y1 - y0) * (p - x0) / (x1 - x0);
+    }
+  }
+  return map.back().second;
+}
+
+bool StatementCalibration::empty() const noexcept {
+  return version.empty() &&
+         std::all_of(maps.begin(), maps.end(), [](const auto& m) { return m.empty(); });
 }
 
 bool Profile::matches(const Series& series, const SeriesMeta* meta) const {

@@ -38,6 +38,7 @@ add_library(
   cli/app.cpp
   calibrate/calibrate.cpp
   calibrate/labels.cpp
+  calibrate/statements.cpp
   config/config.cpp
   context/context.cpp
   core/build_info.cpp

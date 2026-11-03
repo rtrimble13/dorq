@@ -79,9 +79,8 @@ constexpr double kFloorPenalty = 2.0;  // nats a day below kMinLag cost an ordin
 constexpr double kLagFloorSd = 3.0;    // days: the least spread of an issuer's own lags
 constexpr double kLateWindow = 180.0;  // a late filing lags its usual by up to this
 constexpr double kAmendmentWindow = 400.0;
-constexpr double kLatePrior = 0.01;
-constexpr double kEarlyPrior = 0.002;
-constexpr double kAmendmentPrior = 0.002;
+// The priors of a late filing, one recorded too early and an amendment's date are
+// [statements.priors]' filing_* (0.01, 0.002 and 0.002), which `dorq calibrate` fits.
 constexpr std::size_t kOwnLags = 12;  // the issuer's nearest filings of a form, each side
 constexpr std::size_t kMinOwnLags = 4;
 
@@ -801,15 +800,16 @@ void FilingDateImplausible::run(const SeriesContext& context, std::vector<Violat
     }
     const UsualLag usual = usual_lag(filings, k);
     std::array<double, 4> log = lag_log_likelihoods(f.lag, usual);
-    const std::array<double, 4> priors{1.0 - kLatePrior - kEarlyPrior - kAmendmentPrior, kLatePrior,
-                                       kEarlyPrior, kAmendmentPrior};
+    const StatementPriors& sp = context.statement_settings->priors;
+    const std::array<double, 4> priors{1.0 - sp.filing_late - sp.filing_early - sp.filing_amendment,
+                                       sp.filing_late, sp.filing_early, sp.filing_amendment};
     const std::array<double, 4> after =
         successor_log_likelihoods(next != nullptr && f.known > next->known);
     for (std::size_t h = 0; h < 4; ++h) {
       log.at(h) += std::log(priors.at(h)) + (next != nullptr ? after.at(h) : 0.0);
     }
     const std::array<double, 4> p = softmax(log);
-    const double p_error = p[2] + p[3];
+    const double p_error = context.statement_settings->calibration.apply(info().code, p[2] + p[3]);
     std::optional<Severity> severity = context.thresholds.for_probability(p_error);
     if (severity && p[3] > p[2] && *severity == Severity::kError) {
       severity = Severity::kWarn;  // an amendment's date makes a backtest late, not early
@@ -822,6 +822,7 @@ void FilingDateImplausible::run(const SeriesContext& context, std::vector<Violat
     }
     Violation v = filing_violation(info(), context, f, usual, next, p);
     v.severity = *severity;
+    v.p_error = p_error;
     out.push_back(std::move(v));
   }
 }
@@ -878,11 +879,15 @@ void RestatementImplausible::run(const SeriesContext& context, std::vector<Viola
       const std::optional<Fit> fit = fit_of(s, *first, *in_force, a, b, rev.changed);
       const std::array<double, 3> p =
           revision_posterior(rev, fit, magnitude_of(s, *in_force, a, b, rev));
-      const std::optional<Severity> severity = context.thresholds.for_probability(p[1] + p[2]);
+      const double p_error =
+          context.statement_settings->calibration.apply(info().code, p[1] + p[2]);
+      const std::optional<Severity> severity = context.thresholds.for_probability(p_error);
       if (!severity) {
         continue;
       }
-      out.push_back(revision_violation(info(), context, a, b, rev, fit, p, *severity));
+      Violation v = revision_violation(info(), context, a, b, rev, fit, p, *severity);
+      v.p_error = p_error;
+      out.push_back(std::move(v));
     }
   }
 }
