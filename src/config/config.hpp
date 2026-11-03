@@ -291,8 +291,9 @@ struct ItemBound {
 // Parses "a <= b". Returns an error message, or empty.
 [[nodiscard]] std::string parse_item_bound(std::string_view text, ItemBound& out);
 
-// [statements.priors]: the statement value model's defaults (DQ911 to DQ919;
-// doc/statements.md), which `dorq calibrate` fits (DR-0911).
+// [statements.priors]: the statement models' priors, which `dorq calibrate` fits
+// (DR-0911; doc/calibration.md): the value model's (DQ911 to DQ919), the identity
+// model's (DQ903) and the filing-date model's (DQ931).
 struct StatementPriors {
   // The prior probability that any one value is wrong in each way. A real change as
   // large as an error is as likely as the item's own history says: as often as its
@@ -305,8 +306,41 @@ struct StatementPriors {
   double flow_scale = 0.08;
   double stock_scale = 0.05;
   double prior_weight = 6.0;  // in periods, against the item's own residuals
+  // DQ903: the prior weights of a gap's four explanations, relative to each other
+  // (exp of the log weights the model shipped with: -1.4, -3, -1.05, -1.05).
+  double identity_structural = 0.2465969639416065;
+  double identity_reclassification = 0.049787068367863944;
+  double identity_field_error = 0.3499377491111553;
+  double identity_unexplained = 0.3499377491111553;
+  // DQ931: the prior probability that a filing is late, recorded too early (the
+  // period's end), or an amendment's date. An ordinary filing has the rest.
+  double filing_late = 0.01;
+  double filing_early = 0.002;
+  double filing_amendment = 0.002;
 
   bool operator==(const StatementPriors&) const = default;
+};
+
+// [statements.calibration]: monotone maps from a statement check's p_error to the
+// rate at which labelled findings were errors, one per sub-family (DQ90x to DQ94x),
+// from `dorq calibrate` (DR-0911). An empty map leaves p_error as the model gives it.
+struct StatementCalibration {
+  static constexpr std::size_t kFamilies = 5;  // DQ90x, DQ91x, DQ92x, DQ93x, DQ94x
+  std::string version;
+  std::array<std::vector<std::pair<double, double>>, kFamilies> maps;
+
+  // The sub-family of a statement code (DQ903 -> 0), or nullopt for another code.
+  [[nodiscard]] static std::optional<std::size_t> family(std::string_view code) noexcept;
+  // Whether a code's p_error goes through its map: a model's or a scored rule's
+  // (DQ903, DQ904, DQ911 to DQ916, DQ919, DQ921, DQ922, DQ931, DQ932, DQ942), not a
+  // rule's fixed one (DQ901, DQ902, DQ941, DQ943, DQ944) nor DQ95x's.
+  [[nodiscard]] static bool mapped(std::string_view code) noexcept;
+  // p_error through its sub-family's map, for a mapped code.
+  [[nodiscard]] double apply(std::string_view code, double p) const noexcept;
+  // p through sub-family f's map (DQ90x is 0).
+  [[nodiscard]] double apply_family(std::size_t f, double p) const noexcept;
+  [[nodiscard]] bool empty() const noexcept;
+  bool operator==(const StatementCalibration&) const = default;
 };
 
 // [statements]: the judgements the statement checks make (doc/statements.md). What
@@ -338,6 +372,10 @@ struct StatementSettings {
   Date restricted_cash_from = Date::from_ymd(2018, 1, 1);
   double restricted_cash_share = 0.10;
   StatementPriors priors;
+  StatementCalibration calibration;
+  // Set by `dorq calibrate` alone, never by a file: report every candidate the
+  // value model judges, a real change too, so that the fit sees the innocent ones.
+  bool report_all = false;
 
   // Each line item the settings name, with where: ("identities.balance_sheet",
   // "total_assets"), for checking them against --items.

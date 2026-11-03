@@ -4,8 +4,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -457,10 +460,102 @@ prior_weight = 8
   for (const char* bad :
        {"[statements.priors]\nbad_value = 0.6\n",
         "[statements.priors]\nbad_value = 0.4\nunit_error = 0.4\nsign_error = 0.2\n",
-        "[statements.priors]\nflow_scale = 0\n", "[statements.priors]\nreal_change = 0.5\n"}) {
+        "[statements.priors]\nflow_scale = 0\n", "[statements.priors]\nreal_change = 0.5\n",
+        "[statements.priors]\nidentity_structural = 0\n",
+        "[statements.priors]\nidentity_unexplained = 2\n",
+        "[statements.priors]\nfiling_late = 0.6\n",
+        "[statements.priors]\nfiling_late = 0.5\nfiling_early = 0.3\nfiling_amendment = 0.2\n",
+        "[statements.calibration]\ndq95 = [[0.1, 0.2]]\n",
+        "[statements.calibration]\ndq91 = [[0.5, 0.4], [0.2, 0.6]]\n",
+        "[statements.calibration]\ndq91 = [[0.2, 0.6], [0.5, 0.4]]\n",
+        "[statements.calibration]\nversion = 3\n"}) {
     CAPTURE(bad);
     CHECK_THROWS_AS((void)dorq::parse_config(bad, "bad.toml", false), dorq::ConfigError);
   }
+}
+
+TEST_CASE("statements: the identity and filing priors and [statements.calibration] (DR-0911)") {
+  // The defaults are the weights the checks shipped with, so a config without the
+  // new keys judges as before.
+  const dorq::StatementPriors defaults;
+  CHECK(std::log(defaults.identity_structural) == doctest::Approx(-1.4));
+  CHECK(std::log(defaults.identity_reclassification) == doctest::Approx(-3.0));
+  CHECK(std::log(defaults.identity_field_error) == doctest::Approx(-1.05));
+  CHECK(std::log(defaults.identity_unexplained) == doctest::Approx(-1.05));
+  CHECK(defaults.filing_late == doctest::Approx(0.01));
+  CHECK(defaults.filing_early == doctest::Approx(0.002));
+  CHECK(defaults.filing_amendment == doctest::Approx(0.002));
+  CHECK(dorq::StatementSettings{}.calibration.empty());
+
+  const dorq::Config config = dorq::parse_config(R"(
+[statements.priors]
+identity_structural = 0.5
+identity_reclassification = 0.01
+identity_field_error = 1
+identity_unexplained = 0.2
+filing_late = 0.02
+filing_early = 0.001
+filing_amendment = 0.003
+
+[statements.calibration]
+version = "fafnir 2026-11"
+dq90 = [[0.01, 0.0], [0.9, 1.0]]
+dq93 = [[0.1, 0.05], [0.5, 0.25], [0.9, 0.95]]
+)",
+                                                 "s.toml", false);
+  const dorq::StatementPriors& p = config.statements.priors;
+  CHECK(p.identity_structural == doctest::Approx(0.5));
+  CHECK(p.identity_field_error == doctest::Approx(1.0));
+  CHECK(p.filing_late == doctest::Approx(0.02));
+  CHECK(p.filing_amendment == doctest::Approx(0.003));
+  const dorq::StatementCalibration& c = config.statements.calibration;
+  CHECK(c.version == "fafnir 2026-11");
+  CHECK(c.maps.at(0).size() == 2);
+  CHECK(c.maps.at(1).empty());
+  CHECK(c.maps.at(3).size() == 3);
+  CHECK_FALSE(c.empty());
+  // The map is its sub-family's: linear between knots, flat beyond them.
+  CHECK(c.apply("DQ931", 0.0) == doctest::Approx(0.05));
+  CHECK(c.apply("DQ932", 0.3) == doctest::Approx(0.15));
+  CHECK(c.apply("DQ931", 0.7) == doctest::Approx(0.6));
+  CHECK(c.apply("DQ931", 1.0) == doctest::Approx(0.95));
+  CHECK(c.apply("DQ903", 0.005) == doctest::Approx(0.0));
+  CHECK(c.apply("DQ904", 0.455) == doctest::Approx(0.5));
+  CHECK(c.apply("DQ912", 0.37) == 0.37);  // DQ91x has no map
+  CHECK(c.apply("DQ901", 0.5) == 0.5);    // a rule's p_error, not a model's
+  CHECK(c.apply("DQ944", 0.5) == 0.5);
+  CHECK(c.apply("DQ951", 0.37) == 0.37);  // DQ95x is not mapped
+  CHECK(c.apply("DQ201", 0.37) == 0.37);  // nor is a bars check
+  CHECK(dorq::StatementCalibration::family("DQ903") == std::optional<std::size_t>{0});
+  CHECK(dorq::StatementCalibration::family("DQ944") == std::optional<std::size_t>{4});
+  CHECK_FALSE(dorq::StatementCalibration::family("DQ951").has_value());
+  CHECK_FALSE(dorq::StatementCalibration::family("DQ90").has_value());
+  CHECK_FALSE(dorq::StatementCalibration::family("DQ203").has_value());
+  for (const char* code :
+       {"DQ903", "DQ904", "DQ911", "DQ916", "DQ919", "DQ921", "DQ922", "DQ931", "DQ932", "DQ942"}) {
+    CAPTURE(code);
+    CHECK(dorq::StatementCalibration::mapped(code));
+  }
+  for (const char* code : {"DQ901", "DQ902", "DQ941", "DQ943", "DQ944", "DQ951", "DQ201"}) {
+    CAPTURE(code);
+    CHECK_FALSE(dorq::StatementCalibration::mapped(code));
+  }
+
+  // Both round-trip through config show, and change the hash.
+  const dorq::Config again = dorq::parse_config(dorq::to_toml(config), "again.toml", false);
+  CHECK(again.statements == config.statements);
+  CHECK(dorq::config_hash(again) == dorq::config_hash(config));
+  CHECK(dorq::config_hash(config) != dorq::config_hash(dorq::Config{}));
+  dorq::Config mapped_only;
+  mapped_only.statements.calibration = c;
+  CHECK(dorq::config_hash(mapped_only) != dorq::config_hash(dorq::Config{}));
+  // A table that sets only the value model's keys hashes as it did before them.
+  const dorq::Config values_only =
+      dorq::parse_config("[statements.priors]\nbad_value = 0.002\n", "v.toml", false);
+  CHECK(dorq::config_hash(values_only) == "1d37e0c08c3bd549");  // dorq 0.13.0's
+  dorq::Config filings_only;
+  filings_only.statements.priors.filing_late = 0.02;
+  CHECK(dorq::config_hash(filings_only) != dorq::config_hash(dorq::Config{}));
 }
 
 TEST_CASE("DQ914, DQ915 and DQ916: a copied quarter, an absent zero, quarters to date") {
@@ -588,4 +683,187 @@ TEST_CASE("DQ916: a quarter holding its year, and a year with two years in force
   CHECK(contains(report(r.out, "DQ916", "AIQ"),
                  "the quarter holds FY2013's flows (3 of 3 equal the year's)"));
   CHECK(report(r.out, "DQ916", "TWO").empty());
+}
+
+// ---------------------------------------------------------------------------
+// DR-0911: statements as they stood (--restore), and dorq calibrate on statements
+
+namespace {
+
+// The rows of `csv` whose fiscal date is `date` (and statement, when given).
+std::string rows_at(const std::string& csv, const std::string& date,
+                    const std::string& statement = {}) {
+  std::string out;
+  for (const std::string& line : lines_with(csv, "," + date + ",")) {
+    if (statement.empty() || contains(line, "," + statement + ",")) {
+      out += line + "\n";
+    }
+  }
+  return out;
+}
+
+std::string read_text(const std::filesystem::path& path) {
+  const std::ifstream in(path, std::ios::binary);
+  std::ostringstream out;
+  out << in.rdbuf();
+  return out.str();
+}
+
+// `csv` without the rows of fiscal date `date`.
+std::string without(const std::string& csv, const std::string& date) {
+  std::string out;
+  std::istringstream in(csv);
+  for (std::string line; std::getline(in, line);) {
+    if (!contains(line, "," + date + ",")) {
+      out += line + "\n";
+    }
+  }
+  return out;
+}
+
+std::string statements_label(const std::string& series, const std::string& date,
+                             const std::string& statement, const std::string& item,
+                             const std::string& expect) {
+  return R"({"series":")" + series + R"(","date":")" + date +
+         R"(","class":"data_error","statement":")" + statement +
+         R"(","period_type":"quarter","version_no":1,)" +
+         (item.empty() ? std::string{} : R"("item":")" + item + "\",") + R"("expect":")" + expect +
+         "\"}\n";
+}
+
+}  // namespace
+
+TEST_CASE("--restore on statements: superseded rows by their key, and missing ones added") {
+  const TempDir dir;
+  // SF1 corrected 2012 Q3's revenue, first loaded in thousands where units were
+  // meant, and the series holds the corrected row. 2012 Q4 is missing from the
+  // series; the restore file holds it as it stood.
+  const std::string current = without(company("FIXED"), quarter_end(11));
+  const std::string first = company("FIXED", [](int q, const std::string& s, Values& v) {
+    if (q == 10 && s == "income") {
+      v[0] *= 1000.0;
+    }
+  });
+  const std::string restore = std::string{kHeader} + rows_at(first, quarter_end(10), "income") +
+                              rows_at(first, quarter_end(11));
+  write_file(dir.path() / "s.csv", std::string{kHeader} + current);
+  write_file(dir.path() / "items.csv", kItems);
+  write_file(dir.path() / "st.toml", kConfig);
+  write_file(dir.path() / "before.csv", restore);
+  write_file(dir.path() / "labels.jsonl",
+             statements_label("FIXED", quarter_end(10), "income", "revenue", "DQ912"));
+  const auto run = [&dir](bool restored) {
+    const std::string file = (dir.path() / "s.csv").string();
+    const std::string items = (dir.path() / "items.csv").string();
+    const std::string config = (dir.path() / "st.toml").string();
+    const std::string before = (dir.path() / "before.csv").string();
+    const std::string labels = (dir.path() / "labels.jsonl").string();
+    if (restored) {
+      return run_in(dir.path(), {"--config", config.c_str(), "--items", items.c_str(), "--select",
+                                 "DQ9", "--format", "jsonl", "--exit-zero", "--labels",
+                                 labels.c_str(), "--restore", before.c_str(), file.c_str()});
+    }
+    return run_in(dir.path(), {"--config", config.c_str(), "--items", items.c_str(), "--select",
+                               "DQ9", "--format", "jsonl", "--exit-zero", file.c_str()});
+  };
+  const Result plain = run(false);
+  INFO(plain.err);
+  REQUIRE(plain.status == 0);
+  CHECK(reports_of(plain.out, "DQ912").empty());
+  CHECK_FALSE(reports_of(plain.out, "DQ941").empty());  // 2012 Q4 is missing
+
+  const Result restored = run(true);
+  INFO(restored.err);
+  REQUIRE(restored.status == 0);
+  CHECK(reports_of(restored.out, "DQ912") ==
+        std::vector<std::string>{std::string{"FIXED "} + kIncomeQ +
+                                 R"("fiscal_date":"2012-09-30","version_no":1,"item":"revenue"})"});
+  CHECK(reports_of(restored.out, "DQ941").empty());  // added from the restore file
+}
+
+TEST_CASE("dorq calibrate on statements: the priors and maps, which dorq check reads") {
+  const TempDir dir;
+  std::string csv;
+  std::string labels;
+  // Units: revenue in thousands where units were meant, in four companies.
+  for (int c = 0; c < 4; ++c) {
+    const std::string id = "UNIT" + std::to_string(c);
+    const int at = 8 + 3 * c;
+    csv += company(id, [at](int q, const std::string& s, Values& v) {
+      if (q == at && s == "income") {
+        v[0] *= 1000.0;
+      }
+    });
+    labels += statements_label(id, quarter_end(at), "income", "revenue", "DQ912");
+  }
+  // Bad values: capital expenditure five times too large, in three.
+  for (int c = 0; c < 3; ++c) {
+    const std::string id = "BAD" + std::to_string(c);
+    const int at = 9 + 4 * c;
+    csv += company(id, [at](int q, const std::string& s, Values& v) {
+      if (q == at && s == "cash_flow") {
+        v[3] *= 5.0;
+      }
+    });
+    labels += statements_label(id, quarter_end(at), "cash_flow", "capital_expenditure", "DQ911");
+  }
+  // A dropped term: gross profit stored as revenue. The label names the period, not
+  // an item: DQ903 keys the term it suspects (cost_of_revenue).
+  csv += company("GAP", [](int q, const std::string& s, Values& v) {
+    if (q == 12 && s == "income") {
+      v[2] = v[0];
+    }
+  });
+  labels += statements_label("GAP", quarter_end(12), "income", "", "DQ903");
+  for (int c = 0; c < 6; ++c) {
+    csv += company("CLEAN" + std::to_string(c));
+  }
+  write_file(dir.path() / "s.csv", std::string{kHeader} + csv);
+  write_file(dir.path() / "items.csv", kItems);
+  write_file(dir.path() / "st.toml", kConfig);
+  write_file(dir.path() / "labels.jsonl", labels);
+  const std::string file = (dir.path() / "s.csv").string();
+  const std::string items = (dir.path() / "items.csv").string();
+  const std::string config = (dir.path() / "st.toml").string();
+  const std::string labels_file = (dir.path() / "labels.jsonl").string();
+  const auto fit = [&](const char* out, const char* threads) {
+    return run_in(dir.path(),
+                  {"calibrate", file.c_str(), "--labels", labels_file.c_str(), "--items",
+                   items.c_str(), "--config", config.c_str(), "--clean-unlabelled", "--threads",
+                   threads, "--name", "synthetic", "--out", out});
+  };
+  const Result first = fit("fit.toml", "2");
+  INFO(first.err);
+  REQUIRE(first.status == 0);
+  CHECK(contains(first.out, "labels: 8 (8 about statements, 8 matched)"));
+  CHECK(contains(first.out, "values: 7 observations (7 errors)"));
+  CHECK(contains(first.out, "identities: 1 observations (1 errors)"));
+  CHECK(contains(first.out, "filings: 0 observations"));
+  const std::string toml = read_text(dir.path() / "fit.toml");
+  CHECK(contains(toml, "[statements.priors]"));
+  CHECK(contains(toml, "unit_error = "));
+  CHECK(contains(toml, "identity_field_error = "));
+  CHECK(contains(toml, "filing_early = "));
+  CHECK(contains(toml, "[statements.calibration]"));
+  CHECK(contains(toml, "version = \"synthetic\""));
+  CHECK(contains(toml, "dq91 = "));
+  // Deterministic: one thread writes the same file.
+  const Result again = fit("again.toml", "1");
+  REQUIRE(again.status == 0);
+  CHECK(read_text(dir.path() / "again.toml") == toml);
+
+  // dorq check reads it, and still finds the faults.
+  write_file(dir.path() / "fitted.toml", "include = \"fit.toml\"\n" + std::string{kConfig});
+  const std::string fitted = (dir.path() / "fitted.toml").string();
+  const Result checked =
+      run_in(dir.path(), {"--config", fitted.c_str(), "--items", items.c_str(), "--select", "DQ9",
+                          "--format", "jsonl", "--exit-zero", file.c_str()});
+  INFO(checked.err);
+  REQUIRE(checked.status == 0);
+  CHECK(reports_of(checked.out, "DQ912").size() == 4);
+  CHECK(reports_of(checked.out, "DQ911").size() == 3);
+  CHECK_FALSE(reports_of(checked.out, "DQ903").empty());
+  const Result shown = run_in(dir.path(), {"config", "show", "--config", fitted.c_str()});
+  CHECK(contains(shown.out, "[statements.calibration]"));
+  CHECK(contains(shown.out, "version = \"synthetic\""));
 }

@@ -2,8 +2,8 @@
 
 A label records what a person decided about a stretch of one series. Was the value
 wrong, and repaired? Was it right but missing context, such as a split that had
-to be added? Or was it anomalous but true? `dorq calibrate` fits the price model
-to labels ([calibration.md](calibration.md)). [dorq-eval](../tools/eval/README.md)
+to be added? Or was it anomalous but true? `dorq calibrate` fits the price model,
+and the statement models, to labels ([calibration.md](calibration.md)). [dorq-eval](../tools/eval/README.md)
 scores dorq's output against them. In fafnir, labels come from
 `ops.operator_override`: every repair is a decision (plan section 6).
 
@@ -45,8 +45,10 @@ A statements label names what a finding on statements names
 ([output.md](output.md)): its statement, period type, version and item, as far as
 the fault has them. dorq-eval and `dorq-synth score` match it as they match a bars
 label, and also by these fields. A finding with no version (one on a whole period)
-or no item (an identity's) matches the label of each. `dorq calibrate` does not use
-these labels: they are not about price moves, even on a security that also has bars.
+or no item (an identity's) matches the label of each. `dorq calibrate` on bars does
+not use these labels: they are not about price moves, even on a security that also
+has bars. On statements it uses only these
+([calibration.md](calibration.md#statements)).
 
 ```json
 {"series":"752016","date":"2024-06-30","class":"data_error","expect":"DQ912","kind":"unit_value","statement":"income","period_type":"quarter","version_no":1,"item":"revenue"}
@@ -109,6 +111,18 @@ and the label's evidence is gone. `--restore F` rebuilds each series as it stood
   row for that series and date, or is added when the input has no such row.
 - With `--labels`, the labels' `remove` dates are dropped from their series.
 - The rows are then sorted by date, keeping input order among equal dates.
+
+On a statements input, `F` is a statements file with a series column, such as
+fafnir's `dq export-labels --restore-statements` (since 0.14.0):
+
+- Each of its rows replaces the input's row with the same series, statement,
+  period type, fiscal date and version, or is added when there is none. A vendor
+  correction keeps the version, so the row first loaded takes the corrected one's
+  place.
+- An item the file has and the input lacks is added, empty on the input's other
+  rows. An item the input has and the file lacks keeps the input's value.
+- A label's `remove` dates are bars' dates, and a statements series keeps every
+  row. A bars restore leaves a statements series alone, and the other way round.
 
 ```bash
 # before.csv: each repaired row with the values it had before the repair

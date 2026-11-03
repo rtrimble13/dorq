@@ -415,7 +415,8 @@ void StatementsStale::run(const SeriesContext& context, std::vector<Violation>& 
   const auto upper = [](double z) { return 0.5 * std::erfc(z / std::numbers::sqrt2); };
   const double tail = 0.9 * upper(overdue / lag.sd) + 0.1 * upper(overdue / (4.0 * lag.sd));
   constexpr double kStalePrior = 0.02;
-  const double p = kStalePrior / (kStalePrior + (1.0 - kStalePrior) * tail);
+  const double p = context.statement_config().calibration.apply(
+      info().code, kStalePrior / (kStalePrior + (1.0 - kStalePrior) * tail));
   const std::optional<Severity> severity = context.thresholds.for_probability(p);
   if (!severity) {
     return;

@@ -35,7 +35,8 @@ namespace {
 enum class Gap : std::uint8_t { kStructural, kReclassification, kFieldError, kUnexplained };
 constexpr std::array<std::string_view, 4> kGapNames{"structural", "reclassification", "field_error",
                                                     "unexplained"};
-constexpr std::array<double, 4> kPrior{-1.4, -3.0, -1.05, -1.05};
+// The prior weights are [statements.priors]' identity_* (their defaults exp(-1.4),
+// exp(-3), exp(-1.05) and exp(-1.05)), which `dorq calibrate` fits.
 constexpr double kPersistent = 4.0;      // the gap is the neighbouring periods' gap
 constexpr double kNotPersistent = -2.0;  // ... it is not
 // The identity fails in every neighbouring period too, by another amount: "a gap in
@@ -345,8 +346,11 @@ GapEvidence gather(const Series& s, const Terms& terms, const std::vector<Judged
   return e;
 }
 
-std::array<double, 4> posterior(const GapEvidence& e) {
-  std::array<double, 4> score = kPrior;
+std::array<double, 4> posterior(const GapEvidence& e, const StatementPriors& priors) {
+  // The configured prior weights ([statements.priors] identity_*), on the log scale.
+  std::array<double, 4> score{
+      std::log(priors.identity_structural), std::log(priors.identity_reclassification),
+      std::log(priors.identity_field_error), std::log(priors.identity_unexplained)};
   const auto at = [&score](Gap g) -> double& { return score.at(static_cast<std::size_t>(g)); };
   at(Gap::kStructural) += e.persistent ? kPersistent : kNotPersistent;
   if (e.neighbours_break) {
@@ -381,10 +385,11 @@ std::array<double, 4> posterior(const GapEvidence& e) {
 Violation report_gap(const CheckInfo& info, const SeriesContext& context, const Terms& terms,
                      const Judged& j, const GapEvidence& e, std::size_t i) {
   const Series& s = context.series;
-  const std::array<double, 4> p = posterior(e);
+  const std::array<double, 4> p = posterior(e, context.statement_config().priors);
   const auto best = static_cast<Gap>(std::max_element(p.begin(), p.end()) - p.begin());
-  const double p_error = p.at(static_cast<std::size_t>(Gap::kFieldError)) +
-                         p.at(static_cast<std::size_t>(Gap::kUnexplained));
+  const double p_error = context.statement_config().calibration.apply(
+      info.code, p.at(static_cast<std::size_t>(Gap::kFieldError)) +
+                     p.at(static_cast<std::size_t>(Gap::kUnexplained)));
   const bool filing_fact = best == Gap::kStructural || best == Gap::kReclassification;
   Violation v = statement_finding(info, s, i, true);
   v.p_error = p_error;
@@ -547,8 +552,8 @@ Violation tie_finding(const CheckInfo& info, const SeriesContext& context, std::
                       double p_error) {
   const Series& s = context.series;
   Violation v = statement_finding(info, s, row, true);
-  v.p_error = p_error;
-  v.severity = context.thresholds.for_probability(p_error).value_or(Severity::kInfo);
+  v.p_error = context.statement_config().calibration.apply(info.code, p_error);
+  v.severity = context.thresholds.for_probability(v.p_error).value_or(Severity::kInfo);
   return v;
 }
 
