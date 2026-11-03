@@ -310,7 +310,15 @@ void restore_statements(Series& series, const Series& restore) {
     return std::make_tuple(s.date[r].days(), static_cast<int>(rows.statement[r]),
                            static_cast<int>(rows.period_type[r]), rows.version[r]);
   };
-  const bool has_close = series.close.size() == series.size();
+  // The per-row columns the series holds (the rest are empty): an added row
+  // extends each, so that every one keeps a value per row.
+  const std::size_t rows = series.size();
+  const bool has_close = series.close.size() == rows;
+  const bool has_decimals = series.close_decimals.size() == rows;
+  const bool has_sig_figs = series.close_sig_figs.size() == rows;
+  const bool has_volume = series.volume.size() == rows;
+  const bool has_vwap = series.vwap.size() == rows;
+  const bool restore_close = restore.close.size() == restore.size();
   for (std::size_t r = 0; r < restore.size(); ++r) {
     std::size_t i = series.size();
     for (std::size_t j = 0; j < series.size(); ++j) {
@@ -320,10 +328,23 @@ void restore_statements(Series& series, const Series& restore) {
       }
     }
     if (i == series.size()) {
+      constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
       series.date.push_back(restore.date[r]);
       series.line.push_back(restore.line[r]);
       if (has_close) {
-        series.close.push_back(std::numeric_limits<double>::quiet_NaN());
+        series.close.push_back(kNaN);
+      }
+      if (has_decimals) {
+        series.close_decimals.push_back(0);
+      }
+      if (has_sig_figs) {
+        series.close_sig_figs.push_back(0);
+      }
+      if (has_volume) {
+        series.volume.push_back(kNaN);
+      }
+      if (has_vwap) {
+        series.vwap.push_back(kNaN);
       }
       st.statement.push_back(rs.statement[r]);
       st.period_type.push_back(rs.period_type[r]);
@@ -337,12 +358,18 @@ void restore_statements(Series& series, const Series& restore) {
       st.loaded_on.emplace_back();
       st.currency.emplace_back();
       for (std::vector<double>& values : st.items) {
-        values.push_back(std::numeric_limits<double>::quiet_NaN());
+        values.push_back(kNaN);
       }
     }
     series.line[i] = restore.line[r];
-    if (has_close && restore.close.size() == restore.size()) {
+    if (has_close && restore_close) {
       series.close[i] = restore.close[r];
+      if (has_decimals && restore.close_decimals.size() == restore.size()) {
+        series.close_decimals[i] = restore.close_decimals[r];
+      }
+      if (has_sig_figs && restore.close_sig_figs.size() == restore.size()) {
+        series.close_sig_figs[i] = restore.close_sig_figs[r];
+      }
     }
     st.fiscal_year[i] = rs.fiscal_year[r];
     st.fiscal_period[i] = rs.fiscal_period[r];
