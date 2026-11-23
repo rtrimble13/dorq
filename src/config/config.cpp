@@ -530,7 +530,7 @@ void read_unverified(const toml::node& node, const std::string& where, const std
     }
   }
   fail(where, node,
-       "\"" + path + "\" must be \"exclude\", \"include\" or \"weight:<x>\" with x in (0, 1]");
+       R"(")" + path + R"(" must be "exclude", "include" or "weight:<x>" with x in (0, 1])");
 }
 
 void read_calibration(const toml::table& table, const std::string& where, Config& config) {
@@ -654,10 +654,14 @@ void read_statement_calibration(const toml::table& table, const std::string& whe
         calibration.codes[code] = read_p_error_map(node, where, path);
         continue;
       }
-      fail(where, node,
-           "\"" + path + "\": " + code +
-               " takes no map (a code's own map is for DQ902 to DQ904, "
-               "DQ911 to DQ916, DQ919, DQ921, DQ922, DQ931, DQ932, DQ941 and DQ942)");
+      std::string message = R"(")";
+      message += path;
+      message += R"(": )";
+      message += code;
+      message +=
+          " takes no map (a code's own map is for DQ902 to DQ904, "
+          "DQ911 to DQ916, DQ919, DQ921, DQ922, DQ931, DQ932, DQ941 and DQ942)";
+      fail(where, node, message);
     }
     fail(where, node,
          "unknown key \"" + path + "\" (version, dq90 to dq94, or a code's own, such as dq903)");

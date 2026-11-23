@@ -726,11 +726,12 @@ Observations observe(const std::vector<Candidate>& candidates, const LabelIndex&
     if (StatementCalibration::takes_code_map(c.code) && !j.other) {
       Point own_point = point;
       if (StatementCalibration::scored(c.code)) {
-        if (c.score) {
-          own_point.p = *c.score;
+        if (c.score.has_value()) {
+          const double score = c.score.value();
+          own_point.p = score;
           own_point.model = -1;
           own_point.before =
-              given.apply_score(c.code, *c.score).value_or(given.apply(c.code, c.p_error));
+              given.apply_score(c.code, score).value_or(given.apply(c.code, c.p_error));
           out.codes[c.code].push_back(own_point);
         }
       } else {
