@@ -5,6 +5,8 @@
   done (PR #7), M6 is done (PR #8), and M7's code is implemented and awaiting merge in both
   repositories; its labelling pass, calibration and shadow period are operational work to follow.
   M9 (fundamentals) is accepted: [dorq-fundamentals-plan.md](dorq-fundamentals-plan.md).
+  The efficacy plan (2026-11-23) sets the bar for replacing a caller's checks more strictly than
+  §8 and lists the work to meet it: [dorq-efficacy-plan.md](dorq-efficacy-plan.md).
 - Scope: this repository (the C++ CLI), plus one milestone of integration work in `rtrimble13/fafnir` (M7).
 - Status legend: ⬜ planned · 🔄 in progress · ✅ done (PR #) · ⏭ carried over · ✖ dropped (reason)
 
