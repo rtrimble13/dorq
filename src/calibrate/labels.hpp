@@ -60,6 +60,10 @@ struct Label {
   std::optional<PeriodType> period_type;
   std::optional<std::int32_t> version;
   std::string item;
+  // A label drawn in a sample (DE-01): its survey weight, 1 / the probability that
+  // the sample included it, and the sample's id. A label from no sample weighs 1.
+  double weight = 1.0;
+  std::string sample;
   std::uint32_t line = 0;  // in the labels file
 
   // Whether the label names a statement, period type, version or item: one about
@@ -79,8 +83,8 @@ struct Label {
 //    "expect":"DQ202","kind":"scale_era","source":"operator_override","note":"..."}
 // `date` stands for first and last; `last` defaults to `first`. `remove` is a
 // comma-separated list of dates. A statements label adds `statement`,
-// `period_type`, `version_no` and `item`. Blank lines are skipped. Throws InputError
-// naming the line.
+// `period_type`, `version_no` and `item`; a sampled one `weight` (at least 1) and
+// `sample`. Blank lines are skipped. Throws InputError naming the line.
 [[nodiscard]] std::vector<Label> read_labels(std::istream& in, const std::string& source);
 
 // Rebuilds series as they stood before repairs: each restore row replaces the

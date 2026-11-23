@@ -35,6 +35,8 @@ Labels are JSON Lines: one flat object per line. Blank lines are skipped.
 | `applies_until` | The label applies only to runs whose input predates this time. A repair's label describes data the repair replaced: after it, dorq's reports on the corrected bars are not about that fault. dorq-eval's `--input-time` drops the labels whose time has passed |
 | `verified` | `true` when a person checked the label bar by bar; `false` for a bulk acceptance. dorq-eval reports precision on every label and on the verified ones. Absent means not verified |
 | `members` | For a cohort label (`series` `*`): the members' ids, comma-separated as DQ601's `detail.members` is. The label matches a DQ601 row whose members overlap them. A market fact with `codes` DQ601 makes a coincidental cohort row false |
+| `weight` | For a label drawn in a sample (since 0.15.0): its survey weight, 1 / the probability that the sample included it, a number of at least 1. dorq-eval weighs the reports the label judges by it, and `dorq calibrate` weighs the label's observations ([Sampled labels](#sampled-labels)). Absent means 1 |
+| `sample` | For a label drawn in a sample: the sample's id. dorq-eval's `--sample` judges one sample's labels alone |
 | `statement`, `period_type`, `version_no`, `item` | For a label about financial statements: the statement (`income`, `balance_sheet` or `cash_flow`, or fafnir's table name), the period type (`quarter` or `annual`), the version (a whole number from 1) and the line item it covers. Each is optional: an unset field covers every value. With any of them, `first` and `last` are fiscal dates |
 
 Other keys are ignored, so an exporter can keep extra fields for people.
@@ -55,6 +57,25 @@ has bars. On statements it uses only these
 {"series":"752016","first":"2019-03-31","last":"2019-12-31","class":"market_fact","codes":"DQ9","kind":"reclassification","statement":"cash_flow"}
 ```
 
+### Sampled labels
+
+Precision and recall that are to decide something are measured on a sample of
+reports, flags and unflagged rows drawn by design, not on whatever happened to be
+labelled. Such a sample is drawn unevenly: a rare check, or the rows near a
+threshold, are drawn more often than the rest. Each sampled label then says how
+much of the population it stands for:
+
+```json
+{"series":"752016","date":"2026-11-18","class":"data_error","expect":"DQ301","kind":"feed_gap","verified":true,"sample":"audit-2026-11-23-bars","weight":12.5}
+{"series":"9161","date":"2026-11-19","class":"market_fact","kind":"news","verified":true,"sample":"audit-2026-11-23-bars","weight":1}
+```
+
+A label the sample was certain to include weighs 1; one drawn with probability
+0.08 weighs 12.5. dorq-eval's shares are then estimates for the population the
+sample was drawn from, with intervals on the sample's effective size
+([tools/eval/README.md](../tools/eval/README.md#intervals)). Every weight 1, or
+none, gives the unweighted figures exactly.
+
 ### Kinds fafnir sends
 
 `kind` is free text, but fafnir's exports use these, with the class and the
@@ -73,7 +94,8 @@ codes each implies:
 | `dividend_added` | context_gap | DQ201\|DQ203: the move was reported before the dividend reached the file | A line
 that cannot be read stops the run with exit status 3, and the message names the
 line. That happens when the JSON is malformed, when `series`, `first` or `class`
-is missing, when a date or class is invalid, or when `last` is before `first`.
+is missing, when a date or class is invalid, when `last` is before `first`, or
+when `weight` is not a number of at least 1.
 
 ## What the price model learns from a label
 

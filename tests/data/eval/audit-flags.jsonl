@@ -1,0 +1,5 @@
+{"series":"A","date":"2026-11-02","check":"outlier","severity":"warn","codes":"DQ2|DQ601|DQ7"}
+{"series":"C","first":"2026-11-01","last":"2026-11-01","check":"stale","codes":"DQ304|DQ501"}
+{"series":"F","date":"2026-11-02","check":"outlier","severity":"error","codes":"DQ2|DQ601|DQ7"}
+{"series":"D","date":"2026-11-02","check":"outlier","severity":"warn","codes":"DQ2|DQ601|DQ7"}
+{"series":"E","date":"2026-11-02","check":"gap","severity":"info","codes":"DQ301"}

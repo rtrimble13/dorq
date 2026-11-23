@@ -250,6 +250,15 @@ std::vector<Label> read_labels(std::istream& in, const std::string& source) {
         label.verified = verified;
       } else if (m.key == "members") {
         label.members = list_items(m.text);
+      } else if (m.key == "weight") {
+        const ParsedNumber number = parse_number(m.text);
+        if (number.status != ParsedNumber::Status::kOk || !std::isfinite(number.value) ||
+            number.value < 1.0) {
+          fail(source, line, "weight \"" + m.text + "\" is not a number of at least 1");
+        }
+        label.weight = number.value;
+      } else if (m.key == "sample") {
+        label.sample = m.text;
       } else if (statement_field(m, source, line, label)) {
         // statement, period_type, version_no or item
       }

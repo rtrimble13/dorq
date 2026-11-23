@@ -62,6 +62,7 @@ add_library(
   stats/hmm2.cpp
   stats/nig.cpp
   stats/robust.cpp
+  stats/proportion.cpp
   stats/special.cpp
   stats/student_t.cpp
   statements/views.cpp

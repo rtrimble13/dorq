@@ -282,6 +282,7 @@ class Collector {
       if (best != nullptr) {
         o.allowed = *allowed;
         o.error = best->label_class != LabelClass::kMarketFact;
+        o.weight = best->weight;
         matched.at(static_cast<std::size_t>(best - labels_->data())) = 1;
       } else if (options_.clean_unlabelled) {
         o.allowed.at(idx(H::kMarketMove)) = true;
@@ -326,7 +327,8 @@ double log_sum(const Observation& o, const Weights& w, const std::array<bool, kC
   return total;
 }
 
-// log P(the label | the evidence), and its gradient in the log weights.
+// log P(the label | the evidence), and its gradient in the log weights, times the
+// observation's weight.
 double label_log_lik(const Observation& o, const Weights& w, Weights* gradient) {
   const double allowed = log_sum(o, w, o.allowed);
   const double all = log_sum(o, w, o.considered);
@@ -338,7 +340,7 @@ double label_log_lik(const Observation& o, const Weights& w, Weights* gradient) 
       const double share = std::exp(w.at(h) + o.log_likelihood.at(h) - all);
       const double in =
           o.allowed.at(h) ? std::exp(w.at(h) + o.log_likelihood.at(h) - allowed) : 0.0;
-      gradient->at(h) += in - share;
+      gradient->at(h) += o.weight * (in - share);
     }
   }
   return allowed - all;
@@ -356,8 +358,9 @@ double p_error(const Observation& o, const Weights& w) {
 
 struct Objective {
   double value = 0.0;
-  double log_lik = 0.0;
+  double log_lik = 0.0;  // weighted
   std::size_t count = 0;
+  double weight = 0.0;  // of the observations counted
 };
 
 Objective objective(const std::vector<Observation>& obs, const Weights& w, const Weights& w0,
@@ -369,8 +372,9 @@ Objective objective(const std::vector<Observation>& obs, const Weights& w, const
     }
     const double ll = label_log_lik(o, w, gradient);
     if (ll > kNegInf) {
-      out.log_lik += ll;
+      out.log_lik += o.weight * ll;
       ++out.count;
+      out.weight += o.weight;
     }
   }
   out.value = out.log_lik;
@@ -453,8 +457,8 @@ Fit evaluate(const std::vector<Observation>& obs, const Weights& w, const Weight
   const Objective train = objective(obs, w, w0, false, nullptr);
   const Objective test = objective(obs, w, w0, true, nullptr);
   fit.objective = train.value;
-  fit.mean_log_lik = train.count > 0 ? train.log_lik / static_cast<double>(train.count) : 0.0;
-  fit.test_mean_log_lik = test.count > 0 ? test.log_lik / static_cast<double>(test.count) : 0.0;
+  fit.mean_log_lik = train.count > 0 ? train.log_lik / train.weight : 0.0;
+  fit.test_mean_log_lik = test.count > 0 ? test.log_lik / test.weight : 0.0;
   return fit;
 }
 
@@ -478,15 +482,15 @@ std::string weight(double value) {
 
 }  // namespace
 
-std::vector<std::pair<double, double>> isotonic_map(std::vector<std::pair<double, double>> points,
+std::vector<std::pair<double, double>> isotonic_map(std::vector<WeightedPoint> points,
                                                     std::size_t bins) {
   std::vector<std::pair<double, double>> out;
   if (points.empty() || bins == 0) {
     return out;
   }
   std::stable_sort(points.begin(), points.end(),
-                   [](const auto& a, const auto& b) { return a.first < b.first; });
-  // Equal-count bins: (mean x, mean y, count).
+                   [](const WeightedPoint& a, const WeightedPoint& b) { return a.x < b.x; });
+  // Equal-count bins: (weighted mean x, weighted mean y, weight).
   struct Block {
     double x = 0.0;
     double y = 0.0;
@@ -497,9 +501,9 @@ std::vector<std::pair<double, double>> isotonic_map(std::vector<std::pair<double
   for (std::size_t i = 0; i < points.size(); i += per) {
     Block b;
     for (std::size_t j = i; j < std::min(points.size(), i + per); ++j) {
-      b.x += points[j].first;
-      b.y += points[j].second;
-      b.n += 1.0;
+      b.x += points[j].weight * points[j].x;
+      b.y += points[j].weight * points[j].y;
+      b.n += points[j].weight;
     }
     b.x /= b.n;
     b.y /= b.n;
@@ -534,24 +538,26 @@ std::vector<std::pair<double, double>> isotonic_map(std::vector<std::pair<double
   return out;
 }
 
-double expected_calibration_error(const std::vector<std::pair<double, double>>& points,
-                                  std::size_t bins) {
+double expected_calibration_error(const std::vector<WeightedPoint>& points, std::size_t bins) {
   if (points.empty() || bins == 0) {
     return 0.0;
   }
   std::vector<double> p(bins, 0.0);
   std::vector<double> y(bins, 0.0);
   std::vector<double> n(bins, 0.0);
-  for (const auto& [x, outcome] : points) {
-    const auto b = std::min(bins - 1, static_cast<std::size_t>(x * static_cast<double>(bins)));
-    p[b] += x;
-    y[b] += outcome;
-    n[b] += 1.0;
+  double total = 0.0;
+  for (const WeightedPoint& point : points) {
+    const auto b =
+        std::min(bins - 1, static_cast<std::size_t>(point.x * static_cast<double>(bins)));
+    p[b] += point.weight * point.x;
+    y[b] += point.weight * point.y;
+    n[b] += point.weight;
+    total += point.weight;
   }
   double ece = 0.0;
   for (std::size_t b = 0; b < bins; ++b) {
     if (n[b] > 0.0) {
-      ece += std::fabs(p[b] - y[b]) / static_cast<double>(points.size());
+      ece += std::fabs(p[b] - y[b]) / total;
     }
   }
   return ece;
@@ -595,7 +601,7 @@ CalibrationReport calibrate(const std::vector<Series>& series, const std::vector
     std::vector<Observation> obs = collector.collect(hyper, base);
     const Weights w = fit_weights(obs, w0);
     const Objective o = objective(obs, w, w0, false, nullptr);
-    const double score = o.count > 0 ? o.value / static_cast<double>(o.count) : kNegInf;
+    const double score = o.count > 0 ? o.value / o.weight : kNegInf;
     ++report.settings_tried;
     if (score > best_score) {
       best_score = score;
@@ -613,28 +619,28 @@ CalibrationReport calibrate(const std::vector<Series>& series, const std::vector
   // The p_error map, from the training observations; calibration error on the
   // held-out ones (all, without a hold-out).
   const bool held_out = report.test_observations > 0;
-  std::vector<std::pair<double, double>> train;
-  std::vector<std::pair<double, double>> check_before;
-  std::vector<std::pair<double, double>> check_raw;
+  std::vector<WeightedPoint> train;
+  std::vector<WeightedPoint> check_before;
+  std::vector<WeightedPoint> check_raw;
   for (const Observation& o : best_obs) {
     if (!o.test) {
-      train.emplace_back(p_error(o, best_w), o.error ? 1.0 : 0.0);
+      train.push_back({p_error(o, best_w), o.error ? 1.0 : 0.0, o.weight});
     }
     if (o.test == held_out) {
-      check_raw.emplace_back(p_error(o, best_w), o.error ? 1.0 : 0.0);
+      check_raw.push_back({p_error(o, best_w), o.error ? 1.0 : 0.0, o.weight});
     }
   }
   for (const Observation& o : before_obs) {
     if (o.test == held_out) {
-      check_before.emplace_back(calibrated(config.price.p_error_map, p_error(o, w0)),
-                                o.error ? 1.0 : 0.0);
+      check_before.push_back(
+          {calibrated(config.price.p_error_map, p_error(o, w0)), o.error ? 1.0 : 0.0, o.weight});
     }
   }
   if (options.isotonic) {
     report.p_error_map = isotonic_map(train);
   }
-  for (auto& [p, y] : check_raw) {
-    p = calibrated(report.p_error_map, p);
+  for (WeightedPoint& point : check_raw) {
+    point.x = calibrated(report.p_error_map, point.x);
   }
   report.ece_before = expected_calibration_error(check_before);
   report.ece_after = expected_calibration_error(check_raw);

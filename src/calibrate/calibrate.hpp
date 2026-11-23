@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -39,6 +40,20 @@ struct Observation {
   std::array<bool, kPriceHypotheses> allowed{};
   bool error = false;  // a data error or a context gap
   bool test = false;   // held out
+  // The label's weight (DE-01): the observation's log-likelihood and its point in
+  // the p_error map count this many times.
+  double weight = 1.0;
+};
+
+// A point of a p_error map's fit: p_error, the outcome (1 an error, 0 not) and its
+// weight.
+struct WeightedPoint {
+  double x = 0.0;
+  double y = 0.0;
+  double weight = 1.0;
+  [[nodiscard]] bool operator<(const WeightedPoint& other) const noexcept {
+    return std::tie(x, y, weight) < std::tie(other.x, other.y, other.weight);
+  }
 };
 
 // How well one setting explains the labels.
@@ -81,13 +96,14 @@ struct CalibrationReport {
 [[nodiscard]] std::string calibration_summary(const CalibrationReport& report);
 
 // Isotonic regression (pool adjacent violators) of y on x, over at most `bins`
-// equal-count bins of x: rising (x, y) knots. Points are (x, y, weight 1).
-[[nodiscard]] std::vector<std::pair<double, double>> isotonic_map(
-    std::vector<std::pair<double, double>> points, std::size_t bins = 20);
+// equal-count bins of x: rising (x, y) knots. A bin's x and y are its points'
+// weighted means, and it pools with the weight of its points.
+[[nodiscard]] std::vector<std::pair<double, double>> isotonic_map(std::vector<WeightedPoint> points,
+                                                                  std::size_t bins = 20);
 
 // Expected calibration error over `bins` equal-width bins of p: the mean
-// |p - observed rate|, weighted by each bin's share of the points.
-[[nodiscard]] double expected_calibration_error(
-    const std::vector<std::pair<double, double>>& points, std::size_t bins = 10);
+// |p - observed rate|, weighted by each bin's share of the points' weight.
+[[nodiscard]] double expected_calibration_error(const std::vector<WeightedPoint>& points,
+                                                std::size_t bins = 10);
 
 }  // namespace dorq

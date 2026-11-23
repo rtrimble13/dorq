@@ -1,0 +1,7 @@
+{"series":"A","date":"2026-11-02","class":"data_error","expect":"DQ201","kind":"bad_print","verified":true,"sample":"audit","weight":1}
+{"series":"B","date":"2026-11-02","class":"data_error","expect":"DQ301","kind":"feed_gap","verified":true,"sample":"audit","weight":4}
+{"series":"C","date":"2026-11-02","class":"data_error","expect":"DQ304","kind":"feed_gap","verified":true,"sample":"audit","weight":2}
+{"series":"D","date":"2026-11-02","class":"market_fact","kind":"news","verified":true,"sample":"audit","weight":1}
+{"series":"E","date":"2026-11-02","class":"market_fact","codes":"DQ3","kind":"halt","verified":true,"sample":"audit","weight":3}
+{"series":"F","date":"2026-11-02","class":"data_error","expect":"DQ201","kind":"bad_print","verified":true,"sample":"audit","weight":2}
+{"series":"G","date":"2026-11-02","class":"data_error","expect":"DQ201","kind":"bad_print","verified":true}

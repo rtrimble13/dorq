@@ -1,15 +1,19 @@
 // dorq-eval: dorq's output against labels (plan section 8; tools/eval/README.md).
 //
 //   dorq-eval --labels L.jsonl --results R [--results R2 ...] [--input-time T]
-//             [--complete] [--gates F] [--markdown report.md] [--html report.html]
-//             [--title T]
+//             [--sample S] [--complete] [--gates F] [--markdown report.md]
+//             [--html report.html] [--title T] [--name A]
+//             [--compare F [--compare F2 ...] [--compare-name B]]
 //
 // R is `dorq check` output as csv, jsonl or fafnir (with --show-info for the
 // calibration points below warn). Several results files (nightly runs) are judged
 // as their distinct conditions. Reports cover strict and fault precision with
 // coverage, at warn and above and at error, on all labels and on verified ones;
 // precision, recall and F1 per check; hard negatives; a reliability diagram of
-// p_error with its expected calibration error; and precision@k.
+// p_error with its expected calibration error; and precision@k. Every estimate is
+// weighted by the labels' `weight` (DE-01), with 95% intervals. --compare judges a
+// second engine's flags on the same labels and compares the two engines' recall
+// with a paired test.
 
 #include <algorithm>
 #include <array>
@@ -37,6 +41,7 @@
 #include "dorq/number.hpp"
 #include "dorq/statement.hpp"
 #include "io/csv.hpp"
+#include "stats/proportion.hpp"
 
 namespace {
 
@@ -64,6 +69,11 @@ struct Result {
   std::optional<dorq::PeriodType> period_type;
   std::optional<std::int32_t> version;
   std::string item;
+  // A generic flag (another engine's, in the flag format of tools/eval/README.md):
+  // `code` holds its check's name, and `credited` the codes it is credited with,
+  // where empty means any code.
+  bool flag = false;
+  std::vector<std::string> credited;
 };
 
 // A version_no as dorq writes it, or nullopt.
@@ -301,8 +311,52 @@ std::vector<std::string> split_ids(const std::string& text) {
   return ids;
 }
 
+std::vector<std::string> split_codes(const std::string& text) {
+  std::vector<std::string> codes;
+  std::stringstream in(text);
+  std::string item;
+  while (std::getline(in, item, '|')) {
+    if (const std::string_view code = dorq::trim(item); !code.empty()) {
+      codes.emplace_back(code);
+    }
+  }
+  return codes;
+}
+
+// A generic flag: {"series", "date" or "first"/"last", "check", "severity", "codes",
+// and a statement's "statement", "period_type", "version_no" and "item"}. Its
+// statement fields and item make its condition key, as a CSV row's do.
+std::optional<Result> generic_flag(const Json& r) {
+  const auto first = dorq::parse_date(r.string_or("first", r.string_or("date")));
+  if (!first) {
+    return std::nullopt;
+  }
+  Result result;
+  result.flag = true;
+  result.series = r.string_or("series");
+  result.first = *first;
+  result.last = dorq::parse_date(r.string_or("last", r.string_or("end_date"))).value_or(*first);
+  result.code = r.string_or("check");
+  result.severity = r.string_or("severity", "warn");
+  const dorq::ParsedNumber p = dorq::parse_number(r.string_or("p_error"));
+  result.p_error = p.status == dorq::ParsedNumber::Status::kOk ? p.value : 1.0;
+  result.message = r.string_or("message");
+  result.credited = split_codes(r.string_or("codes"));
+  result.statement = dorq::parse_statement(r.string_or("statement"));
+  result.period_type = dorq::parse_period_type(r.string_or("period_type"));
+  result.version = version_of(r.string_or("version_no"));
+  result.item = r.string_or("item");
+  for (const char* field : {"statement", "period_type", "version_no", "item"}) {
+    if (const std::string value = r.string_or(field); !value.empty()) {
+      result.key += (result.key.empty() ? "" : ";") + std::string{field} + "=" + value;
+    }
+  }
+  return result;
+}
+
 // `dorq --format jsonl` or `--format fafnir` output: one record a line. A fafnir
-// row holds the jsonl record in `detail`, and the series as `security_id`.
+// row holds the jsonl record in `detail`, and the series as `security_id`. A
+// record with a `check` and no `code` is a generic flag.
 std::vector<Result> read_json_results(const std::string& path) {
   std::ifstream in(path, std::ios::binary);
   if (!in) {
@@ -319,6 +373,12 @@ std::vector<Result> read_json_results(const std::string& path) {
     const Json record = JsonParser(line, path + " line " + std::to_string(number)).parse();
     const Json* inner = record.get("detail");
     const bool fafnir = record.get("check_name") != nullptr && inner != nullptr;
+    if (!fafnir && record.get("check") != nullptr && record.get("code") == nullptr) {
+      if (std::optional<Result> flag = generic_flag(record)) {
+        results.push_back(std::move(*flag));
+      }
+      continue;
+    }
     const Json& r = fafnir ? *inner : record;
     const auto first = dorq::parse_date(r.string_or("date"));
     if (!first) {
@@ -495,7 +555,42 @@ bool expects(const Label& l, const std::string& code) {
   }
   return false;
 }
-// The checks whose p_error is a probability (not a deterministic 1 or 0).
+
+// Whether two codes or code prefixes overlap: one starts with the other ("DQ2" and
+// "DQ201").
+bool overlapping(std::string_view a, std::string_view b) {
+  return a.starts_with(b) || b.starts_with(a);
+}
+
+// Whether a fault label credits a result: the result's code is one the label
+// expects, or for a generic flag one of the codes or code prefixes it is credited
+// with overlaps one (any, where it names none).
+bool credits(const Label& l, const Result& r) {
+  if (!r.flag) {
+    return expects(l, r.code);
+  }
+  if (l.expect.empty() || r.credited.empty()) {
+    return true;
+  }
+  const std::vector<std::string> expected = split_codes(l.expect);
+  return std::any_of(r.credited.begin(), r.credited.end(), [&expected](const std::string& code) {
+    return std::any_of(expected.begin(), expected.end(),
+                       [&code](const std::string& want) { return overlapping(code, want); });
+  });
+}
+
+// Whether a market fact excuses a result: its code starts with the fact's codes, or
+// for a generic flag one of its codes overlaps them (every flag, where it names
+// none).
+bool excuses(const Label& l, const Result& r) {
+  if (!r.flag) {
+    return r.code.starts_with(l.codes);
+  }
+  return r.credited.empty() ||
+         std::any_of(r.credited.begin(), r.credited.end(),
+                     [&l](const std::string& code) { return overlapping(code, l.codes); });
+}
+
 // The checks whose p_error is a model's posterior: their reports are the
 // calibration points. Statements' (DR-0911): the
 // value model (DQ911 to DQ915, DQ919), the identity model (DQ903), the share
@@ -550,6 +645,10 @@ std::vector<Gate> read_gates(const std::string& path) {
   return gates;
 }
 
+// Counts of reports and labels, and the same weighted by the labels' `weight`: a
+// judged report carries the weight of the label that judged it. Precision and
+// recall are the weighted shares (Hajek ratios), which with every weight 1 are the
+// counts' own.
 struct Counts {
   int reported = 0;
   int correct = 0;
@@ -558,15 +657,37 @@ struct Counts {
   int unlabelled = 0;  // matching no label (without --complete)
   int faults = 0;
   int found = 0;
+  double w_correct = 0.0;
+  double w_other_fault = 0.0;
+  double w_false_positive = 0.0;
+  double w_judged_squares = 0.0;  // the sum of the judged reports' squared weights
+  double w_faults = 0.0;
+  double w_found = 0.0;
+  double w_fault_squares = 0.0;
 
   [[nodiscard]] int judged() const { return correct + other_fault + false_positive; }
-  [[nodiscard]] double precision() const {
-    return ratio(correct, correct + other_fault + false_positive);
-  }
+  [[nodiscard]] double w_judged() const { return w_correct + w_other_fault + w_false_positive; }
+  [[nodiscard]] double precision() const { return ratio(w_correct, w_judged()); }
   [[nodiscard]] double fault_precision() const {
-    return ratio(correct + other_fault, correct + other_fault + false_positive);
+    return ratio(w_correct + w_other_fault, w_judged());
   }
-  [[nodiscard]] double recall() const { return ratio(found, faults); }
+  [[nodiscard]] double recall() const { return ratio(w_found, w_faults); }
+  // Kish's effective sizes of the judged reports and of the fault labels.
+  [[nodiscard]] double judged_size() const {
+    return dorq::stats::effective_size(w_judged(), w_judged_squares);
+  }
+  [[nodiscard]] double fault_size() const {
+    return dorq::stats::effective_size(w_faults, w_fault_squares);
+  }
+  void add_fault(bool is_found, double weight) {
+    ++faults;
+    w_faults += weight;
+    w_fault_squares += weight * weight;
+    if (is_found) {
+      ++found;
+      w_found += weight;
+    }
+  }
   [[nodiscard]] double f1() const {
     const double p = precision();
     const double r = recall();
@@ -574,9 +695,12 @@ struct Counts {
   }
 };
 
+// A bin of the reliability diagram: its reports' weighted sums of p_error and of
+// the outcome, their weight and their number.
 struct Bin {
   double p = 0.0;
   double y = 0.0;
+  double w = 0.0;
   int n = 0;
 };
 
@@ -585,6 +709,7 @@ struct Evaluation {
   std::map<std::string, int> hard_hits;  // by hard-negative kind
   Counts all;                            // warn and above
   std::array<Counts, 2> by_severity{};   // warn, error
+  Counts every_fault;                    // every fault label, found at warn and above
   std::vector<Bin> bins;                 // reliability, ten equal-width bins
   double ece = 0.0;
   int calibration_points = 0;
@@ -595,85 +720,129 @@ struct Evaluation {
 // Whether a result is right, names a different fault, is wrong, or is unlabelled.
 enum class Outcome : std::uint8_t { kCorrect, kOtherFault, kFalse, kUnlabelled };
 
-Outcome judge(const Result& r, const std::vector<Label>& labels, bool complete) {
-  bool correct = false;
-  bool other = false;
-  bool negative = false;
+// An outcome, and the weight it carries: the largest weight among the labels that
+// decide it (1 for a report --complete makes false without a label).
+struct Verdict {
+  Outcome outcome = Outcome::kUnlabelled;
+  double weight = 1.0;
+};
+
+Verdict judge(const Result& r, const std::vector<Label>& labels, bool complete) {
+  std::optional<double> correct;
+  std::optional<double> other;
+  std::optional<double> negative;
+  const auto keep = [](std::optional<double>& at, double weight) {
+    at = std::max(at.value_or(weight), weight);
+  };
   for (const Label& l : labels) {
     if (is_fault(l) && overlaps(r, l, kSlack)) {
-      (expects(l, r.code) ? correct : other) = true;
-    } else if (!is_fault(l) && overlaps(r, l, 0) && r.code.starts_with(l.codes)) {
-      negative = true;
+      keep(credits(l, r) ? correct : other, l.weight);
+    } else if (!is_fault(l) && overlaps(r, l, 0) && excuses(l, r)) {
+      keep(negative, l.weight);
     }
   }
   if (correct) {
-    return Outcome::kCorrect;
+    return {Outcome::kCorrect, *correct};
   }
   if (other) {
-    return Outcome::kOtherFault;
+    return {Outcome::kOtherFault, *other};
   }
-  return negative || complete ? Outcome::kFalse : Outcome::kUnlabelled;
+  if (negative) {
+    return {Outcome::kFalse, *negative};
+  }
+  return {complete ? Outcome::kFalse : Outcome::kUnlabelled, 1.0};
 }
 
-void count(Counts& c, Outcome outcome) {
+void count(Counts& c, const Verdict& v) {
   ++c.reported;
-  switch (outcome) {
+  switch (v.outcome) {
     case Outcome::kCorrect:
       ++c.correct;
+      c.w_correct += v.weight;
       break;
     case Outcome::kOtherFault:
       ++c.other_fault;
+      c.w_other_fault += v.weight;
       break;
     case Outcome::kFalse:
       ++c.false_positive;
+      c.w_false_positive += v.weight;
       break;
     case Outcome::kUnlabelled:
       ++c.unlabelled;
-      break;
+      return;
   }
+  c.w_judged_squares += v.weight * v.weight;
 }
 
 // A series' own report on a session a cross-sectional fault covers: part of the
-// cohort (DQ301 rows folded into DQ303), so a fault for calibration.
-bool in_cohort_fault(const Result& r, const std::vector<Label>& labels) {
-  return !r.series.empty() && std::any_of(labels.begin(), labels.end(), [&r](const Label& l) {
-    return l.series == "*" && is_fault(l) && r.first.days() <= l.last.days() + kSlack &&
-           l.first.days() <= r.last.days() + kSlack;
+// cohort (DQ301 rows folded into DQ303), so a fault for calibration. The largest
+// such fault's weight, or nullopt.
+std::optional<double> in_cohort_fault(const Result& r, const std::vector<Label>& labels) {
+  std::optional<double> weight;
+  if (r.series.empty()) {
+    return weight;
+  }
+  for (const Label& l : labels) {
+    if (l.series == "*" && is_fault(l) && r.first.days() <= l.last.days() + kSlack &&
+        l.first.days() <= r.last.days() + kSlack) {
+      weight = std::max(weight.value_or(l.weight), l.weight);
+    }
+  }
+  return weight;
+}
+
+// Whether any result at warn or above finds a fault label: names a code it
+// expects, about its series, scope and dates within the slack.
+bool found_by(const Label& l, const std::vector<Result>& results) {
+  return std::any_of(results.begin(), results.end(), [&l](const Result& r) {
+    return r.severity != "info" && credits(l, r) && overlaps(r, l, kSlack);
   });
 }
 
 Evaluation evaluate(const std::vector<Label>& labels, const std::vector<Result>& results,
                     bool complete) {
   Evaluation e;
-  std::vector<std::pair<double, int>> ranked;  // p_error, correct (warn and above)
+  struct Ranked {
+    double p_error = 0.0;
+    int hit = 0;  // right or another fault
+    double weight = 1.0;
+  };
+  std::vector<Ranked> ranked;  // warn and above, judged
   e.bins.assign(10, Bin{});
+  double calibration_weight = 0.0;
   for (const Result& r : results) {
-    const Outcome outcome = judge(r, labels, complete);
+    const Verdict verdict = judge(r, labels, complete);
+    const Outcome outcome = verdict.outcome;
     // Calibration: every Bayesian report, at any severity, that the labels judge.
     // A report near a fault that names another code is left out: the fault is
     // real, but whether it is the thing reported is not known.
-    const bool cohort = outcome == Outcome::kFalse && in_cohort_fault(r, labels);
-    if (bayesian(r.code) &&
+    const std::optional<double> cohort =
+        outcome == Outcome::kFalse ? in_cohort_fault(r, labels) : std::nullopt;
+    if (!r.flag && bayesian(r.code) &&
         (outcome == Outcome::kCorrect || outcome == Outcome::kFalse || cohort)) {
       const double y = outcome == Outcome::kCorrect || cohort ? 1.0 : 0.0;
+      const double w = cohort ? *cohort : verdict.weight;
       const auto b = std::min<std::size_t>(9, static_cast<std::size_t>(r.p_error * 10.0));
-      e.bins[b].p += r.p_error;
-      e.bins[b].y += y;
+      e.bins[b].p += w * r.p_error;
+      e.bins[b].y += w * y;
+      e.bins[b].w += w;
       ++e.bins[b].n;
       ++e.calibration_points;
+      calibration_weight += w;
     }
     if (r.severity == "info") {
       continue;
     }
     Counts& c = e.by_code[r.code];
     Counts& s = e.by_severity.at(r.severity == "error" ? 1 : 0);
-    count(c, outcome);
-    count(s, outcome);
-    count(e.all, outcome);
+    count(c, verdict);
+    count(s, verdict);
+    count(e.all, verdict);
     if (outcome == Outcome::kFalse) {
       bool hard = false;
       for (const Label& l : labels) {
-        if (!is_fault(l) && overlaps(r, l, 0) && r.code.starts_with(l.codes)) {
+        if (!is_fault(l) && overlaps(r, l, 0) && excuses(l, r)) {
           e.hard_hits[l.kind] += hard ? 0 : 1;
           hard = true;
         }
@@ -682,7 +851,7 @@ Evaluation evaluate(const std::vector<Label>& labels, const std::vector<Result>&
                         " " + r.first.to_string() + " " + r.code + " " + r.message);
     }
     if (outcome != Outcome::kUnlabelled) {
-      ranked.emplace_back(r.p_error, outcome == Outcome::kFalse ? 0 : 1);
+      ranked.push_back({r.p_error, outcome == Outcome::kFalse ? 0 : 1, verdict.weight});
     }
   }
   for (const Label& l : labels) {
@@ -690,37 +859,36 @@ Evaluation evaluate(const std::vector<Label>& labels, const std::vector<Result>&
       e.hard_hits.try_emplace(l.kind, 0);
       continue;
     }
+    const bool found = found_by(l, results);
+    e.every_fault.add_fault(found, l.weight);
     const std::string code = l.expect.substr(0, l.expect.find('|'));
     if (code.empty()) {
       continue;
     }
-    Counts& c = e.by_code[code];
-    ++c.faults;
-    const bool found = std::any_of(results.begin(), results.end(), [&](const Result& r) {
-      return r.severity != "info" && expects(l, r.code) && overlaps(r, l, kSlack);
-    });
-    c.found += found ? 1 : 0;
+    e.by_code[code].add_fault(found, l.weight);
     if (!found) {
       e.notes.push_back("missed (" + l.kind + "): " + l.series + " " + l.first.to_string() + ".." +
                         l.last.to_string() + scope(l) + " " + l.expect);
     }
   }
   for (const Bin& b : e.bins) {
-    if (b.n > 0 && e.calibration_points > 0) {
-      e.ece += std::fabs(b.p - b.y) / e.calibration_points;
+    if (b.n > 0 && calibration_weight > 0.0) {
+      e.ece += std::fabs(b.p - b.y) / calibration_weight;
     }
   }
   std::stable_sort(ranked.begin(), ranked.end(),
-                   [](const auto& a, const auto& b) { return a.first > b.first; });
+                   [](const Ranked& a, const Ranked& b) { return a.p_error > b.p_error; });
   for (const int k : {10, 25, 50, 100, 200, 500}) {
     if (static_cast<std::size_t>(k) > ranked.size()) {
       break;
     }
-    int hits = 0;
-    for (int i = 0; i < k; ++i) {
-      hits += ranked.at(static_cast<std::size_t>(i)).second;
+    double hits = 0.0;
+    double weight = 0.0;
+    for (std::size_t i = 0; i < static_cast<std::size_t>(k); ++i) {
+      hits += ranked.at(i).weight * ranked.at(i).hit;
+      weight += ranked.at(i).weight;
     }
-    e.precision_at.emplace_back(k, static_cast<double>(hits) / k);
+    e.precision_at.emplace_back(k, hits / weight);
   }
   return e;
 }
@@ -779,12 +947,147 @@ std::vector<SummaryRow> summary_rows(const std::string& name, const Evaluation& 
   return {{name + " | warn and above", e.all}, {name + " | error", e.by_severity.at(1)}};
 }
 
+// A weighted share with its two-sided 95% Wilson interval on an effective size:
+// "0.800 [0.490, 0.943]", or a dash when nothing defines it.
+std::string estimate(double p, double effective_size, bool defined) {
+  if (!defined) {
+    return "–";
+  }
+  const dorq::stats::Interval i = dorq::stats::wilson(p, effective_size, dorq::stats::kZTwoSided95);
+  return fixed(p) + " [" + fixed(i.low) + ", " + fixed(i.high) + "]";
+}
+
+std::string precision_estimate(const Counts& c) {
+  return estimate(c.precision(), c.judged_size(), c.judged() > 0);
+}
+std::string fault_precision_estimate(const Counts& c) {
+  return estimate(c.fault_precision(), c.judged_size(), c.judged() > 0);
+}
+std::string recall_estimate(const Counts& c) {
+  return estimate(c.recall(), c.fault_size(), c.faults > 0);
+}
+
+std::string intervals_markdown(const std::vector<SummaryRow>& rows, const Evaluation& e) {
+  std::string out =
+      "## Estimates with 95% intervals\n\nWeighted by the labels' `weight` (1 / inclusion "
+      "probability; 1 when absent): a judged report carries the largest weight among the "
+      "labels that judge it. Each interval is the Wilson score interval on Kish's effective "
+      "size, (Σw)² / Σw².\n\n"
+      "| Set | At | Judged | Weight | Effective n | Strict | Fault |\n"
+      "|---|---|---|---|---|---|---|\n";
+  for (const SummaryRow& row : rows) {
+    const Counts& c = row.counts;
+    out += "| " + row.name + " | " + std::to_string(c.judged()) + " | " +
+           dorq::format_number(c.w_judged()) + " | " + fixed(c.judged_size(), 1) + " | " +
+           precision_estimate(c) + " | " + fault_precision_estimate(c) + " |\n";
+  }
+  const Counts& f = e.every_fault;
+  out += "\nRecall over every fault label, found by a report at warn and above: **" +
+         recall_estimate(f) + "** on " + std::to_string(f.faults) + " fault labels (weight " +
+         dorq::format_number(f.w_faults) + ", effective n " + fixed(f.fault_size(), 1) + ").\n";
+  return out;
+}
+
+// Two engines on one label set (DE-01): each one's precision, its recall on the
+// fault labels, and the paired comparison of the recalls.
+struct EngineComparison {
+  std::string first;  // the --results engine's name
+  std::string second;
+  Evaluation a;
+  Evaluation b;
+  dorq::stats::PairedSums paired;
+  std::array<std::int64_t, 4> counts{};  // both, first only, second only, neither
+  double lower = 0.0;                    // one-sided 95% lower bound of the difference
+  double mcnemar = 1.0;                  // exact one-sided p, first finds more
+};
+
+EngineComparison compare_engines(const std::vector<Label>& labels, const std::vector<Result>& a,
+                                 const std::vector<Result>& b, bool complete, std::string first,
+                                 std::string second) {
+  EngineComparison c;
+  c.first = std::move(first);
+  c.second = std::move(second);
+  c.a = evaluate(labels, a, complete);
+  c.b = evaluate(labels, b, complete);
+  double squares = 0.0;
+  for (const Label& l : labels) {
+    if (!is_fault(l)) {
+      continue;
+    }
+    const bool fa = found_by(l, a);
+    const bool fb = found_by(l, b);
+    // both, first only, second only, neither
+    const std::size_t cell = (fa ? 0U : 2U) + (fb ? 0U : 1U);
+    ++c.counts.at(cell);
+    const std::array<double*, 4> sums{&c.paired.both, &c.paired.first_only, &c.paired.second_only,
+                                      &c.paired.neither};
+    *sums.at(cell) += l.weight;
+    squares += l.weight * l.weight;
+  }
+  c.paired.effective_size = dorq::stats::effective_size(c.paired.total(), squares);
+  c.lower = dorq::stats::paired_difference_lower(c.paired, dorq::stats::kZOneSided95);
+  c.mcnemar = dorq::stats::mcnemar_one_sided(c.counts[1], c.counts[2]);
+  return c;
+}
+
+std::string engines_markdown(const EngineComparison& c) {
+  const auto cell = [](double weight, std::int64_t n) {
+    return dorq::format_number(weight) + " (" + std::to_string(n) + ")";
+  };
+  std::string out = "## Two engines: " + c.first + " against " + c.second +
+                    "\n\nBoth judged on the same labels. A fault label is found by an engine "
+                    "when one of its reports at warn or above credits it.\n\n"
+                    "| Engine | At | Reports | Judged | Strict | Fault |\n"
+                    "|---|---|---|---|---|---|\n";
+  const auto precision_rows = [&out](const std::string& name, const Evaluation& e) {
+    for (std::size_t s = 0; s < 3; s += 2) {
+      const Counts& counts = s == 0 ? e.all : e.by_severity.at(1);
+      out += "| " + name + " | " + (s == 0 ? "warn and above" : "error") + " | " +
+             std::to_string(counts.reported) + " | " + std::to_string(counts.judged()) + " | " +
+             precision_estimate(counts) + " | " + fault_precision_estimate(counts) + " |\n";
+    }
+  };
+  precision_rows(c.first, c.a);
+  precision_rows(c.second, c.b);
+  out += "\n| Engine | Fault labels | Found | Recall |\n|---|---|---|---|\n";
+  const auto recall_row = [&out](const std::string& name, const Evaluation& e) {
+    out += "| " + name + " | " + std::to_string(e.every_fault.faults) + " | " +
+           std::to_string(e.every_fault.found) + " | " + recall_estimate(e.every_fault) + " |\n";
+  };
+  recall_row(c.first, c.a);
+  recall_row(c.second, c.b);
+  const std::int64_t labels = c.counts[0] + c.counts[1] + c.counts[2] + c.counts[3];
+  out += "\nPaired on the " + std::to_string(labels) + " fault labels (weight " +
+         dorq::format_number(c.paired.total()) + ", effective n " +
+         fixed(c.paired.effective_size, 1) + "). Weights, with counts in brackets:\n\n";
+  out += "| | " + c.second + " found | " + c.second + " missed |\n|---|---|---|\n";
+  out += "| " + c.first + " found | " + cell(c.paired.both, c.counts[0]) + " | " +
+         cell(c.paired.first_only, c.counts[1]) + " |\n";
+  out += "| " + c.first + " missed | " + cell(c.paired.second_only, c.counts[2]) + " | " +
+         cell(c.paired.neither, c.counts[3]) + " |\n\n";
+  out += "- Recall difference, " + c.first + " − " + c.second + ": **" +
+         fixed(c.paired.difference()) + "**; one-sided 95% lower bound (Newcombe, method 10): **" +
+         fixed(c.lower) + "**\n";
+  out += "- Exact McNemar test, one-sided (" + c.first +
+         " finds more): p = " + fixed(c.mcnemar, 4) + ", on " +
+         std::to_string(c.counts[1] + c.counts[2]) + " discordant labels (" +
+         std::to_string(c.counts[1]) + " " + c.first + " only, " + std::to_string(c.counts[2]) +
+         " " + c.second + " only)\n";
+  out += "- " + c.first + "'s recall is higher at one-sided 95%: **" +
+         std::string{c.lower > 0.0 ? "yes" : "no"} + "**\n";
+  return out;
+}
+
 std::string markdown(const Evaluation& e, const std::string& title, bool complete,
-                     const std::vector<SummaryRow>& summary) {
+                     const std::vector<SummaryRow>& summary, const EngineComparison* engines) {
   std::string out = "# " + title + "\n\n";
   out += complete ? "Every fault is labelled: a report matching no label is a false positive.\n\n"
                   : "Reports matching no label are left out of precision (\"unlabelled\").\n\n";
   out += summary_markdown(summary) + "\n";
+  out += intervals_markdown(summary, e) + "\n";
+  if (engines != nullptr) {
+    out += engines_markdown(*engines) + "\n";
+  }
   out += "## Per check, at warn and above\n\n";
   out +=
       "| Check | Reported | Right | Other fault | False | Unlabelled | Precision | "
@@ -821,8 +1124,8 @@ std::string markdown(const Evaluation& e, const std::string& title, bool complet
     const std::string range =
         fixed(static_cast<double>(b) / 10.0, 1) + "–" + fixed(static_cast<double>(b + 1) / 10.0, 1);
     out += "| " + range + " | " + std::to_string(bin.n) + " | " +
-           (bin.n > 0 ? fixed(bin.p / bin.n) : "–") + " | " +
-           (bin.n > 0 ? fixed(bin.y / bin.n) : "–") + " |\n";
+           (bin.n > 0 ? fixed(bin.p / bin.w) : "–") + " | " +
+           (bin.n > 0 ? fixed(bin.y / bin.w) : "–") + " |\n";
   }
   out +=
       "\n## Precision at k\n\nReports at warn and above, by p_error, highest first.\n\n"
@@ -890,8 +1193,8 @@ std::string reliability_svg(const Evaluation& e) {
     if (b.n == 0) {
       continue;
     }
-    const double px = b.p / b.n;
-    const double py = b.y / b.n;
+    const double px = b.p / b.w;
+    const double py = b.y / b.w;
     path += (path.empty() ? "M" : " L") + fixed(x(px), 1) + " " + fixed(y(py), 1);
     const double r = 3.0 + std::min(6.0, std::log1p(b.n));
     out += "<circle cx=\"" + fixed(x(px), 1) + "\" cy=\"" + fixed(y(py), 1) + "\" r=\"" +
@@ -909,8 +1212,51 @@ std::string reliability_svg(const Evaluation& e) {
   return out;
 }
 
+// The interval table and the two engines, for the page.
+std::string intervals_html(const std::vector<SummaryRow>& rows, const Evaluation& e) {
+  std::string out =
+      "<h2>Estimates with 95% intervals</h2><p class=\"lead\">Weighted by the labels' weight; "
+      "Wilson score intervals on Kish's effective size.</p><div class=\"scroll\"><table><tr>"
+      "<th>Set</th><th>At</th><th>Judged</th><th>Weight</th><th>Effective n</th><th>Strict</th>"
+      "<th>Fault</th></tr>";
+  for (const SummaryRow& row : rows) {
+    const Counts& c = row.counts;
+    const std::size_t bar = row.name.find(" | ");
+    out += "<tr><td>" + escape(row.name.substr(0, bar)) + "</td><td>" +
+           escape(bar == std::string::npos ? "" : row.name.substr(bar + 3)) + "</td><td>" +
+           std::to_string(c.judged()) + "</td><td>" + dorq::format_number(c.w_judged()) +
+           "</td><td>" + fixed(c.judged_size(), 1) + "</td><td>" + precision_estimate(c) +
+           "</td><td>" + fault_precision_estimate(c) + "</td></tr>";
+  }
+  out += "</table></div><p>Recall over every fault label: " + recall_estimate(e.every_fault) +
+         " on " + std::to_string(e.every_fault.faults) + " fault labels.</p>";
+  return out;
+}
+
+std::string engines_html(const EngineComparison& c) {
+  std::string out = "<h2>Two engines: " + escape(c.first) + " against " + escape(c.second) +
+                    "</h2><div class=\"scroll\"><table><tr><th>Engine</th><th>Strict, warn "
+                    "and above</th><th>Strict, error</th><th>Fault labels</th><th>Recall</th>"
+                    "</tr>";
+  const auto row = [&out](const std::string& name, const Evaluation& e) {
+    out += "<tr><td>" + escape(name) + "</td><td>" + precision_estimate(e.all) + "</td><td>" +
+           precision_estimate(e.by_severity.at(1)) + "</td><td>" +
+           std::to_string(e.every_fault.faults) + "</td><td>" + recall_estimate(e.every_fault) +
+           "</td></tr>";
+  };
+  row(c.first, c.a);
+  row(c.second, c.b);
+  out += "</table></div><p>Paired: " + std::to_string(c.counts[1]) + " " + escape(c.first) +
+         " only, " + std::to_string(c.counts[2]) + " " + escape(c.second) +
+         " only. Recall difference " + fixed(c.paired.difference()) +
+         ", one-sided 95% lower bound " + fixed(c.lower) +
+         "; exact McNemar p = " + fixed(c.mcnemar, 4) + ". " + escape(c.first) +
+         "'s recall is higher at one-sided 95%: " + (c.lower > 0.0 ? "yes" : "no") + ".</p>";
+  return out;
+}
+
 std::string html(const Evaluation& e, const std::string& title, bool complete,
-                 const std::vector<SummaryRow>& summary) {
+                 const std::vector<SummaryRow>& summary, const EngineComparison* engines) {
   std::string out = R"(<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -967,12 +1313,14 @@ ul.notes { color: var(--muted); font-size: .9rem; }
   tile(shown(ratio(e.all.judged(), e.all.reported), e.all.reported > 0), "coverage");
   tile(fixed(e.ece), "expected calibration error");
   int faults = 0;
-  int found = 0;
+  double w_faults = 0.0;
+  double w_found = 0.0;
   for (const auto& [code, c] : e.by_code) {
     faults += c.faults;
-    found += c.found;
+    w_faults += c.w_faults;
+    w_found += c.w_found;
   }
-  tile(shown(ratio(found, faults), faults > 0), "recall, all labelled faults");
+  tile(shown(ratio(w_found, w_faults), faults > 0), "recall, all labelled faults");
   out +=
       "</div>\n<h2>Summary</h2><div class=\"scroll\"><table><tr><th>Set</th><th>At</th>"
       "<th>Reports</th><th>Judged</th><th>Coverage</th><th>Right</th><th>Other fault</th>"
@@ -989,7 +1337,10 @@ ul.notes { color: var(--muted); font-size: .9rem; }
            "</td><td>" + shown(c.precision(), c.judged() > 0) + "</td><td>" +
            shown(c.fault_precision(), c.judged() > 0) + "</td></tr>";
   }
-  out += "</table></div>";
+  out += "</table></div>" + intervals_html(summary, e);
+  if (engines != nullptr) {
+    out += engines_html(*engines);
+  }
   out +=
       "\n<h2>Per check, at warn and above</h2><div class=\"scroll\"><table><tr><th>Check</th>"
       "<th>Reported</th><th>Right</th><th>Other fault</th><th>False</th><th>Unlabelled</th>"
@@ -1037,8 +1388,9 @@ ul.notes { color: var(--muted); font-size: .9rem; }
 
 int usage() {
   std::cerr << "usage: dorq-eval --labels L.jsonl --results R [--results R2 ...]\n"
-               "                 [--input-time T] [--complete] [--gates F]\n"
-               "                 [--markdown F] [--html F] [--title T]\n";
+               "                 [--input-time T] [--sample S] [--complete] [--gates F]\n"
+               "                 [--markdown F] [--html F] [--title T] [--name A]\n"
+               "                 [--compare F [--compare F2 ...] [--compare-name B]]\n";
   return 2;
 }
 
@@ -1103,6 +1455,10 @@ int main(int argc, char** argv) {
       std::erase_if(
           labels, [&when](const Label& l) { return l.applies_until && *when >= *l.applies_until; });
     }
+    // One sample's labels: an audit judged on its own items.
+    if (const auto sample = value("--sample")) {
+      std::erase_if(labels, [&sample](const Label& l) { return l.sample != *sample; });
+    }
     std::vector<Label> verified = labels;
     std::erase_if(verified, [](const Label& l) { return !l.verified.value_or(false); });
     const bool complete = flag("--complete");
@@ -1128,13 +1484,28 @@ int main(int argc, char** argv) {
                                         evaluate(verified, results, complete))) {
       summary.push_back(std::move(row));
     }
+    std::optional<EngineComparison> engines;
+    if (const std::vector<std::string> compare_paths = values("--compare");
+        !compare_paths.empty()) {
+      std::vector<std::vector<Result>> other_runs;
+      for (const std::string& path : compare_paths) {
+        other_runs.push_back(read_results(path));
+      }
+      const std::vector<Result> other =
+          other_runs.size() == 1 ? other_runs.front() : distinct(other_runs);
+      engines = compare_engines(
+          labels, results, other, complete, value("--name").value_or("dorq"),
+          value("--compare-name")
+              .value_or(std::filesystem::path(compare_paths.front()).stem().string()));
+    }
+    const EngineComparison* compared = engines ? &*engines : nullptr;
     const std::string title = value("--title").value_or("dorq evaluation");
-    const std::string report = markdown(e, title, complete, summary);
+    const std::string report = markdown(e, title, complete, summary, compared);
     if (const auto path = value("--markdown")) {
       std::ofstream(*path, std::ios::binary) << report;
     }
     if (const auto path = value("--html")) {
-      std::ofstream(*path, std::ios::binary) << html(e, title, complete, summary);
+      std::ofstream(*path, std::ios::binary) << html(e, title, complete, summary, compared);
     }
     if (!value("--markdown")) {
       std::cout << report;
