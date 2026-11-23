@@ -726,8 +726,9 @@ Observations observe(const std::vector<Candidate>& candidates, const LabelIndex&
     if (StatementCalibration::takes_code_map(c.code) && !j.other) {
       Point own_point = point;
       if (StatementCalibration::scored(c.code)) {
-        if (c.score.has_value()) {
-          const double score = c.score.value();
+        const std::optional<double> raw = c.score;
+        if (raw.has_value()) {
+          const double score = *raw;
           own_point.p = score;
           own_point.model = -1;
           own_point.before =
