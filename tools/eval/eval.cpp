@@ -1488,6 +1488,7 @@ int main(int argc, char** argv) {
     if (const std::vector<std::string> compare_paths = values("--compare");
         !compare_paths.empty()) {
       std::vector<std::vector<Result>> other_runs;
+      other_runs.reserve(compare_paths.size());
       for (const std::string& path : compare_paths) {
         other_runs.push_back(read_results(path));
       }
@@ -1498,7 +1499,10 @@ int main(int argc, char** argv) {
           value("--compare-name")
               .value_or(std::filesystem::path(compare_paths.front()).stem().string()));
     }
-    const EngineComparison* compared = engines ? &*engines : nullptr;
+    const EngineComparison* compared = nullptr;
+    if (engines.has_value()) {
+      compared = &engines.value();
+    }
     const std::string title = value("--title").value_or("dorq evaluation");
     const std::string report = markdown(e, title, complete, summary, compared);
     if (const auto path = value("--markdown")) {
