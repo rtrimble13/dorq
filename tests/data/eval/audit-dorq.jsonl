@@ -1,0 +1,6 @@
+{"series":"A","date":"2026-11-02","code":"DQ201","severity":"warn","p_error":0.9,"message":"a print"}
+{"series":"B","date":"2026-11-02","code":"DQ301","severity":"error","p_error":0.95,"message":"a gap"}
+{"series":"C","date":"2026-11-02","code":"DQ201","severity":"warn","p_error":0.6,"message":"a print"}
+{"series":"D","date":"2026-11-02","code":"DQ201","severity":"warn","p_error":0.7,"message":"a print"}
+{"series":"E","date":"2026-11-02","code":"DQ301","severity":"error","p_error":0.8,"message":"a gap"}
+{"series":"G","date":"2026-11-02","code":"DQ201","severity":"warn","p_error":0.9,"message":"a print"}

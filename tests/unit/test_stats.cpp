@@ -6,6 +6,7 @@
 #include <doctest/doctest.h>
 
 #include "stats/hmm2.hpp"
+#include "stats/proportion.hpp"
 #include "stats/special.hpp"
 
 namespace st = dorq::stats;
@@ -130,4 +131,51 @@ TEST_CASE("forward-backward equals brute-force enumeration") {
     }
   }
   CHECK(st::posterior_state1(model, {}).empty());
+}
+
+// DE-01: weighted proportions and the paired comparison. Reference values from the
+// formulas in tools/eval/README.md ("Intervals"), computed independently in Python.
+TEST_CASE("wilson: the score interval, on an effective size") {
+  const st::Interval eight = st::wilson(0.8, 10.0, st::kZTwoSided95);
+  CHECK(eight.low == Approx(0.4901624691221323).epsilon(1e-12));
+  CHECK(eight.high == Approx(0.9433178490622331).epsilon(1e-12));
+  const st::Interval none = st::wilson(0.0, 5.0, st::kZTwoSided95);
+  CHECK(none.low == 0.0);
+  CHECK(none.high == Approx(0.43448246865939283).epsilon(1e-12));
+  const st::Interval all = st::wilson(1.0, 5.0, st::kZTwoSided95);
+  CHECK(all.low == Approx(0.5655175313406071).epsilon(1e-12));
+  CHECK(all.high == 1.0);
+  const st::Interval empty = st::wilson(0.5, 0.0, st::kZTwoSided95);
+  CHECK(empty.low == 0.0);
+  CHECK(empty.high == 1.0);
+  // Weights 1, 1 and 4 on outcomes 1, 0 and 1: p = 5/6 on an effective size of 2.
+  CHECK(st::effective_size(6.0, 18.0) == Approx(2.0));
+  CHECK(st::effective_size(0.0, 0.0) == 0.0);
+  const st::Interval weighted = st::wilson(5.0 / 6.0, 2.0, st::kZTwoSided95);
+  CHECK(weighted.low == Approx(0.24078024007683524).epsilon(1e-12));
+  CHECK(weighted.high == Approx(0.9874732425595976).epsilon(1e-12));
+}
+
+TEST_CASE("paired_difference_lower: Newcombe's method 10, one-sided") {
+  const st::PairedSums s{20.0, 10.0, 2.0, 8.0, 40.0};
+  CHECK(s.difference() == Approx(0.2));
+  CHECK(st::paired_difference_lower(s, st::kZOneSided95) ==
+        Approx(0.06479166431208222).epsilon(1e-10));
+  // Both find every item: no difference, and none shown.
+  const st::PairedSums tie{100.0, 0.0, 0.0, 0.0, 100.0};
+  CHECK(tie.difference() == 0.0);
+  CHECK(st::paired_difference_lower(tie, st::kZOneSided95) ==
+        Approx(-0.02634273241732965).epsilon(1e-10));
+  const st::PairedSums small{5.0, 3.0, 1.0, 1.0, 10.0};
+  CHECK(st::paired_difference_lower(small, st::kZOneSided95) ==
+        Approx(-0.11407546833538817).epsilon(1e-10));
+  CHECK(st::paired_difference_lower(st::PairedSums{}, st::kZOneSided95) == 0.0);
+}
+
+TEST_CASE("mcnemar_one_sided: the exact binomial tail on discordant counts") {
+  CHECK(st::mcnemar_one_sided(10, 2) == Approx(0.019287109375).epsilon(1e-12));
+  CHECK(st::mcnemar_one_sided(3, 1) == Approx(0.3125).epsilon(1e-12));
+  CHECK(st::mcnemar_one_sided(60, 40) == Approx(0.028443966820490395).epsilon(1e-10));
+  CHECK(st::mcnemar_one_sided(0, 4) == 1.0);
+  CHECK(st::mcnemar_one_sided(0, 0) == 1.0);
 }

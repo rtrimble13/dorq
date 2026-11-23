@@ -108,6 +108,17 @@ dorq_eval_test(
   "${STATEMENT_EVAL_ARGS}|--results|${DATA}/eval/statements.jsonl|--results|${DATA}/eval/statements.csv|--gates|${DATA}/eval/statements-gates.txt"
   "distinct conditions / warn and above / 7 / 7 / 1.000 / 2 / 0 / 5 / 0 / 0.286 / 0.286|all gates passed")
 
+# DE-01: an audit sample's labels (--sample), weighted. The weighted shares and their
+# Wilson intervals on the effective size, a second engine's generic flags (codes as
+# prefixes, severity info not counted), and the paired comparison: Newcombe's
+# one-sided lower bound and the exact McNemar p. The figures are computed
+# independently in tools/eval/README.md's formulas.
+dorq_eval_test(
+  eval-weighted-compare
+  "--labels|${DATA}/eval/audit-labels.jsonl|--sample|audit|--results|${DATA}/eval/audit-dorq.jsonl|--compare|${DATA}/eval/audit-flags.jsonl|--compare-name|sql"
+  "all labels / warn and above / 5 / 11 / 3.9 / 0.455 [0.126, 0.828] / 0.636 [0.223, 0.914]|all labels / error / 2 / 7 / 2.0 / 0.571 [0.119, 0.930]|sql / warn and above / 4 / 4 / 0.833 [0.343, 0.980] / 0.833 [0.343, 0.980]|dorq / 4 / 2 / 0.556 [0.158, 0.893]|sql / 4 / 3 / 0.556 [0.158, 0.893]|dorq found / 1 (1) / 4 (1)|dorq missed / 4 (2) / 0 (0)|lower bound (Newcombe, method 10): **-0.638**|p = 0.8750, on 3 discordant labels (1 dorq only, 2 sql only)|Expected calibration error: **0.378**"
+)
+
 # The bars output on a dorq-synth universe, held to fixed hashes: work on another
 # series kind (M9's statements) must not change a bars run. The hashes are this
 # platform's; ADR 0001 promises byte-identical output per platform, and macOS's

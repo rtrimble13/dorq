@@ -228,13 +228,13 @@ TEST_CASE("calibrated: linear between knots, flat beyond them, identity without 
 }
 
 TEST_CASE("isotonic_map: rising knots at six decimals, pooling violators") {
-  std::vector<std::pair<double, double>> points;
+  std::vector<dorq::WeightedPoint> points;
   for (int i = 0; i < 200; ++i) {
     const double p = (i + 0.5) / 200.0;
     // Observed: zero below 0.5 except a bump, one above.
     const bool bump = i % 10 == 0 && p > 0.2 && p < 0.3;
     const double y = p >= 0.5 || bump ? 1.0 : 0.0;
-    points.emplace_back(p, y);
+    points.push_back({p, y});
   }
   const auto map = dorq::isotonic_map(points, 20);
   REQUIRE(map.size() >= 2);
@@ -259,6 +259,24 @@ TEST_CASE("expected calibration error") {
         doctest::Approx(0.0));
   // Half the points at p 0.9 but never faults, half at 0.1 and always.
   CHECK(dorq::expected_calibration_error({{0.9, 0}, {0.1, 1}}) == doctest::Approx(0.9));
+}
+
+TEST_CASE("weighted points: a weight w counts as w copies of the point (DE-01)") {
+  // ECE: one point of weight 3 is three of weight 1.
+  CHECK(dorq::expected_calibration_error({{0.25, 1, 1.0}, {0.25, 0, 3.0}}) ==
+        dorq::expected_calibration_error({{0.25, 1}, {0.25, 0}, {0.25, 0}, {0.25, 0}}));
+  CHECK(dorq::expected_calibration_error({{0.9, 0, 3.0}, {0.1, 1, 1.0}}) ==
+        doctest::Approx((3 * 0.9 + 0.9) / 4.0));
+  // The isotonic map: a bin's x and y are its points' weighted means. One bin per
+  // point (20 bins, two points), so the weights move the pooled knot.
+  const auto map = dorq::isotonic_map({{0.2, 1, 3.0}, {0.6, 0, 1.0}}, 20);
+  REQUIRE(map.size() == 1);
+  CHECK(map.front().first == doctest::Approx(0.3));
+  CHECK(map.front().second == doctest::Approx(0.75));
+  const auto plain = dorq::isotonic_map({{0.2, 1}, {0.6, 0}}, 20);
+  REQUIRE(plain.size() == 1);
+  CHECK(plain.front().first == doctest::Approx(0.4));
+  CHECK(plain.front().second == doctest::Approx(0.5));
 }
 
 // ---------------------------------------------------------------------------
@@ -351,6 +369,29 @@ TEST_CASE("dorq calibrate: fits the labels, writes priors.toml that dorq check r
                                            "1", "--clean-unlabelled", "--name", "test fit"});
   REQUIRE(again.status == 0);
   CHECK(read_text(again_path) == priors);
+
+  // DE-01: a label's weight scales its observations. Weight 1 is no weight, to the
+  // byte; a heavier market fact pulls the fit toward real moves.
+  const auto weighted_fit = [&](const std::string& name, const std::string& weight) {
+    std::string text;
+    std::istringstream lines(u.labels);
+    for (std::string line; std::getline(lines, line);) {
+      if (!weight.empty()) {
+        line.insert(line.size() - 1, R"(,"weight":)" + weight);
+      }
+      text += line + "\n";
+    }
+    const std::string file = path((name + ".jsonl").c_str());
+    const std::string out = path((name + ".toml").c_str());
+    write_file(file, text);
+    const Result run = run_in(
+        dir.path(), {"calibrate", bars.c_str(), "--labels", file.c_str(), "--out", out.c_str(),
+                     "--isolated", "--threads", "2", "--clean-unlabelled", "--name", "test fit"});
+    REQUIRE(run.status == 0);
+    return read_text(out);
+  };
+  CHECK(weighted_fit("unit-weights", "1") == priors);
+  CHECK(weighted_fit("heavy-weights", "4") != priors);
 
   // A context row that cannot be used is skipped with a warning: calibrate reports
   // no violations to carry it as DQ109.
@@ -466,6 +507,25 @@ TEST_CASE("labels: decided_at, applies_until, verified and a cohort's members") 
   CHECK(contains(label_error(R"({"series":"A","date":"2020-01-02","class":"data_error",)"
                              R"("verified":"maybe"})"),
                  "verified \"maybe\" is not true or false"));
+}
+
+TEST_CASE("labels: a sampled label's weight and sample (DE-01)") {
+  const auto labels = labels_of(
+      R"({"series":"A","date":"2020-01-02","class":"data_error","weight":12.5,"sample":"s1"})"
+      "\n"
+      R"({"series":"B","date":"2020-01-02","class":"market_fact"})"
+      "\n");
+  REQUIRE(labels.size() == 2);
+  CHECK(labels[0].weight == 12.5);
+  CHECK(labels[0].sample == "s1");
+  CHECK(labels[1].weight == 1.0);
+  CHECK(labels[1].sample.empty());
+  CHECK(contains(label_error(R"({"series":"A","date":"2020-01-02","class":"data_error",)"
+                             R"("weight":0.5})"),
+                 "weight \"0.5\" is not a number of at least 1"));
+  CHECK(contains(label_error(R"({"series":"A","date":"2020-01-02","class":"data_error",)"
+                             R"("weight":"x"})"),
+                 "labels.jsonl line 1: weight"));
 }
 
 TEST_CASE("labels: a statements label's statement, period type, version and item") {

@@ -247,6 +247,9 @@ struct Judgement {
   // dorq-eval leaves it out of its reliability diagram.
   bool other = false;
   std::array<bool, 4> allowed{};
+  // The largest weight among the labels that decide it: the fault labels covering
+  // it, else the market facts (DE-01).
+  double weight = 1.0;
 };
 
 Judgement judge(const Candidate& c, const std::vector<const Label*>& labels,
@@ -257,10 +260,13 @@ Judgement judge(const Candidate& c, const std::vector<const Label*>& labels,
   bool fact = false;
   std::array<bool, 4> named{};  // the error hypotheses the fault labels name
   bool any_error = false;       // a fault label naming no code of the model
+  double fault_weight = 0.0;
+  double fact_weight = 0.0;
   for (const Label* l : labels) {
     if (l->label_class == LabelClass::kMarketFact) {
       if (covers(*l, c, 0) && c.code.starts_with(l->codes)) {
         fact = true;
+        fact_weight = std::max(fact_weight, l->weight);
       }
       continue;
     }
@@ -268,6 +274,7 @@ Judgement judge(const Candidate& c, const std::vector<const Label*>& labels,
       continue;
     }
     fault = true;
+    fault_weight = std::max(fault_weight, l->weight);
     own = own || expects(*l, c.code);
     if (model == nullptr) {
       continue;
@@ -284,6 +291,11 @@ Judgement judge(const Candidate& c, const std::vector<const Label*>& labels,
   out.labelled = fault || fact;
   out.error = own;
   out.other = fault && !own;
+  if (fault) {
+    out.weight = fault_weight;
+  } else if (fact) {
+    out.weight = fact_weight;
+  }
   if (model == nullptr) {
     return out;
   }
@@ -316,6 +328,7 @@ struct ModelObservation {
   std::array<bool, 4> allowed{};
   bool error = false;
   bool test = false;
+  double weight = 1.0;  // the label's (DE-01)
 };
 
 double log_sum(const ModelObservation& o, const Vec& w, const std::array<bool, 4>& mask) {
@@ -339,7 +352,7 @@ double label_log_lik(const ModelObservation& o, const Vec& w, Vec* gradient) {
       const double share = std::exp(w.at(h) + o.log_likelihood.at(h) - all);
       const double in =
           o.allowed.at(h) ? std::exp(w.at(h) + o.log_likelihood.at(h) - allowed) : 0.0;
-      gradient->at(h) += in - share;
+      gradient->at(h) += o.weight * (in - share);
     }
   }
   return allowed - all;
@@ -347,8 +360,9 @@ double label_log_lik(const ModelObservation& o, const Vec& w, Vec* gradient) {
 
 struct Objective {
   double value = 0.0;
-  double log_lik = 0.0;
+  double log_lik = 0.0;  // weighted
   std::size_t count = 0;
+  double weight = 0.0;  // of the observations counted
 };
 
 Objective objective(const std::vector<ModelObservation>& obs, const Vec& w, const Vec& w0,
@@ -360,8 +374,9 @@ Objective objective(const std::vector<ModelObservation>& obs, const Vec& w, cons
     }
     const double ll = label_log_lik(o, w, gradient);
     if (ll > kNegInf) {
-      out.log_lik += ll;
+      out.log_lik += o.weight * ll;
       ++out.count;
+      out.weight += o.weight;
     }
   }
   out.value = out.log_lik;
@@ -450,7 +465,7 @@ double p_error_of(const ModelObservation& o, const ModelSpec& model, const Vec& 
 // barely saw. A block's rate is shrunk toward its mean x by kPseudoCount
 // observations, so that a few labels cannot pin it at 0 or 1. Beyond kMaxKnots,
 // the adjacent pair of blocks with the fewest points is merged first.
-std::vector<std::pair<double, double>> pav_map(std::vector<std::pair<double, double>> points) {
+std::vector<std::pair<double, double>> pav_map(std::vector<WeightedPoint> points) {
   constexpr std::size_t kMaxKnots = 40;
   constexpr double kPseudoCount = 2.0;
   std::sort(points.begin(), points.end());
@@ -468,8 +483,8 @@ std::vector<std::pair<double, double>> pav_map(std::vector<std::pair<double, dou
     }
   };
   std::vector<Block> blocks;
-  for (const auto& [x, y] : points) {
-    blocks.push_back({x, y, 1.0});
+  for (const WeightedPoint& point : points) {
+    blocks.push_back({point.weight * point.x, point.weight * point.y, point.weight});
     while (blocks.size() > 1 && blocks[blocks.size() - 2].y() >= blocks.back().y()) {
       const Block last = blocks.back();
       blocks.pop_back();
@@ -615,6 +630,7 @@ std::optional<ModelObservation> observation_of(const Candidate& c, const Judgeme
   // DQ912 label on a DQ911 candidate is the value model's unit_error).
   o.error = fault_of(j, spec);
   o.test = test;
+  o.weight = j.weight;
   bool any = false;
   for (std::size_t h = 0; h < 4; ++h) {
     const auto it = std::find_if(c.hypotheses.begin(), c.hypotheses.end(),
@@ -640,6 +656,7 @@ struct Point {
   bool test = false;
   int model = -1;
   std::size_t index = 0;
+  double weight = 1.0;
 };
 
 struct Observations {
@@ -677,7 +694,7 @@ Observations observe(const std::vector<Candidate>& candidates, const LabelIndex&
         }
       }
     }
-    Point point{c.p_error, j.error, test, -1, 0};
+    Point point{c.p_error, j.error, test, -1, 0, j.weight};
     if (spec != nullptr) {
       const auto m = static_cast<std::size_t>(model);
       if (const auto o =
@@ -736,7 +753,7 @@ Vec fit_model(std::size_t m, const std::vector<ModelObservation>& o, const State
   fit.after.assign(after.begin(), after.end());
   const auto mean = [&](const Vec& weights, bool test) {
     const Objective x = objective(o, weights, w0, test, nullptr);
-    return x.count > 0 ? x.log_lik / static_cast<double>(x.count) : 0.0;
+    return x.count > 0 ? x.log_lik / x.weight : 0.0;
   };
   fit.mean_log_lik_before = mean(w0, false);
   fit.mean_log_lik_after = mean(w, false);
@@ -745,7 +762,7 @@ Vec fit_model(std::size_t m, const std::vector<ModelObservation>& o, const State
   return w;
 }
 
-using Pairs = std::vector<std::pair<double, double>>;
+using Pairs = std::vector<WeightedPoint>;
 
 // One sub-family's map, fitted on its training points under the fitted priors.
 // Its calibration error before and after is measured on the held-out points, or on
@@ -766,23 +783,23 @@ void fit_family(std::size_t f, const Observations& obs, const std::array<Vec, 3>
     fam.errors += p.error ? 1 : 0;
     const double y = p.error ? 1.0 : 0.0;
     if (!p.test) {
-      train.emplace_back(refit, y);
+      train.push_back({refit, y, p.weight});
     }
     if (p.test == held_out) {
-      check_before.emplace_back(config.statements.calibration.apply_family(f, p.p), y);
-      check_after.emplace_back(refit, y);
+      check_before.push_back({config.statements.calibration.apply_family(f, p.p), y, p.weight});
+      check_after.push_back({refit, y, p.weight});
     }
   }
   const auto errors = static_cast<std::size_t>(
-      std::count_if(train.begin(), train.end(), [](const auto& x) { return x.second > 0.5; }));
+      std::count_if(train.begin(), train.end(), [](const auto& x) { return x.y > 0.5; }));
   if (options.isotonic && train.size() >= kMinMapObservations && errors >= kMinMapClass &&
       train.size() - errors >= kMinMapClass) {
     fam.map = pav_map(train);
   }
   StatementCalibration only;
   only.maps.at(f) = fam.map;
-  for (auto& [p, y] : check_after) {
-    p = only.apply_family(f, p);
+  for (WeightedPoint& point : check_after) {
+    point.x = only.apply_family(f, point.x);
   }
   fam.ece_before = expected_calibration_error(check_before);
   fam.ece_after = expected_calibration_error(check_after);

@@ -852,6 +852,26 @@ TEST_CASE("dorq calibrate on statements: the priors and maps, which dorq check r
   REQUIRE(again.status == 0);
   CHECK(read_text(dir.path() / "again.toml") == toml);
 
+  // DE-01: a label's weight scales its observations. Weight 1 is no weight, to the
+  // byte; heavier labels move the fit.
+  const auto weighted = [&](const char* weight, const char* out) {
+    std::string text;
+    std::istringstream in(labels);
+    for (std::string line; std::getline(in, line);) {
+      text += R"({"weight":)" + std::string{weight} + "," + line.substr(1) + "\n";
+    }
+    write_file(dir.path() / "weighted.jsonl", text);
+    const std::string weighted_file = (dir.path() / "weighted.jsonl").string();
+    const Result run =
+        run_in(dir.path(), {"calibrate", file.c_str(), "--labels", weighted_file.c_str(), "--items",
+                            items.c_str(), "--config", config.c_str(), "--clean-unlabelled",
+                            "--threads", "2", "--name", "synthetic", "--out", out});
+    REQUIRE(run.status == 0);
+    return read_text(dir.path() / out);
+  };
+  CHECK(weighted("1", "unit.toml") == toml);
+  CHECK(weighted("20", "heavy.toml") != toml);
+
   // dorq check reads it, and still finds the faults.
   write_file(dir.path() / "fitted.toml", "include = \"fit.toml\"\n" + std::string{kConfig});
   const std::string fitted = (dir.path() / "fitted.toml").string();

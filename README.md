@@ -65,7 +65,10 @@ history: fafnir's own repair decisions ([doc/calibration.md](doc/calibration.md)
 [doc/labels.md](doc/labels.md)). On statements it fits the value, identity and
 filing-date models' priors and a `p_error` map per sub-family to fafnir's statement
 labels: SF1's corrections and the flags closed on the filing. [dorq-eval](tools/eval/README.md) reports
-precision, recall, calibration and precision@k against labels. fafnir runs dorq as
+precision, recall, calibration and precision@k against labels. Sampled labels
+carry a weight, and dorq-eval and `dorq calibrate` honour it: dorq-eval's estimates
+come with 95% intervals, and it compares two engines' recall on one label set with
+a paired test. fafnir runs dorq as
 a second data-quality engine, in shadow until the cutover criteria are met (fafnir's
 doc/dorq.md), with [priors/fafnir.toml](priors/fafnir.toml) as its configuration.
 The [development plan](doc/plans/dorq-development-plan.md) sets out what comes when.

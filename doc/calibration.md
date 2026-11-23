@@ -59,6 +59,7 @@ dorq calibrate bars.csv --labels labels.jsonl --config priors/fafnir.toml \
    ([labels.md](labels.md#what-the-price-model-learns-from-a-label)). Every
    label is used, whatever its `applies_until` or `verified`: the fit runs on
    the series as they stood (`--restore`), which is what the labels describe.
+   An observation carries its label's `weight` ([Weights](#weights)).
 2. **Priors.** The objective is the sum over observations of
    log P(the label's hypotheses | the evidence). It is the labels' marginal
    likelihood given the priors. A Gaussian penalty keeps each log prior within
@@ -82,6 +83,32 @@ dorq calibrate bars.csv --labels labels.jsonl --config priors/fafnir.toml \
 Determinism holds throughout. The series are scored in input order, the fit
 starts from the configured priors, and knots are rounded to six decimals. The
 same input, labels and configuration therefore give the same file.
+
+## Weights
+
+A label drawn in a sample carries a `weight`, 1 / the probability that the sample
+included it ([labels.md](labels.md#sampled-labels)), and since 0.15.0 the fit
+honours it. A sample drawn unevenly, with a rare code or the moves near a
+threshold oversampled, then fits the population it was drawn from rather than
+its own mix.
+
+- An observation's weight is its label's. When several labels cover a scored
+  move, the label that decides it does: on bars the fault before the market
+  fact, on statements the largest weight among the fault labels covering the
+  candidate, else among the market facts.
+- The objective sums each observation's log P(label | evidence) times its weight,
+  and so does its gradient. The penalty on the priors is unchanged. The mean
+  log-likelihood per observation, which picks the hyperparameters and is
+  reported, is per unit of weight.
+- The p_error maps fit weighted points. For the price model, a bin's mean
+  `p_error` and error rate are its points' weighted means, and the bins pool by
+  their weight. On statements, each point starts a block of its weight. The
+  equal-count bins and the minimum observations a statements map needs are
+  still counted in labels, not weight.
+- The expected calibration error weighs each point by its weight.
+
+A label without a weight weighs 1, so labels without weights fit exactly as
+before.
 
 ## The output
 
