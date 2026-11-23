@@ -61,14 +61,33 @@ struct StatementFamilyFit {
   double ece_after = 0.0;
 };
 
+// A code's own map (DE-02): on its p_error, or, for a rule with a fixed p_error
+// (DQ902, DQ904, DQ941), on the raw score it reports (detail.score). Fitted when
+// the code has at least [calibration] min_code_observations training points; its
+// findings use it before their sub-family's.
+struct StatementCodeFit {
+  std::string code;
+  bool scored = false;
+  std::size_t observations = 0;
+  std::size_t errors = 0;
+  std::vector<std::pair<double, double>> map;
+  double ece_before = 0.0;  // as configured, on the held-out observations or all
+  double ece_after = 0.0;
+};
+
 struct StatementCalibrationReport {
-  std::size_t labels = 0;            // in the file
+  std::size_t labels = 0;       // in the file
+  std::size_t unverified = 0;   // of those, not verified ([calibration] unverified)
+  std::size_t excluded = 0;     // of those, left out of the fit
+  std::string unverified_rule;  // "exclude", "include" or "weight:x"
+  std::size_t min_code_observations = 0;
   std::size_t statement_labels = 0;  // about statements
   std::size_t matched_labels = 0;    // covering at least one candidate
   std::size_t candidates = 0;        // reported with every candidate shown
   std::array<StatementModelFit, 3> models;
   std::array<StatementFamilyFit, StatementCalibration::kFamilies> families;
-  double ece_before = 0.0;  // over every family's observations
+  std::vector<StatementCodeFit> codes;  // every code with candidates, by code
+  double ece_before = 0.0;              // over every family's observations
   double ece_after = 0.0;
   StatementPriors priors;  // the fitted priors, the rest as configured
   std::string version;

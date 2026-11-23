@@ -143,6 +143,8 @@ cash_flow = "core.cash_flow_statement"
 [calibration]         # written by `dorq calibrate` (doc/calibration.md)
 version = "2026-10"   # names the fit; shown by `dorq config show`
 p_error_map = [[0.02, 0.01], [0.5, 0.3], [0.97, 0.99]]  # raw -> calibrated p_error
+unverified = "exclude"   # what dorq calibrate makes of an unverified label: or "include", "weight:x"
+min_code_observations = 50  # the points a statement code needs for a map of its own
 
 [statements]          # the statement checks' settings: see doc/statements.md
 identity_share = 0.005
@@ -182,6 +184,7 @@ filing_amendment = 0.002
 [statements.calibration]  # from dorq calibrate on statements: see doc/calibration.md
 version = ""
 dq90 = []             # a p_error map per sub-family: dq90 (DQ90x) to dq94 (DQ94x)
+dq903 = []            # a code's own map, used before its sub-family's (DE-02)
 ```
 
 Lists can also be written as one comma-separated string (`ignore = "DQ106, DQ107"`).
@@ -193,7 +196,12 @@ beyond them, and then mapped to a severity. An empty map, the default, leaves
 `p_error` as the model computes it. `[statements.calibration]`'s `dq90` to `dq94`
 are maps of the same form, one for each statement sub-family. They apply to the
 checks whose `p_error` is a model's or a scored rule's: DQ903, DQ904, DQ911 to
-DQ916, DQ919, DQ921, DQ922, DQ931, DQ932 and DQ942.
+DQ916, DQ919, DQ921, DQ922, DQ931, DQ932 and DQ942. A key named for a code (`dq903`,
+`dq912`) is that code's own map, which its findings use before the sub-family's.
+DQ902, DQ904 and DQ941 may have one too: theirs maps the raw score they report
+(`detail.score`) to p_error, in place of the rule's fixed one
+([calibration.md](calibration.md#verified-labels-a-codes-own-map-and-scored-rules)).
+`unverified` and `min_code_observations` are read only by `dorq calibrate`.
 
 ## Include
 

@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "config/config.hpp"
 #include "dorq/date.hpp"
 #include "dorq/series.hpp"
 #include "dorq/statement.hpp"
@@ -86,6 +87,18 @@ struct Label {
 // `period_type`, `version_no` and `item`; a sampled one `weight` (at least 1) and
 // `sample`. Blank lines are skipped. Throws InputError naming the line.
 [[nodiscard]] std::vector<Label> read_labels(std::istream& in, const std::string& source);
+
+// The labels a fit uses, under [calibration] unverified (DE-02). A label that is
+// not verified (`verified` false or absent) is left out ("exclude", the default),
+// kept at its weight times x ("weight:x"), or kept as it is ("include"). Both
+// `dorq calibrate` fits read their labels through it.
+struct FitLabels {
+  std::vector<Label> labels;
+  std::size_t unverified = 0;  // of the input's labels
+  std::size_t excluded = 0;    // of those, left out
+};
+[[nodiscard]] FitLabels fit_labels(const std::vector<Label>& labels,
+                                   const CalibrationSettings& settings);
 
 // Rebuilds series as they stood before repairs: each restore row replaces the
 // series' row on its date (or is added), and the labels' `remove` dates are

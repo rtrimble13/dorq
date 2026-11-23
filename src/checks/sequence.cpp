@@ -242,6 +242,18 @@ void judge_gap(const CheckInfo& info, const SeriesContext& context, const Period
   if (ends.size() > 1) {
     v.end_date = ends.back();
   }
+  // The raw score (DE-02): how overdue the first missing period's filing is, in
+  // the issuer's usual lag's spreads past its median. A period is missing from 3
+  // spreads, which scores 0; the score rises towards 1. With a map of DQ941's own,
+  // p_error is the score through it, and the severity follows.
+  const double overdue =
+      (static_cast<double>(latest_known(s).days() - ends.front().days()) - lag.median) / lag.sd;
+  const double score = overdue > 3.0 ? 1.0 - 3.0 / overdue : 0.0;
+  v.detail.push_back({"score", score});
+  if (const auto p = context.statement_config().calibration.apply_score(info.code, score)) {
+    v.p_error = *p;
+    v.severity = context.thresholds.for_probability(*p).value_or(Severity::kInfo);
+  }
   SuggestedAction action{"load_period", {}, {}};
   action.fields.push_back({"fiscal_date", ends.front().to_string()});
   action.text = "load the " + std::string{what} + " ending about " + ends.front().to_string() +

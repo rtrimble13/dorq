@@ -69,6 +69,9 @@ struct Fit {
 
 struct CalibrationReport {
   std::size_t labels = 0;          // in the file
+  std::size_t unverified = 0;      // of those, not verified ([calibration] unverified)
+  std::size_t excluded = 0;        // of those, left out of the fit
+  std::string unverified_rule;     // "exclude", "include" or "weight:x"
   std::size_t price_labels = 0;    // about price moves (DQ2xx, DQ601), or market facts
   std::size_t matched_labels = 0;  // with at least one scored move
   std::size_t observations = 0;
