@@ -319,6 +319,8 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 - [dorq-eval](tools/eval/README.md): precision, recall, reliability diagrams and
   precision@k against labels, as markdown and HTML
 - [Development plan](doc/plans/dorq-development-plan.md): goals, checks, models, milestones
+- [Efficacy plan](doc/plans/dorq-efficacy-plan.md): what makes dorq better than the
+  threshold checks it replaces, on precision and recall, and the work items (DE) that get it there
 - [Architecture decisions](doc/adr/)
 - [Contributing](CONTRIBUTING.md): conventions, tests, dependencies, releasing
 
