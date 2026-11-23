@@ -725,7 +725,7 @@ std::string statements_label(const std::string& series, const std::string& date,
                              const std::string& statement, const std::string& item,
                              const std::string& expect) {
   return R"({"series":")" + series + R"(","date":")" + date +
-         R"(","class":"data_error","statement":")" + statement +
+         R"(","class":"data_error","verified":true,"statement":")" + statement +
          R"(","period_type":"quarter","version_no":1,)" +
          (item.empty() ? std::string{} : R"("item":")" + item + "\",") + R"("expect":")" + expect +
          "\"}\n";
@@ -779,6 +779,66 @@ TEST_CASE("--restore on statements: superseded rows by their key, and missing on
         std::vector<std::string>{std::string{"FIXED "} + kIncomeQ +
                                  R"("fiscal_date":"2012-09-30","version_no":1,"item":"revenue"})"});
   CHECK(reports_of(restored.out, "DQ941").empty());  // added from the restore file
+}
+
+TEST_CASE("DE-02: [calibration] unverified, a code's own map, and a scored rule's map") {
+  const dorq::Config config = dorq::parse_config(R"(
+[calibration]
+unverified = "weight:0.25"
+min_code_observations = 30
+
+[statements.calibration]
+dq912 = [[0.0, 0.1], [1.0, 0.3]]
+dq904 = [[0.0, 0.2], [1.0, 0.6]]
+)",
+                                                 "c.toml", false);
+  CHECK(config.calibration.unverified == dorq::CalibrationSettings::Unverified::kWeight);
+  CHECK(config.calibration.unverified_weight == doctest::Approx(0.25));
+  CHECK(config.calibration.min_code_observations == 30);
+  CHECK(dorq::unverified_text(config.calibration) == "weight:0.25");
+  CHECK(dorq::unverified_text(dorq::CalibrationSettings{}) == "exclude");
+  const dorq::StatementCalibration& c = config.statements.calibration;
+  CHECK_FALSE(c.empty());
+  // A code's own map comes before its sub-family's; a code without one keeps its
+  // sub-family's (none here).
+  CHECK(c.apply("DQ912", 0.5) == doctest::Approx(0.2));
+  CHECK(c.apply("DQ911", 0.5) == doctest::Approx(0.5));
+  // A scored rule's own map is for its score; its fixed p_error is unchanged.
+  const std::optional<double> scored = c.apply_score("DQ904", 0.5);
+  REQUIRE(scored.has_value());
+  CHECK(*scored == doctest::Approx(0.4));
+  CHECK(c.apply("DQ904", 0.85) == doctest::Approx(0.85));
+  CHECK_FALSE(c.apply_score("DQ941", 0.5).has_value());  // no map of its own
+  CHECK_FALSE(c.apply_score("DQ912", 0.5).has_value());  // not a scored rule
+  for (const char* code : {"DQ902", "DQ904", "DQ941"}) {
+    CAPTURE(code);
+    CHECK(dorq::StatementCalibration::scored(code));
+    CHECK(dorq::StatementCalibration::takes_code_map(code));
+  }
+  for (const char* code : {"DQ901", "DQ943", "DQ944", "DQ951"}) {
+    CAPTURE(code);
+    CHECK_FALSE(dorq::StatementCalibration::takes_code_map(code));
+  }
+  // Both round-trip through config show.
+  const dorq::Config again = dorq::parse_config(dorq::to_toml(config), "again.toml", false);
+  CHECK(again.statements == config.statements);
+  CHECK(again.calibration == config.calibration);
+  CHECK(dorq::config_hash(again) == dorq::config_hash(config));
+  // Unset, the fit's settings leave a config's hash as it was.
+  const dorq::Config versioned =
+      dorq::parse_config("[calibration]\nversion = \"v\"\n", "v.toml", false);
+  dorq::Config same = versioned;
+  same.calibration = dorq::CalibrationSettings{};
+  CHECK(dorq::config_hash(same) == dorq::config_hash(versioned));
+  for (const char* bad :
+       {"[calibration]\nunverified = \"weight:0\"\n",
+        "[calibration]\nunverified = \"weight:1.5\"\n", "[calibration]\nunverified = \"maybe\"\n",
+        "[calibration]\nmin_code_observations = 1\n",
+        "[statements.calibration]\ndq901 = [[0.1, 0.2]]\n",
+        "[statements.calibration]\ndq951 = [[0.1, 0.2]]\n"}) {
+    CAPTURE(bad);
+    CHECK_THROWS_AS((void)dorq::parse_config(bad, "bad.toml", false), dorq::ConfigError);
+  }
 }
 
 TEST_CASE("dorq calibrate on statements: the priors and maps, which dorq check reads") {
@@ -851,6 +911,68 @@ TEST_CASE("dorq calibrate on statements: the priors and maps, which dorq check r
   const Result again = fit("again.toml", "1");
   REQUIRE(again.status == 0);
   CHECK(read_text(dir.path() / "again.toml") == toml);
+
+  // DE-02: a label not verified is left out by default; "include" keeps it, and
+  // the fit is the one on verified labels.
+  {
+    std::string plain;
+    std::istringstream in(labels);
+    for (std::string line; std::getline(in, line);) {
+      const std::string mark = R"("verified":true,)";
+      if (const auto at = line.find(mark); at != std::string::npos) {
+        line.erase(at, mark.size());
+      }
+      plain += line + "\n";
+    }
+    write_file(dir.path() / "plain.jsonl", plain);
+    const std::string plain_file = (dir.path() / "plain.jsonl").string();
+    const auto fit_with = [&](const std::string& extra, const char* out) {
+      const std::string name = std::string{out} + ".config.toml";
+      write_file(dir.path() / name, std::string{kConfig} + extra);
+      const std::string cfg = (dir.path() / name).string();
+      return run_in(dir.path(),
+                    {"calibrate", file.c_str(), "--labels", plain_file.c_str(), "--items",
+                     items.c_str(), "--config", cfg.c_str(), "--clean-unlabelled", "--threads", "1",
+                     "--name", "synthetic", "--out", out});
+    };
+    const auto without_comments = [](const std::string& text) {
+      std::string out;
+      std::istringstream lines(text);
+      for (std::string line; std::getline(lines, line);) {
+        if (!line.starts_with("#")) {
+          out += line + "\n";
+        }
+      }
+      return out;
+    };
+    const Result excluded = fit_with("", "excluded.toml");
+    INFO(excluded.err);
+    REQUIRE(excluded.status == 0);
+    CHECK(contains(excluded.out, "labels: 8 (0 about statements, 0 matched)"));
+    CHECK(contains(excluded.out, "unverified labels: 8 (exclude: 8 left out)"));
+    const Result included =
+        fit_with("\n[calibration]\nunverified = \"include\"\n", "included.toml");
+    REQUIRE(included.status == 0);
+    CHECK(contains(included.out, "labels: 8 (8 about statements, 8 matched)"));
+    CHECK(contains(included.out, "unverified labels: 8 (include: 0 left out)"));
+    CHECK(without_comments(read_text(dir.path() / "included.toml")) == without_comments(toml));
+    const Result light = fit_with("\n[calibration]\nunverified = \"weight:0.05\"\n", "light.toml");
+    REQUIRE(light.status == 0);
+    CHECK(contains(light.out, "unverified labels: 8 (weight:0.05: 0 left out)"));
+    CHECK(without_comments(read_text(dir.path() / "light.toml")) != without_comments(toml));
+    // Each code's own fit is reported; dorq check reads whatever maps it wrote.
+    const Result codes = fit_with(
+        "\n[calibration]\nunverified = \"include\"\nmin_code_observations = 2\n", "codes.toml");
+    REQUIRE(codes.status == 0);
+    CHECK(contains(codes.out, "DQ912: "));
+    write_file(dir.path() / "with-codes.toml", "include = \"codes.toml\"\n" + std::string{kConfig});
+    const std::string with_codes = (dir.path() / "with-codes.toml").string();
+    const Result read_back =
+        run_in(dir.path(), {"--config", with_codes.c_str(), "--items", items.c_str(), "--select",
+                            "DQ9", "--format", "jsonl", "--exit-zero", file.c_str()});
+    INFO(read_back.err);
+    CHECK(read_back.status == 0);
+  }
 
   // DE-01: a label's weight scales its observations. Weight 1 is no weight, to the
   // byte; heavier labels move the fit.

@@ -484,4 +484,29 @@ void Restorer::apply(Series& series) const {
   series = std::move(out);
 }
 
+FitLabels fit_labels(const std::vector<Label>& labels, const CalibrationSettings& settings) {
+  FitLabels out;
+  out.labels.reserve(labels.size());
+  for (const Label& l : labels) {
+    if (l.verified == true) {
+      out.labels.push_back(l);
+      continue;
+    }
+    ++out.unverified;
+    switch (settings.unverified) {
+      case CalibrationSettings::Unverified::kExclude:
+        ++out.excluded;
+        break;
+      case CalibrationSettings::Unverified::kWeight:
+        out.labels.push_back(l);
+        out.labels.back().weight *= settings.unverified_weight;
+        break;
+      case CalibrationSettings::Unverified::kInclude:
+        out.labels.push_back(l);
+        break;
+    }
+  }
+  return out;
+}
+
 }  // namespace dorq

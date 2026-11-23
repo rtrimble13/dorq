@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -322,12 +323,16 @@ struct StatementPriors {
 };
 
 // [statements.calibration]: monotone maps from a statement check's p_error to the
-// rate at which labelled findings were errors, one per sub-family (DQ90x to DQ94x),
-// from `dorq calibrate` (DR-0911). An empty map leaves p_error as the model gives it.
+// rate at which labelled findings were errors, from `dorq calibrate`: one per
+// sub-family (DQ90x to DQ94x; DR-0911), and one per code that had enough labels
+// (DE-02), which a code's findings use before its sub-family's. An empty map leaves
+// p_error as the model gives it.
 struct StatementCalibration {
   static constexpr std::size_t kFamilies = 5;  // DQ90x, DQ91x, DQ92x, DQ93x, DQ94x
+  using Map = std::vector<std::pair<double, double>>;
   std::string version;
-  std::array<std::vector<std::pair<double, double>>, kFamilies> maps;
+  std::array<Map, kFamilies> maps;
+  std::map<std::string, Map, std::less<>> codes;  // by code ("DQ903")
 
   // The sub-family of a statement code (DQ903 -> 0), or nullopt for another code.
   [[nodiscard]] static std::optional<std::size_t> family(std::string_view code) noexcept;
@@ -335,13 +340,41 @@ struct StatementCalibration {
   // (DQ903, DQ904, DQ911 to DQ916, DQ919, DQ921, DQ922, DQ931, DQ932, DQ942), not a
   // rule's fixed one (DQ901, DQ902, DQ941, DQ943, DQ944) nor DQ95x's.
   [[nodiscard]] static bool mapped(std::string_view code) noexcept;
-  // p_error through its sub-family's map, for a mapped code.
+  // Whether a code is a rule with a fixed p_error that also reports a raw score, a
+  // monotone function of its own evidence (detail.score): DQ902, DQ904 and DQ941
+  // (DE-02). Only the code's own map takes the score.
+  [[nodiscard]] static bool scored(std::string_view code) noexcept;
+  // Whether a code may have a map of its own: a mapped or a scored one.
+  [[nodiscard]] static bool takes_code_map(std::string_view code) noexcept;
+  // p_error through the code's own map, else its sub-family's, for a mapped code.
+  // A scored code's own map is for its score (apply_score), so here it takes only
+  // its sub-family's.
   [[nodiscard]] double apply(std::string_view code, double p) const noexcept;
+  // A scored code's score through its own map, or nullopt when it has none.
+  [[nodiscard]] std::optional<double> apply_score(std::string_view code,
+                                                  double score) const noexcept;
   // p through sub-family f's map (DQ90x is 0).
   [[nodiscard]] double apply_family(std::size_t f, double p) const noexcept;
+  // p through `map`: linear between knots, flat beyond them; p itself when empty.
+  [[nodiscard]] static double through(const Map& map, double p) noexcept;
   [[nodiscard]] bool empty() const noexcept;
   bool operator==(const StatementCalibration&) const = default;
 };
+
+// [calibration] settings that only `dorq calibrate` reads (DE-02): what a fit makes
+// of a label that is not verified (`verified` false or absent), and the fewest
+// observations a statement code needs for a map of its own. They change no check's
+// output, and enter config_hash only when set.
+struct CalibrationSettings {
+  enum class Unverified : std::uint8_t { kExclude, kWeight, kInclude };
+  Unverified unverified = Unverified::kExclude;
+  double unverified_weight = 1.0;  // with kWeight: in (0, 1]
+  std::size_t min_code_observations = 50;
+  bool operator==(const CalibrationSettings&) const = default;
+};
+
+// `unverified` as the config file writes it: "exclude", "include" or "weight:0.5".
+[[nodiscard]] std::string unverified_text(const CalibrationSettings& settings);
 
 // [statements]: the judgements the statement checks make (doc/statements.md). What
 // an item is comes from --items; these are the settings a check applies to them.
@@ -448,6 +481,7 @@ struct Config {
   std::string items_digest;
   // [calibration] version: names the calibration in use (`dorq calibrate`).
   std::string calibration_version;
+  CalibrationSettings calibration;
 
   // Where the settings came from; empty when nothing was read.
   std::filesystem::path source;

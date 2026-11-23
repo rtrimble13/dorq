@@ -548,13 +548,30 @@ std::vector<CashTie> cash_ties(const SeriesContext& context, const std::vector<s
   return ties;
 }
 
+// A broken tie's finding. Its p_error is the rule's fixed one, through the
+// sub-family's map; with a map of DQ904's own (DE-02), the raw score through it.
+// The score is monotone in the evidence and keeps the rule's ranking: each kind
+// of break has a quarter of [0, 1), in the order of its fixed p_error (a quarter
+// sum with no clear row 0.7, a cash tie alone 0.85, a quarter sum with one 0.9, a
+// cash pair that cancels 0.95), and within it rises with how far the gap is beyond
+// its tolerance.
 Violation tie_finding(const CheckInfo& info, const SeriesContext& context, std::size_t row,
-                      double p_error) {
+                      double p_error, double score) {
   const Series& s = context.series;
   Violation v = statement_finding(info, s, row, true);
-  v.p_error = context.statement_config().calibration.apply(info.code, p_error);
+  const StatementCalibration& calibration = context.statement_config().calibration;
+  v.p_error =
+      calibration.apply_score(info.code, score).value_or(calibration.apply(info.code, p_error));
   v.severity = context.thresholds.for_probability(v.p_error).value_or(Severity::kInfo);
+  v.detail.push_back({"score", score});
   return v;
+}
+
+// How far beyond its tolerance a gap is, as a share in [0, 1): 0 at the
+// tolerance, towards 1 as the gap grows.
+double beyond(double gap, double tolerance) {
+  const double g = std::fabs(gap);
+  return g > 0.0 && g > tolerance ? 1.0 - tolerance / g : 0.0;
 }
 
 // The change in cash against the cash flow's net change. Two broken ties that
@@ -583,7 +600,9 @@ void judge_cash(const CheckInfo& info, const SeriesContext& context, std::vector
           k + 1 < ties.size() && ties[k + 1].broken && ties[k + 1].before == tie.after &&
           std::fabs(tie.gap + ties[k + 1].gap) <= std::min(tie.tolerance, ties[k + 1].tolerance);
       if (pair) {
-        Violation v = tie_finding(info, context, tie.after, 0.95);
+        const double score = 0.75 + 0.25 * std::min(beyond(tie.gap, tie.tolerance),
+                                                    beyond(ties[k + 1].gap, ties[k + 1].tolerance));
+        Violation v = tie_finding(info, context, tie.after, 0.95, score);
         v.known = std::max({known_of(s, tie.before), known_of(s, tie.after), known_of(s, tie.flow),
                             known_of(s, ties[k + 1].flow)});
         v.message = settings.cash_tie.at(0) +
@@ -600,7 +619,8 @@ void judge_cash(const CheckInfo& info, const SeriesContext& context, std::vector
         ++k;
         continue;
       }
-      Violation v = tie_finding(info, context, tie.flow, 0.85);
+      Violation v =
+          tie_finding(info, context, tie.flow, 0.85, 0.25 + 0.25 * beyond(tie.gap, tie.tolerance));
       v.known = std::max({known_of(s, tie.before), known_of(s, tie.after), known_of(s, tie.flow)});
       v.message = "the change in " + settings.cash_tie.at(0) + " since " +
                   s.date[tie.before].to_string() + " is not " + settings.cash_tie.at(1) +
@@ -739,7 +759,8 @@ void judge_quarter_sums(const CheckInfo& info, const SeriesContext& context,
       const bool clear = lead.margin >= 0.5;
       const double p_error = clear ? 0.9 : 0.7;
       const double rest = clear ? 0.1 : 0.3;
-      Violation v = tie_finding(info, context, row, p_error);
+      const double score = (clear ? 0.5 : 0.0) + 0.25 * beyond(lead.gap, lead.tolerance);
+      Violation v = tie_finding(info, context, row, p_error, score);
       Date known = known_of(s, annual.front());
       for (const std::size_t r : q) {
         known = std::max(known, known_of(s, r));

@@ -568,10 +568,16 @@ CalibrationReport calibrate(const std::vector<Series>& series, const std::vector
                             const CalibrateOptions& options) {
   CalibrationReport report;
   report.labels = labels.size();
-  report.price_labels = static_cast<std::size_t>(std::count_if(
-      labels.begin(), labels.end(), [](const Label& l) { return allowed_for(l).has_value(); }));
+  // The labels the fit uses, under [calibration] unverified (DE-02).
+  const FitLabels kept = fit_labels(labels, config.calibration);
+  report.unverified = kept.unverified;
+  report.excluded = kept.excluded;
+  report.unverified_rule = unverified_text(config.calibration);
+  report.price_labels = static_cast<std::size_t>(
+      std::count_if(kept.labels.begin(), kept.labels.end(),
+                    [](const Label& l) { return allowed_for(l).has_value(); }));
   report.version = options.version;
-  Collector collector(series, labels, config, calendar, context, options);
+  Collector collector(series, kept.labels, config, calendar, context, options);
   const PricePriors& base = config.price.priors;
   const Weights w0 = log_weights(base);
   const Hyper given{config.price.jump_prob, config.price.jump_scale, config.price.ratio_tolerance};
@@ -654,6 +660,8 @@ std::string priors_toml(const CalibrationReport& r) {
   out += "# config file: include = \"priors.toml\". See doc/calibration.md.\n#\n";
   out += "# labels: " + std::to_string(r.labels) + ", of which " + std::to_string(r.price_labels) +
          " about price moves and " + std::to_string(r.matched_labels) + " matching a scored move\n";
+  out += "# unverified labels: " + std::to_string(r.unverified) + " (" + r.unverified_rule + ": " +
+         std::to_string(r.excluded) + " left out)\n";
   out += "# observations: " + std::to_string(r.observations) + " (" + std::to_string(r.errors) +
          " errors), " + std::to_string(r.test_observations) + " held out\n";
   out += "# settings tried: " + std::to_string(r.settings_tried) + "\n";
@@ -693,6 +701,8 @@ std::string calibration_summary(const CalibrationReport& r) {
   std::string out;
   out += "labels: " + std::to_string(r.labels) + " (" + std::to_string(r.price_labels) +
          " about price moves, " + std::to_string(r.matched_labels) + " matched)\n";
+  out += "unverified labels: " + std::to_string(r.unverified) + " (" + r.unverified_rule + ": " +
+         std::to_string(r.excluded) + " left out)\n";
   out += "observations: " + std::to_string(r.observations) + " (" + std::to_string(r.errors) +
          " errors, " + std::to_string(r.test_observations) + " held out)\n";
   out += "settings tried: " + std::to_string(r.settings_tried) + "; chosen jump_prob " +

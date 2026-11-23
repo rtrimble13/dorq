@@ -506,6 +506,33 @@ void read_fafnir(const toml::table& table, const std::string& where, Config& con
   }
 }
 
+// [calibration] unverified: "exclude", "include" or "weight:<x>" with x in (0, 1].
+void read_unverified(const toml::node& node, const std::string& where, const std::string& path,
+                     CalibrationSettings& settings) {
+  const std::string text = read_string(node, where, path);
+  if (text == "exclude") {
+    settings.unverified = CalibrationSettings::Unverified::kExclude;
+    settings.unverified_weight = 1.0;
+    return;
+  }
+  if (text == "include") {
+    settings.unverified = CalibrationSettings::Unverified::kInclude;
+    settings.unverified_weight = 1.0;
+    return;
+  }
+  constexpr std::string_view kWeight = "weight:";
+  if (text.starts_with(kWeight)) {
+    const ParsedNumber x = parse_number(std::string_view{text}.substr(kWeight.size()));
+    if (x.status == ParsedNumber::Status::kOk && x.value > 0.0 && x.value <= 1.0) {
+      settings.unverified = CalibrationSettings::Unverified::kWeight;
+      settings.unverified_weight = x.value;
+      return;
+    }
+  }
+  fail(where, node,
+       "\"" + path + "\" must be \"exclude\", \"include\" or \"weight:<x>\" with x in (0, 1]");
+}
+
 void read_calibration(const toml::table& table, const std::string& where, Config& config) {
   for (const auto& [sub_node, value] : table) {
     const std::string path = key_path("calibration", sub_node.str());
@@ -513,6 +540,11 @@ void read_calibration(const toml::table& table, const std::string& where, Config
       config.calibration_version = read_string(value, where, path);
     } else if (sub_node.str() == "p_error_map") {
       config.price.p_error_map = read_p_error_map(value, where, path);
+    } else if (sub_node.str() == "unverified") {
+      read_unverified(value, where, path, config.calibration);
+    } else if (sub_node.str() == "min_code_observations") {
+      config.calibration.min_code_observations =
+          static_cast<std::size_t>(read_int(value, where, path, 2, 1000000000));
     } else {
       fail(where, value, "unknown key \"" + path + "\"");
     }
@@ -613,7 +645,22 @@ void read_statement_calibration(const toml::table& table, const std::string& whe
           read_p_error_map(node, where, path);
       continue;
     }
-    fail(where, node, "unknown key \"" + path + "\" (version, or dq90 to dq94)");
+    // A code's own map (DE-02): dq903, of a code that is mapped or scored.
+    if (key.size() == 5 && key.starts_with("dq9")) {
+      std::string code{key};
+      std::transform(code.begin(), code.end(), code.begin(),
+                     [](char c) { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 32) : c; });
+      if (StatementCalibration::takes_code_map(code)) {
+        calibration.codes[code] = read_p_error_map(node, where, path);
+        continue;
+      }
+      fail(where, node,
+           "\"" + path + "\": " + code +
+               " takes no map (a code's own map is for DQ902 to DQ904, "
+               "DQ911 to DQ916, DQ919, DQ921, DQ922, DQ931, DQ932, DQ941 and DQ942)");
+    }
+    fail(where, node,
+         "unknown key \"" + path + "\" (version, dq90 to dq94, or a code's own, such as dq903)");
   }
 }
 
@@ -1156,6 +1203,18 @@ void append_statements(std::string& out, const StatementSettings& settings, bool
       }
       out += "]";
     }
+    for (const auto& [code, map] : c.codes) {
+      std::string key = code;
+      std::transform(key.begin(), key.end(), key.begin(), [](char ch) {
+        return ch >= 'A' && ch <= 'Z' ? static_cast<char>(ch + 32) : ch;
+      });
+      out += "\n" + key + " = [";
+      for (std::size_t i = 0; i < map.size(); ++i) {
+        const auto& [x, y] = map[i];
+        out += (i == 0 ? "[" : ", [") + format_number(x) + ", " + format_number(y) + "]";
+      }
+      out += "]";
+    }
     out += "\n";
   }
 }
@@ -1537,7 +1596,32 @@ bool StatementCalibration::mapped(std::string_view code) noexcept {
   return std::find(kMapped.begin(), kMapped.end(), code) != kMapped.end();
 }
 
+std::string unverified_text(const CalibrationSettings& settings) {
+  switch (settings.unverified) {
+    case CalibrationSettings::Unverified::kInclude:
+      return "include";
+    case CalibrationSettings::Unverified::kWeight:
+      return "weight:" + format_number(settings.unverified_weight);
+    case CalibrationSettings::Unverified::kExclude:
+      break;
+  }
+  return "exclude";
+}
+
+bool StatementCalibration::scored(std::string_view code) noexcept {
+  return code == "DQ902" || code == "DQ904" || code == "DQ941";
+}
+
+bool StatementCalibration::takes_code_map(std::string_view code) noexcept {
+  return mapped(code) || scored(code);
+}
+
 double StatementCalibration::apply(std::string_view code, double p) const noexcept {
+  if (!scored(code)) {
+    if (const auto it = codes.find(code); it != codes.end() && !it->second.empty()) {
+      return through(it->second, p);
+    }
+  }
   const std::optional<std::size_t> f = family(code);
   if (!f || !mapped(code)) {
     return p;
@@ -1545,11 +1629,26 @@ double StatementCalibration::apply(std::string_view code, double p) const noexce
   return apply_family(*f, p);
 }
 
+std::optional<double> StatementCalibration::apply_score(std::string_view code,
+                                                        double score) const noexcept {
+  if (!scored(code)) {
+    return std::nullopt;
+  }
+  const auto it = codes.find(code);
+  if (it == codes.end() || it->second.empty()) {
+    return std::nullopt;
+  }
+  return through(it->second, score);
+}
+
 double StatementCalibration::apply_family(std::size_t f, double p) const noexcept {
   if (f >= kFamilies) {
     return p;
   }
-  const std::vector<std::pair<double, double>>& map = maps.at(f);
+  return through(maps.at(f), p);
+}
+
+double StatementCalibration::through(const Map& map, double p) noexcept {
   if (map.empty()) {
     return p;
   }
@@ -1568,7 +1667,8 @@ double StatementCalibration::apply_family(std::size_t f, double p) const noexcep
 
 bool StatementCalibration::empty() const noexcept {
   return version.empty() &&
-         std::all_of(maps.begin(), maps.end(), [](const auto& m) { return m.empty(); });
+         std::all_of(maps.begin(), maps.end(), [](const auto& m) { return m.empty(); }) &&
+         codes.empty();
 }
 
 bool Profile::matches(const Series& series, const SeriesMeta* meta) const {
@@ -1787,7 +1887,8 @@ std::string render(const Config& config, bool all_sections) {
     }
   }
 
-  if (!config.calibration_version.empty() || !config.price.p_error_map.empty()) {
+  const bool fit_settings = config.calibration != CalibrationSettings{};
+  if (!config.calibration_version.empty() || !config.price.p_error_map.empty() || fit_settings) {
     out += "\n[calibration]\nversion = ";
     append_toml_string(out, config.calibration_version);
     out += "\np_error_map = [";
@@ -1796,6 +1897,15 @@ std::string render(const Config& config, bool all_sections) {
       out += (i == 0 ? "[" : ", [") + format_number(x) + ", " + format_number(y) + "]";
     }
     out += "]\n";
+    // calibrate's own settings (DE-02), only where set: they change no check's
+    // output, so a config without them keeps its hash.
+    if (fit_settings) {
+      out += "unverified = ";
+      append_toml_string(out, unverified_text(config.calibration));
+      out +=
+          "\nmin_code_observations = " + std::to_string(config.calibration.min_code_observations) +
+          "\n";
+    }
   }
 
   if (all_sections || config.statements != StatementSettings{}) {

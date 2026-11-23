@@ -1047,7 +1047,8 @@ void Generator::run(const Outputs& out) {
     if (!l.codes.empty()) {
       out.labels_jsonl << R"(,"codes":")" << l.codes << '"';
     }
-    out.labels_jsonl << R"(,"source":"dorq-synth"})" << '\n';
+    // Every synthetic label is the truth it was made from: verified (DE-02).
+    out.labels_jsonl << R"(,"verified":true,"source":"dorq-synth"})" << '\n';
   }
   // fafnir's column names (core.corporate_action), as its export would write them.
   out.actions << "security_id,ex_date,action_type,split_numerator,split_denominator,"

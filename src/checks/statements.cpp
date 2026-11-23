@@ -253,8 +253,39 @@ void ImpossibleValue::run(const SeriesContext& context, std::vector<Violation>& 
       bounds.push_back({&bound, lesser, greater});
     }
   }
+  // The raw score (DE-02): how large the impossible value is, against the item's
+  // typical size in the series (its median absolute value) or the item above it.
+  // DQ902's p_error is 1; with a map of its own, the score through it, and the
+  // severity follows.
+  const StatementCalibration& calibration = context.statement_config().calibration;
+  const auto scored = [&](Violation& v, double score) {
+    v.detail.push_back({"score", score});
+    if (const auto p = calibration.apply_score(info().code, score)) {
+      v.p_error = *p;
+      v.severity = context.thresholds.for_probability(*p).value_or(Severity::kInfo);
+    }
+  };
+  std::vector<double> typical;
+  typical.reserve(nonnegative.size());
+  for (const auto& entry : nonnegative) {
+    std::vector<double> sizes;
+    sizes.reserve(entry.second->size());
+    for (const double x : *entry.second) {
+      if (!std::isnan(x)) {
+        sizes.push_back(std::fabs(x));
+      }
+    }
+    double median = 0.0;
+    if (!sizes.empty()) {
+      const auto mid = sizes.begin() + static_cast<std::ptrdiff_t>(sizes.size() / 2);
+      std::nth_element(sizes.begin(), mid, sizes.end());
+      median = *mid;
+    }
+    typical.push_back(median);
+  }
   for (std::size_t i = 0; i < st.size(); ++i) {
-    for (const auto& [item, column] : nonnegative) {
+    for (std::size_t n = 0; n < nonnegative.size(); ++n) {
+      const auto& [item, column] = nonnegative[n];
       const double x = (*column)[i];
       if (std::isnan(x) || x >= 0.0) {
         continue;
@@ -264,6 +295,8 @@ void ImpossibleValue::run(const SeriesContext& context, std::vector<Violation>& 
       v.detail.push_back({"item", *item});
       v.detail.push_back({"value", x});
       v.key.push_back({"item", *item});
+      const double m = typical[n];
+      scored(v, m > 0.0 ? std::fabs(x) / (std::fabs(x) + m) : 1.0);
       out.push_back(std::move(v));
     }
     for (const Bound& b : bounds) {
@@ -282,6 +315,8 @@ void ImpossibleValue::run(const SeriesContext& context, std::vector<Violation>& 
       v.detail.push_back({"bound_value", greater});
       v.key.push_back({"item", b.bound->lesser});
       v.key.push_back({"bound", b.bound->greater});
+      const double excess = greater != 0.0 ? (lesser - greater) / std::fabs(greater) : 0.0;
+      scored(v, greater != 0.0 ? excess / (1.0 + excess) : 1.0);
       out.push_back(std::move(v));
     }
   }

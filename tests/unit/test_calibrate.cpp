@@ -141,10 +141,11 @@ Universe universe() {
                 fixed(std::round(2e6 * std::exp(0.3 * noise.normal())), 0) + "\n";
     }
     u.labels += R"({"series":")" + id + R"(","date":")" + days[bad].to_string() +
-                R"(","class":"data_error","expect":"DQ201","kind":"bad_print"})" + "\n";
+                R"(","class":"data_error","expect":"DQ201","kind":"bad_print","verified":true})" +
+                "\n";
     if (k < 2) {
       u.labels += R"({"series":")" + id + R"(","date":")" + days[jump].to_string() +
-                  R"(","class":"market_fact","kind":"news"})" + "\n";
+                  R"(","class":"market_fact","kind":"news","verified":true})" + "\n";
     }
   }
   return u;
@@ -154,6 +155,35 @@ Universe universe() {
 
 // ---------------------------------------------------------------------------
 // Labels
+
+TEST_CASE("DE-02: a fit's labels under [calibration] unverified") {
+  const auto labels = labels_of(
+      R"({"series":"A","date":"2020-01-02","class":"data_error","verified":true})"
+      "\n"
+      R"({"series":"B","date":"2020-01-02","class":"data_error","verified":false,"weight":4})"
+      "\n"
+      R"({"series":"C","date":"2020-01-02","class":"market_fact"})"
+      "\n");
+  dorq::CalibrationSettings settings;  // exclude, the default
+  const dorq::FitLabels excluded = dorq::fit_labels(labels, settings);
+  REQUIRE(excluded.labels.size() == 1);
+  CHECK(excluded.labels[0].series == "A");
+  CHECK(excluded.unverified == 2);
+  CHECK(excluded.excluded == 2);
+  settings.unverified = dorq::CalibrationSettings::Unverified::kWeight;
+  settings.unverified_weight = 0.5;
+  const dorq::FitLabels weighted = dorq::fit_labels(labels, settings);
+  REQUIRE(weighted.labels.size() == 3);
+  CHECK(weighted.excluded == 0);
+  CHECK(weighted.labels[0].weight == doctest::Approx(1.0));
+  CHECK(weighted.labels[1].weight == doctest::Approx(2.0));
+  CHECK(weighted.labels[2].weight == doctest::Approx(0.5));
+  settings.unverified = dorq::CalibrationSettings::Unverified::kInclude;
+  const dorq::FitLabels all = dorq::fit_labels(labels, settings);
+  REQUIRE(all.labels.size() == 3);
+  CHECK(all.unverified == 2);
+  CHECK(all.labels[1].weight == doctest::Approx(4.0));
+}
 
 TEST_CASE("labels: the JSONL schema, its defaults and its errors") {
   const auto labels = labels_of(
@@ -430,7 +460,7 @@ TEST_CASE("dorq calibrate: fits the labels, writes priors.toml that dorq check r
   const std::string statement_labels = path("statement-labels.jsonl");
   write_file(statement_labels, u.labels + R"({"series":"LIQ01","first":"2015-01-02",)"
                                           R"("last":"2030-01-01","class":"data_error",)"
-                                          R"("statement":"income"})"
+                                          R"("statement":"income","verified":true})"
                                           "\n");
   const std::string statement_priors = path("statement-priors.toml");
   const Result with_statements = run_in(

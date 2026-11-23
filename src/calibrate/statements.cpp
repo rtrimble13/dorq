@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -139,8 +140,9 @@ struct Candidate {
   Date last;
   std::optional<StatementPeriod> period;
   std::string item;
-  std::string scope;     // a value finding's row or era (DQ912), or empty
-  double p_error = 0.0;  // the model's, before any map
+  std::string scope;            // a value finding's row or era (DQ912), or empty
+  double p_error = 0.0;         // the model's, before any map
+  std::optional<double> score;  // a scored rule's raw score (DE-02)
   std::vector<HypothesisProbability> hypotheses;
 };
 
@@ -173,6 +175,13 @@ class Collect final : public ResultSink {
         }
       }
       c.p_error = v.p_error;
+      if (StatementCalibration::scored(c.code)) {
+        for (const DetailField& f : v.detail) {
+          if (const auto* x = std::get_if<double>(&f.value); x != nullptr && f.key == "score") {
+            c.score = *x;
+          }
+        }
+      }
       c.hypotheses = std::move(v.hypotheses);
       out_.push_back(std::move(c));
     }
@@ -657,11 +666,14 @@ struct Point {
   int model = -1;
   std::size_t index = 0;
   double weight = 1.0;
+  double before = 0.0;  // a code point's p_error as configured (DE-02)
 };
 
 struct Observations {
   std::array<std::vector<ModelObservation>, 3> models;
   std::array<std::vector<Point>, StatementCalibration::kFamilies> points;
+  // Each code's points (DE-02): the model's p_error, or a scored rule's score.
+  std::map<std::string, std::vector<Point>, std::less<>> codes;
   std::size_t matched_labels = 0;
 };
 
@@ -708,6 +720,23 @@ Observations observe(const std::vector<Candidate>& candidates, const LabelIndex&
     if (const auto f = StatementCalibration::family(c.code);
         f && StatementCalibration::mapped(c.code) && !j.other) {
       out.points.at(*f).push_back(point);
+    }
+    // And a code's own, on its p_error or, for a scored rule, its score.
+    const StatementCalibration& given = config.statements.calibration;
+    if (StatementCalibration::takes_code_map(c.code) && !j.other) {
+      Point own_point = point;
+      if (StatementCalibration::scored(c.code)) {
+        if (c.score) {
+          own_point.p = *c.score;
+          own_point.model = -1;
+          own_point.before =
+              given.apply_score(c.code, *c.score).value_or(given.apply(c.code, c.p_error));
+          out.codes[c.code].push_back(own_point);
+        }
+      } else {
+        own_point.before = given.apply(c.code, c.p_error);
+        out.codes[c.code].push_back(own_point);
+      }
     }
   }
   out.matched_labels = matched.size();
@@ -807,6 +836,57 @@ void fit_family(std::size_t f, const Observations& obs, const std::array<Vec, 3>
   checked[1].insert(checked[1].end(), check_after.begin(), check_after.end());
 }
 
+// A code's own map (DE-02), as a sub-family's is fitted: on the training points
+// (a mapped code's p_error refitted under the fitted priors; a scored rule's
+// score), with its calibration error as configured and after.
+void fit_code(const std::string& code, const std::vector<Point>& points, const Observations& obs,
+              const std::array<Vec, 3>& w_after, bool held_out, std::size_t min_observations,
+              const StatementCalibrateOptions& options, StatementCodeFit& fit) {
+  fit.code = code;
+  fit.scored = StatementCalibration::scored(code);
+  Pairs train;
+  Pairs check_before;
+  Pairs check_after;
+  for (const Point& p : points) {
+    double x = p.p;
+    if (p.model >= 0) {
+      const auto m = static_cast<std::size_t>(p.model);
+      x = p_error_of(obs.models.at(m).at(p.index), kModels.at(m), w_after.at(m));
+    }
+    ++fit.observations;
+    fit.errors += p.error ? 1 : 0;
+    const double y = p.error ? 1.0 : 0.0;
+    if (!p.test) {
+      train.push_back({x, y, p.weight});
+    }
+    if (p.test == held_out) {
+      check_before.push_back({p.before, y, p.weight});
+      check_after.push_back({x, y, p.weight});
+    }
+  }
+  const auto errors = static_cast<std::size_t>(
+      std::count_if(train.begin(), train.end(), [](const auto& x) { return x.y > 0.5; }));
+  if (options.isotonic && train.size() >= min_observations && errors >= kMinMapClass &&
+      train.size() - errors >= kMinMapClass) {
+    fit.map = pav_map(train);
+  }
+  fit.ece_before = expected_calibration_error(check_before);
+  if (fit.map.empty()) {
+    fit.ece_after = fit.ece_before;
+    return;
+  }
+  for (WeightedPoint& point : check_after) {
+    point.x = StatementCalibration::through(fit.map, point.x);
+  }
+  fit.ece_after = expected_calibration_error(check_after);
+}
+
+std::string lower(std::string code) {
+  std::transform(code.begin(), code.end(), code.begin(),
+                 [](char ch) { return ch >= 'A' && ch <= 'Z' ? static_cast<char>(ch + 32) : ch; });
+  return code;
+}
+
 }  // namespace
 
 StatementCalibrationReport calibrate_statements(const std::vector<Series>& series,
@@ -818,8 +898,14 @@ StatementCalibrationReport calibrate_statements(const std::vector<Series>& serie
   report.labels = labels.size();
   report.version = options.version;
   report.priors = config.statements.priors;
+  // The labels the fit uses, under [calibration] unverified (DE-02).
+  const FitLabels kept = fit_labels(labels, config.calibration);
+  report.unverified = kept.unverified;
+  report.excluded = kept.excluded;
+  report.unverified_rule = unverified_text(config.calibration);
+  report.min_code_observations = config.calibration.min_code_observations;
   std::vector<const Label*> statement_labels;
-  for (const Label& l : labels) {
+  for (const Label& l : kept.labels) {
     if (is_statements_label(l)) {
       statement_labels.push_back(&l);
     }
@@ -842,12 +928,22 @@ StatementCalibrationReport calibrate_statements(const std::vector<Series>& serie
   }
 
   // The maps: each family's p_error under the fitted priors, against the labels.
-  const bool held_out = std::any_of(obs.points.begin(), obs.points.end(), [](const auto& family) {
-    return std::any_of(family.begin(), family.end(), [](const Point& p) { return p.test; });
-  });
+  const auto any_test = [](const std::vector<Point>& points) {
+    return std::any_of(points.begin(), points.end(), [](const Point& p) { return p.test; });
+  };
+  const bool held_out = std::any_of(obs.points.begin(), obs.points.end(), any_test) ||
+                        std::any_of(obs.codes.begin(), obs.codes.end(),
+                                    [&](const auto& code) { return any_test(code.second); });
   std::array<Pairs, 2> checked;  // before, after
   for (std::size_t f = 0; f < StatementCalibration::kFamilies; ++f) {
     fit_family(f, obs, w_after, held_out, config, options, report.families.at(f), checked);
+  }
+  // Each code's own map (DE-02).
+  for (const auto& [code, points] : obs.codes) {
+    StatementCodeFit fit;
+    fit_code(code, points, obs, w_after, held_out, config.calibration.min_code_observations,
+             options, fit);
+    report.codes.push_back(std::move(fit));
   }
   report.ece_before = expected_calibration_error(checked[0]);
   report.ece_after = expected_calibration_error(checked[1]);
@@ -888,6 +984,19 @@ std::string statements_toml(const StatementCalibrationReport& r) {
   }
   out += "# expected calibration error, every family: " + fixed(r.ece_before, 4) + " before, " +
          fixed(r.ece_after, 4) + " after\n";
+  out += "# unverified labels: " + std::to_string(r.unverified) + " (" + r.unverified_rule + ": " +
+         std::to_string(r.excluded) + " left out)\n";
+  for (const StatementCodeFit& c : r.codes) {
+    out += "# " + c.code + (c.scored ? " (on its score)" : "") + ": " +
+           std::to_string(c.observations) + " observations (" + std::to_string(c.errors) +
+           " errors); expected calibration error " + fixed(c.ece_before, 4) + " before, " +
+           fixed(c.ece_after, 4) + " after" +
+           (c.map.empty()
+                ? " (no map of its own: fewer than " + std::to_string(r.min_code_observations) +
+                      " observations, or one class)"
+                : "") +
+           "\n";
+  }
   const StatementPriors& p = r.priors;
   out += "\n[statements.priors]\n";
   out += "bad_value = " + weight(p.bad_value) + "\n";
@@ -910,6 +1019,18 @@ std::string statements_toml(const StatementCalibrationReport& r) {
     }
     out += map.empty() ? "]\n" : ",\n]\n";
   }
+  // A code's own map, where it has one (DE-02).
+  for (const StatementCodeFit& c : r.codes) {
+    if (c.map.empty()) {
+      continue;
+    }
+    out += lower(c.code) + " = [";
+    for (std::size_t i = 0; i < c.map.size(); ++i) {
+      out += (i == 0 ? "\n  [" : ",\n  [") + fixed(c.map[i].first, 6) + ", " +
+             fixed(c.map[i].second, 6) + "]";
+    }
+    out += ",\n]\n";
+  }
   return out;
 }
 
@@ -929,6 +1050,14 @@ std::string statements_summary(const StatementCalibrationReport& r) {
   }
   out += "expected calibration error: " + fixed(r.ece_before, 4) + " -> " + fixed(r.ece_after, 4) +
          "\n";
+  out += "unverified labels: " + std::to_string(r.unverified) + " (" + r.unverified_rule + ": " +
+         std::to_string(r.excluded) + " left out)\n";
+  for (const StatementCodeFit& c : r.codes) {
+    out += c.code + (c.scored ? " (score)" : "") + ": " + std::to_string(c.observations) +
+           " observations (" + std::to_string(c.errors) + " errors); expected calibration error " +
+           fixed(c.ece_before, 4) + " -> " + fixed(c.ece_after, 4) +
+           (c.map.empty() ? "; no map of its own" : "; a map of its own") + "\n";
+  }
   return out;
 }
 

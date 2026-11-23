@@ -231,8 +231,34 @@ TEST_CASE("DQ902: fafnir's impossible negatives, and bounds, per version and ite
   CHECK(got == expected);
   CHECK(contains(r.out, "revenue is -5, and cannot be negative"));
   CHECK(contains(r.out, "total_current_assets (1200) is above total_assets (1000)"));
-  CHECK(contains(r.out, R"("detail":{"item":"revenue","value":-5})"));
+  // The raw score (DE-02): revenue -5 against its typical size, 5.
+  CHECK(contains(r.out, R"("detail":{"item":"revenue","value":-5,"score":0.5})"));
   CHECK_FALSE(contains(r.out, "net_income"));
+
+  // DE-02: without a map of DQ902's own its p_error is 1, as before; with one, the
+  // score through it.
+  for (const std::string& line : lines) {
+    CHECK(contains(line, R"("score":)"));
+    CHECK(contains(line, R"("p_error":1,)"));
+  }
+  write_file(dir.path() / "mapped.toml",
+             "[statements]\n"
+             "nonnegative = [\"revenue\", \"weighted_average_shares\", \"total_assets\", "
+             "\"shares_outstanding\"]\n"
+             "bounds = [\"total_current_assets <= total_assets\", "
+             "\"cash_and_equivalents <= total_assets\"]\n"
+             "\n[statements.calibration]\ndq902 = [[0.0, 0.2], [1.0, 0.4]]\n");
+  const std::string mapped = (dir.path() / "mapped.toml").string();
+  const Result m = run_in(dir.path(), {"--config", mapped.c_str(), "--select", "DQ902", "--format",
+                                       "jsonl", "--show-info", "--exit-zero", file.c_str()});
+  INFO(m.err);
+  REQUIRE(m.status == 0);
+  const auto scored = lines_with(m.out, R"("code":"DQ902")");
+  CHECK(scored.size() == lines.size());
+  for (const std::string& line : scored) {
+    CHECK(contains(line, R"("score":)"));
+    CHECK_FALSE(contains(line, R"("p_error":1,)"));
+  }
 
   // Nothing to judge without the lists.
   const Result none =

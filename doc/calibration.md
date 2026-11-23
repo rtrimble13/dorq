@@ -159,6 +159,41 @@ thin-name and rate hard negatives. DQ201 keeps a precision of 1.0. Precision at
 warn on seed 2 rises from 0.71 to 0.83. To measure a fit on your own labels, run
 [dorq-eval](../tools/eval/README.md) before and after.
 
+## Verified labels, a code's own map, and scored rules
+
+Since 0.15.0 (DE-02) a fit reads three settings from `[calibration]`:
+
+```toml
+[calibration]
+unverified = "exclude"       # or "include", or "weight:0.25"
+min_code_observations = 50   # a statement code's own map needs this many points
+```
+
+- **`unverified`** says what both fits, price and statements, make of a label that
+  is not verified (`verified` false or absent; [labels.md](labels.md)).
+  `exclude`, the default, leaves it out: a label someone closed by rule weighs
+  nothing against one checked against a filing. `weight:x`, with x in (0, 1],
+  keeps it at x times its weight. `include` keeps it as it is, as before 0.15.0.
+  The report and the TOML's comments give how many labels were not verified and
+  how many were left out. dorq-synth's labels are the truth they were made from,
+  so they are verified.
+- **A code's own map.** Beside the sub-family's (`dq90` to `dq94`), a statement code
+  with at least `min_code_observations` training points, and two of each outcome,
+  gets a map of its own: `dq903 = [...]` in `[statements.calibration]`. A code's
+  findings use it before their sub-family's, so DQ903 and DQ904 no longer share
+  `dq90`. A code with too few points keeps the sub-family's.
+- **Scored rules.** DQ902, DQ904 and DQ941 have fixed p_errors, which no map could
+  correct: a map of a constant is a constant. Each now also reports a **raw
+  score** in `detail.score`, a monotone function of its own evidence in [0, 1)
+  ([checks/DQ902.md](checks/DQ902.md), [DQ904](checks/DQ904.md),
+  [DQ941](checks/DQ941.md)). Their own map is fitted on the score, not the
+  p_error. With it, the finding's p_error is the score through the map, and its
+  severity follows the thresholds. Without one, p_error and severity are what
+  they were.
+
+The settings change no check's output, so a config that leaves them unset hashes
+as before.
+
 ## Statements
 
 `dorq calibrate` on a statements input fits the statement checks to labels about

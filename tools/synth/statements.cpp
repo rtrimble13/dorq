@@ -2751,7 +2751,8 @@ void Universe::write_labels(const std::filesystem::path& dir) const {
     if (!l.identity.empty()) {
       jsonl << R"(,"identity":")" << l.identity << '"';
     }
-    jsonl << R"(,"source":"dorq-synth"})" << '\n';
+    // Every synthetic label is the truth it was made from: verified (DE-02).
+    jsonl << R"(,"verified":true,"source":"dorq-synth"})" << '\n';
   }
 }
 
