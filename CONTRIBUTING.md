@@ -31,7 +31,10 @@ is how they go stale. The PR template has the checklist:
   version on purpose, in a commit that also reformats.
 - **Static analysis:** `scripts/tidy.sh <build-dir>` runs clang-tidy 18
   (`.clang-tidy`) with every finding an error. If you disable a check, write the
-  reason in the file next to it.
+  reason in the file next to it. `scripts/tidy.sh <build-dir> --changed-since
+  origin/main` checks only the translation units your branch changed or that
+  include a header it changed. CI does that on a pull request and checks the
+  whole tree on a push to main.
 - **Warnings:** our targets build with a strict warning set (`cmake/DorqTargetOptions.cmake`),
   and the `ci` and `asan` presets make every warning an error.
 - **Naming** (enforced by clang-tidy): `snake_case` functions, variables and
