@@ -300,6 +300,7 @@ cmake --workflow --preset dev        # configure + build + test
 ctest --preset dev -R cli.           # just the command-line contract tests
 scripts/format.sh                    # clang-format 18, in place (--check to verify)
 scripts/tidy.sh build/dev            # clang-tidy 18 over our sources
+scripts/tidy.sh build/dev --changed-since origin/main   # only what the branch changed
 ctest --preset dev -R synth          # precision and recall on synthetic data
 ```
 
