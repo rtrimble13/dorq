@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <numbers>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -51,6 +52,10 @@ struct DividendOnFile {
   int count = 0;
 };
 
+// The own-bar evidence that settles a provisional finding (DE-13): a Bayes factor
+// of 10, strong in Jeffreys' terms.
+inline constexpr double kOwnBarSupport = std::numbers::ln10;
+
 // One evidence term, as the log Bayes factor of the reported hypothesis against
 // market_move.
 struct PriceEvidence {
@@ -73,7 +78,23 @@ struct PriceFinding {
   double p_error = 0.0;      // calibrated by [calibration] p_error_map, when given
   double raw_p_error = 0.0;  // as the model computes it
   double tail = 1.0;         // the return's two-sided tail probability, as ordinary
+  // On a provisional finding (DE-13): the log Bayes factor of the evidence from the
+  // bar itself (its fields' consistency, a zero volume, an implausible level) for
+  // the error it favours most against the likeliest explanation that is not one.
+  // The bars after it and the size of its move are left out.
+  double own_bar_log_bf = 0.0;
+  // Fewer than provisional_bars bars after it: what the bars after say is not all
+  // in yet.
   bool provisional = false;
+  // A bad print whose block has ended within the data: the bar after it is in.
+  bool reverted = false;
+  // A pending finding: provisional, not reverted, and not settled by the bar
+  // itself, which with p_error in the error band is an own_bar_log_bf of at
+  // least kOwnBarSupport. Reported at no more than [price] provisional_severity.
+  [[nodiscard]] bool pending(double error_threshold) const noexcept {
+    return provisional && !reverted &&
+           (p_error < error_threshold || own_bar_log_bf < kOwnBarSupport);
+  }
   int block = 1;                             // bars in a bad print
   double factor = 1.0;                       // close / previous close
   std::optional<SplitRatio> split;           // the split ratio nearest the move

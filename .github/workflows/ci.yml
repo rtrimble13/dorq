@@ -13,6 +13,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The version rules (scripts/check_version.sh): never below the latest release,
+  # above it once the code has changed, a minor bump for a change to the bars
+  # output, and README's install steps naming a release that exists. They are
+  # judged against the tags, so this checkout has the whole history.
+  version:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Version rules
+        run: scripts/check_version.sh
+      - name: Release status
+        run: scripts/release.sh
+
   # Build and test on every compiler a release is built with, and one more.
   # The `ci` preset turns warnings into errors.
   build-test:

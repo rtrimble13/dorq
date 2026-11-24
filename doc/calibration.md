@@ -51,7 +51,19 @@ dorq calibrate bars.csv --labels labels.jsonl --config priors/fafnir.toml \
 
 ## What it fits
 
-1. **Observations.** dorq scores every series under the effective settings,
+1. **The bad print's block length** (since 0.15.0, DE-13). The model gives a
+   block of k bars prior weight proportional to `block_decay`^k, up to
+   `revert_max_bars` ([DQ201](checks/DQ201.md#the-newest-bars)). Each DQ201
+   label records a block: its series' bars within its span (1 to 20; a longer
+   span is a repair's range, not a block). With at least 20 such labels the fit
+   takes `block_decay` as the maximum-likelihood parameter of that geometric
+   distribution, with five pseudo-labels at the configured one, and
+   `revert_max_bars` as the shortest block that leaves less than
+   1 / (labels + 1) of the fitted distribution beyond it, and is no shorter than
+   any labelled block. A longer block would have been expected among the labels.
+   With fewer labels both stay as configured. Labels count by their weight. The
+   steps below score the bars after each move with the fitted pair.
+2. **Observations.** dorq scores every series under the effective settings,
    exactly as `dorq check` would. Each scored move within 3 calendar days of a
    usable label becomes an observation. An observation records the move's
    log-likelihood under each hypothesis and the hypotheses the label allows.
@@ -60,19 +72,19 @@ dorq calibrate bars.csv --labels labels.jsonl --config priors/fafnir.toml \
    label is used, whatever its `applies_until` or `verified`: the fit runs on
    the series as they stood (`--restore`), which is what the labels describe.
    An observation carries its label's `weight` ([Weights](#weights)).
-2. **Priors.** The objective is the sum over observations of
+3. **Priors.** The objective is the sum over observations of
    log P(the label's hypotheses | the evidence). It is the labels' marginal
    likelihood given the priors. A Gaussian penalty keeps each log prior within
    about 1.5 e-folds of its configured value, so a handful of labels cannot drive
    a prior to zero. The objective is maximised by gradient ascent with
    backtracking.
-3. **Hyperparameters.** Step 2 is repeated for 36 settings: `jump_prob` in
+4. **Hyperparameters.** Step 3 is repeated for 36 settings: `jump_prob` in
    {0.01, 0.02, 0.03, 0.05}, `jump_scale` in {4, 6, 8} and `ratio_tolerance` in
    {0.005, 0.01, 0.02}. The configured setting is tried too. The setting with the
    best mean penalized log-likelihood per observation wins. Different settings
    score slightly different sets of moves, so the mean is used rather than the
    sum.
-4. **The p_error map.** The fitted model's `p_error` on the training observations
+5. **The p_error map.** The fitted model's `p_error` on the training observations
    is regressed onto whether each one was an error. The regression is isotonic:
    up to 20 equal-count bins, then pool adjacent violators. The result is a
    rising list of knots. dorq interpolates linearly between knots and holds the
@@ -126,6 +138,9 @@ before.
 jump_prob = 0.05
 jump_scale = 8
 ratio_tolerance = 0.02
+# bad-print blocks: 30 labels, longest 3 bars
+block_decay = 0.3636
+revert_max_bars = 4
 
 [priors]
 market_move = 0.8815

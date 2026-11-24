@@ -1,0 +1,12 @@
+# The newest-bar universe ten sessions on (`later.csv`), when the bars after its
+# events are in: each event is found under the code it expects, so waiting at info
+# lost nothing (DE-13). tests/synth_newest_gate.cmake.
+newest_bad_print recall 0.9
+newest_evident recall 0.9
+newest_split recall 0.9
+newest_scale recall 0.9
+DQ201 precision 0.9
+DQ202 precision 0.9
+DQ203 precision 0.9
+DQ204 precision 0.9
+newest_jump max 0

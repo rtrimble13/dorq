@@ -174,7 +174,14 @@ struct PriceSettings {
                                           {8, 1},  {10, 1}, {15, 1}, {20, 1}, {1, 2},  {1, 3},
                                           {1, 4},  {1, 5},  {1, 8},  {1, 10}, {1, 15}, {1, 20},
                                           {1, 25}, {1, 30}, {1, 40}, {1, 50}, {1, 100}};
-  int provisional_bars = 3;           // fewer bars after a candidate than this: provisional
+  int provisional_bars = 3;  // fewer bars after a candidate than this: provisional
+  // A bad print's block of k bars has prior weight proportional to this to the k
+  // (DE-13: `dorq calibrate` fits it, and revert_max_bars, to the labels' blocks).
+  double block_decay = 0.5;
+  // The most a pending finding reports at (DE-13): a provisional one whose case
+  // rests on bars not yet in, with no evidence from the bar itself to settle it.
+  // kWarn is how 0.14 reported every provisional finding.
+  Severity provisional_severity = Severity::kInfo;
   int segment_gap = 60;               // sessions without a bar before a history segment
   double volatility_discount = 0.97;  // the forgetting factor of the volatility estimate
   double tail_dof = 4.0;              // degrees of freedom of the return distribution
@@ -205,6 +212,8 @@ struct PricePatch {
   std::optional<double> ratio_tolerance;
   std::optional<std::vector<SplitRatio>> split_ratios;
   std::optional<int> provisional_bars;
+  std::optional<double> block_decay;
+  std::optional<Severity> provisional_severity;
   std::optional<int> segment_gap;
   std::optional<double> volatility_discount;
   std::optional<double> tail_dof;

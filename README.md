@@ -272,6 +272,11 @@ sudo cmake --install build/release --prefix /opt/dorq
 /opt/dorq/bin/dorq version                 # names the commit it was built from
 ```
 
+A build of a release tag `vX.Y.Z` reports `X.Y.Z`. A build of anything else, main
+included, reports the version it is becoming with `-dev` after it (`X.Y.Z-dev`),
+in `--version` and in every record it writes, so it is never taken for a release
+([CONTRIBUTING.md](CONTRIBUTING.md#versioning-and-releasing)).
+
 The configure step downloads four pinned dependencies from GitHub: CLI11,
 fast_float, toml++ and doctest (see `cmake/Deps.cmake`). On a host without network access, clone each
 dependency at the commit pinned there. Then point CMake at those checkouts:

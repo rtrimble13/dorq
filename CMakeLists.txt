@@ -7,8 +7,10 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET
     CACHE STRING "Minimum macOS version")
 
 # The version is written here and nowhere else. The binary reports it
-# (`dorq --version`), every output record will carry it, and the release
-# workflow refuses a tag that disagrees with it. See CONTRIBUTING.md.
+# (`dorq --version`, with -dev when it is not the tagged release), every output
+# record carries it, scripts/check_version.sh holds it to the tags on every pull
+# request, and the release workflow refuses a tag that disagrees with it.
+# scripts/release.sh sets it. See CONTRIBUTING.md.
 project(
   dorq
   VERSION 0.15.0
@@ -31,6 +33,13 @@ set(DORQ_SANITIZERS
 set(DORQ_GIT_COMMIT
     ""
     CACHE STRING "Commit to record in the binary; empty asks git at build time")
+# Whether the binary reports the version as a release (X.Y.Z) or as a build of
+# something else (X.Y.Z-dev). Empty, the default, decides at build time: a release
+# is a clean tree at the tag vX.Y.Z, or a source tree without git (a release
+# archive). The release workflow sets DORQ_RELEASE=ON. See CONTRIBUTING.md.
+set(DORQ_RELEASE
+    "$ENV{DORQ_RELEASE}"
+    CACHE STRING "ON: report a release version; OFF: X.Y.Z-dev; empty: ask git at build time")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

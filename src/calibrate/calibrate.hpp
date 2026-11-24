@@ -56,12 +56,37 @@ struct WeightedPoint {
   }
 };
 
+// DE-13: a bad print's block length, from the labels that record one (a DQ201
+// label's bars in the series). The model gives a block of k bars prior weight
+// proportional to block_decay^k, up to revert_max_bars: a geometric distribution,
+// whose parameter is fitted here with kBlockPseudoLabels pseudo-labels at the
+// configured one. The longest block is then the smallest that leaves less than
+// 1 / (labels + 1) of the fitted distribution beyond it, and no shorter than any
+// labelled block: a longer one would have been expected among the labels. With
+// fewer than kMinBlockLabels labels both stay as configured.
+inline constexpr std::size_t kMinBlockLabels = 20;
+inline constexpr double kBlockPseudoLabels = 5.0;
+struct BlockFit {
+  std::size_t labels = 0;  // DQ201 labels whose span holds 1 to 20 bars of their series
+  int longest = 0;         // bars, among them
+  double block_decay = 0.5;
+  int revert_max_bars = 5;
+  bool fitted = false;  // enough labels to fit
+};
+
+// The fit of `blocks` (each a labelled block's bars, and its label's weight) from
+// the configured settings.
+[[nodiscard]] BlockFit fit_blocks(const std::vector<std::pair<int, double>>& blocks,
+                                  double block_decay, int revert_max_bars);
+
 // How well one setting explains the labels.
 struct Fit {
   PricePriors priors;
   double jump_prob = 0.0;
   double jump_scale = 0.0;
   double ratio_tolerance = 0.0;
+  double block_decay = 0.5;
+  int revert_max_bars = 5;
   double objective = 0.0;     // penalized log-likelihood, training observations
   double mean_log_lik = 0.0;  // per training observation
   double test_mean_log_lik = 0.0;
@@ -78,7 +103,8 @@ struct CalibrationReport {
   std::size_t errors = 0;  // observations labelled an error or a context gap
   std::size_t test_observations = 0;
   std::size_t settings_tried = 0;
-  Fit before;  // the configuration as given
+  BlockFit blocks;  // DE-13
+  Fit before;       // the configuration as given
   Fit after;
   std::vector<std::pair<double, double>> p_error_map;
   double ece_before = 0.0;  // on the held-out observations, or all when none

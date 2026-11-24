@@ -33,8 +33,9 @@ doctest_discover_tests(dorq_tests TEST_PREFIX "unit.")
 # CLI tests: the real binary, as a script or job would run it. Every check run is
 # --isolated, so a config file on the machine cannot change the result.
 add_test(NAME cli.version-flag COMMAND dorq --version)
+# The project's version, with -dev unless this is a build of its tag.
 set_tests_properties(cli.version-flag PROPERTIES PASS_REGULAR_EXPRESSION
-                                                 "^${PROJECT_VERSION}\n$")
+                                                 "^${PROJECT_VERSION}(-dev)?\n$")
 
 set(DATA "${CMAKE_CURRENT_SOURCE_DIR}/data")
 
@@ -145,6 +146,19 @@ foreach(seed 1 2)
       "-DCONFIG=${PROJECT_SOURCE_DIR}/tools/synth/dorq.toml"
       "-DOUT=${CMAKE_CURRENT_BINARY_DIR}/synth-${seed}" "-DSEED=${seed}" -P
       "${CMAKE_CURRENT_SOURCE_DIR}/synth_gate.cmake")
+endforeach()
+
+# The newest-bar gate (DE-13): events on a universe's last bars, judged as of that
+# night and once the bars after them are in.
+foreach(seed 1 2)
+  add_test(
+    NAME synth.newest-seed-${seed}
+    COMMAND
+      "${CMAKE_COMMAND}" "-DSYNTH=$<TARGET_FILE:dorq-synth>" "-DDORQ=$<TARGET_FILE:dorq>"
+      "-DGATES_DIR=${PROJECT_SOURCE_DIR}/tools/synth"
+      "-DCONFIG=${PROJECT_SOURCE_DIR}/tools/synth/dorq.toml"
+      "-DOUT=${CMAKE_CURRENT_BINARY_DIR}/synth-newest-${seed}" "-DSEED=${seed}" -P
+      "${CMAKE_CURRENT_SOURCE_DIR}/synth_newest_gate.cmake")
 endforeach()
 
 # The statements gate (DR-0903): dorq-synth's statements universe on the same two

@@ -28,7 +28,6 @@
 #include "dorq/calendar.hpp"
 #include "dorq/date.hpp"
 #include "dorq/exit_code.hpp"
-#include "dorq/version.hpp"
 #include "engine/engine.hpp"
 #include "io/input_error.hpp"
 #include "io/reader.hpp"
@@ -434,7 +433,7 @@ int run_check(const CheckOptions& options, CLI::App& cmd, Io& io) {
 
   WriterOptions writer_options;
   writer_options.color = options.color == "always" || (options.color == "auto" && io.color);
-  writer_options.version = std::string{kVersion};
+  writer_options.version = std::string{build_info().version};
   writer_options.config_hash = config_hash(config);
   writer_options.fafnir_table = config.fafnir_table;
   writer_options.fafnir_statement_tables = config.fafnir_statement_tables;
@@ -747,7 +746,8 @@ int run(std::span<const char* const> args, Io& io) {
   CLI::App app{kDescription, "dorq"};
   app.footer(kFooter);
   // Bare, so a script can compare it to a tag: test "$(dorq --version)" = 0.0.1
-  app.set_version_flag("--version", std::string{kVersion}, "Print the version and exit");
+  app.set_version_flag("--version", std::string{build_info().version},
+                       "Print the version and exit");
   app.require_subcommand(1);
 
   // check

@@ -248,6 +248,38 @@ TEST_CASE("--restore: rows as they stood before repair, by date, and removed dat
 // ---------------------------------------------------------------------------
 // The p_error map
 
+TEST_CASE("DE-13: a bad print's block length, fitted to the labelled blocks") {
+  using Blocks = std::vector<std::pair<int, double>>;
+  // Too few labels: as configured, with what they show reported.
+  const dorq::BlockFit few = dorq::fit_blocks(Blocks(19, {2, 1.0}), 0.5, 5);
+  CHECK_FALSE(few.fitted);
+  CHECK(few.labels == 19);
+  CHECK(few.longest == 2);
+  CHECK(few.block_decay == 0.5);
+  CHECK(few.revert_max_bars == 5);
+
+  // Thirty one-bar blocks: a mean of 1 against the pseudo-labels' 2 gives d =
+  // (40 - 35) / 40, and two bars already leave less than 1/31 beyond them.
+  const dorq::BlockFit single = dorq::fit_blocks(Blocks(30, {1, 1.0}), 0.5, 5);
+  CHECK(single.fitted);
+  CHECK(single.block_decay == doctest::Approx(0.125));
+  CHECK(single.revert_max_bars == 2);
+
+  // Twenty three-bar blocks: d = (70 - 25) / 70, and a longest block of 7, past
+  // any labelled one: with blocks that long, a longer one would be expected.
+  const dorq::BlockFit long_blocks = dorq::fit_blocks(Blocks(20, {3, 1.0}), 0.5, 5);
+  CHECK(long_blocks.block_decay == doctest::Approx(45.0 / 70.0));
+  CHECK(long_blocks.revert_max_bars == 7);
+  CHECK(long_blocks.longest == 3);
+
+  // A label's weight counts its block that many times (DE-01).
+  Blocks weighted(20, {1, 1.0});
+  weighted.front() = {4, 11.0};
+  const dorq::BlockFit heavy = dorq::fit_blocks(weighted, 0.5, 5);
+  CHECK(heavy.block_decay == doctest::Approx((19.0 + 44.0 + 10.0 - 35.0) / (19.0 + 44.0 + 10.0)));
+  CHECK(heavy.revert_max_bars >= 4);
+}
+
 TEST_CASE("calibrated: linear between knots, flat beyond them, identity without a map") {
   CHECK(dorq::calibrated({}, 0.37) == 0.37);
   const std::vector<std::pair<double, double>> map = {{0.1, 0.05}, {0.5, 0.25}, {0.9, 0.95}};
@@ -392,6 +424,11 @@ TEST_CASE("dorq calibrate: fits the labels, writes priors.toml that dorq check r
   CHECK(contains(priors, "[priors]"));
   CHECK(contains(priors, "[calibration]"));
   CHECK(contains(priors, "version = \"test fit\""));
+  // DE-13: the block length is written with the rest of [price].
+  CHECK(contains(priors, "block_decay = "));
+  CHECK(contains(priors, "revert_max_bars = "));
+  CHECK(contains(priors, "# bad-print blocks: "));
+  CHECK(contains(fit.out, "bad-print blocks: "));
 
   // The same fit with one thread writes the same file.
   const Result again = run_in(dir.path(), {"calibrate", bars.c_str(), "--labels", labels.c_str(),

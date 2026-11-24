@@ -97,6 +97,9 @@ split_ratios = ["2:1", "3:1", "3:2", "4:1", "5:1", "5:4", "8:1", "10:1", "15:1",
                 "1:2", "1:3", "1:4", "1:5", "1:8", "1:10", "1:15", "1:20", "1:25", "1:30",
                 "1:40", "1:50", "1:100"]
 provisional_bars = 3  # fewer bars after one than this: provisional, at most warn
+block_decay = 0.5     # a bad print of k bars has prior weight block_decay^k (calibrated)
+provisional_severity = "info"  # the most a pending provisional finding reports at:
+                      # "info", or "warn" as 0.14 did (doc/checks/DQ201.md#the-newest-bars)
 segment_gap = 60      # DQ205
 volatility_discount = 0.97
 tail_dof = 4

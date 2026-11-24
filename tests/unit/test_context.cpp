@@ -626,7 +626,9 @@ TEST_CASE("a dividend on file as the newest bar is credited before any bar confi
   std::vector<Bar> bars = stock(201, 8.85, 0.01, 44);
   const double amount = distribute(bars, 200, 0.19);
   const std::string csv = bars_csv("A", bars);
-  const Result alone = check(csv, {}, {"--isolated", "--select", "DQ2", "--format", "jsonl"});
+  // Alone it is a finding, pending the bars after it (DE-13).
+  const Result alone =
+      check(csv, {}, {"--isolated", "--select", "DQ2", "--format", "jsonl", "--show-info"});
   CAPTURE(alone.out);
   CHECK(count_matching(alone.out, R"("provisional":true)") == 1);
   const Result explained =

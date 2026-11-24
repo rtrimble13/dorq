@@ -67,7 +67,6 @@ which becomes a `context_gap`. A hard negative becomes a `market_fact`.
 | Kind | Expect | What was done |
 |---|---|---|
 | `bad_print` | DQ201 | 30 blocks of 1-3 bars multiplied by a decimal slip (×10, ×0.1, ×100, ×0.01) or a plausible wrong factor (×1.35-2.5 either way), on ordinary or low volume |
-| `bad_print_newest` | DQ201 or DQ202 | 4 last bars ×100 or ×0.01 (with nothing after them, the two look alike) |
 | `bad_close` | DQ204 | 12 closes multiplied by such a factor, the rest of the bar left alone |
 | `unreported_split` | DQ203 | 16 splits: forward (2:1, 3:1, 3:2, 4:1) above $25, reverse (1:5, 1:10, 1:20) below $8; prices divided and volume multiplied from the ex-date |
 | `scale_era`, `scale_to_end` | DQ202 | 12 eras of 20-250 bars, or to the end, at ×100, ×0.01, ×1000 or ×0.001 |
@@ -141,8 +140,54 @@ such report is allowed.
 
 DQ107 is held to fault precision 0.5 and recall 0.9. It reports 10-20 bars a
 universe: every injected flat bar, other faults that leave a bar flat, and a few
-rare flat days on low-priced names. On the penny and 1/16 series it reports 0-4
+rare flat days on low-priced names. Since DE-13 moved the newest-bar faults to
+[their own universe](#the-newest-bars), it runs 0.53-0.67 on seeds 1 and 2: those
+flat newest bars were faults it counted. On the penny and 1/16 series it reports 0-4
 bars, where it reported over a thousand before it learned the price grid.
+
+## The newest bars
+
+`dorq-synth newest` writes a universe whose every series ends with an event on one
+of its last three bars, fewer than `provisional_bars` from the end, and the same
+series ten sessions on (plan item DE-13). It draws from its own random stream.
+
+```bash
+dorq-synth newest --seed 1 --out /tmp/nb       # end.csv, later.csv, labels.csv
+dorq /tmp/nb/end.csv --config tools/synth/dorq.toml --exit-zero --format csv \
+     --show-info > /tmp/nb/end-results.csv
+dorq-synth score --labels /tmp/nb/labels.csv --results /tmp/nb/end-results.csv \
+                 --gates tools/synth/gates-newest-end.txt --verbose
+```
+
+- `end.csv`: 320 sessions from 2024-01-02 of 40 liquid names (`NLQ`), 40 quiet
+  funds (`NFD`: $4-120, 0.4-0.9% a day, no earnings) and 20 mid names (`NMD`),
+  each with one event on one of its last three bars.
+- `later.csv`: the same series ten sessions on.
+- `labels.csv`: one label per event, and the history's earnings (`hn_earnings`).
+
+| Kind | Expect | What was done |
+|---|---|---|
+| `newest_jump` | - | a real move of ×1.25-2 either way, off any clean split ratio, which trades from the old level to the new on 1.5 to 12 times the usual volume, decaying after; the level holds (DQ2) |
+| `newest_split` | DQ203 | a split the data does not record: forward (2:1, 3:1, 3:2, 4:1, 5:1) from $12, reverse (1:4, 1:5, 1:8, 1:10, 1:20) below, volume inverse; no two series split by one ratio on one night (DQ601's cohort) |
+| `newest_bad_print` | DQ201 | one bar (60%) or two at a decimal slip (×10, ×0.1) or a wrong factor of ×1.35-2.5 off any split ratio, on 0.2-1 times the volume; the later view reverts |
+| `newest_evident` | DQ201, DQ202 or DQ204 | a bad bar with evidence in itself, in turn: it moved on no volume; only its close is off, outside its own range; or it is ×10^6, at a price no security trades at |
+| `newest_scale` | DQ202 | the level ×100, ×0.01, ×1000 or ×0.001 from the event to the end |
+
+[gates-newest-end.txt](gates-newest-end.txt) scores `end.csv`: what is reported
+at warn and above must be right (precision 0.95 for DQ201 to DQ204), no real jump
+is an error at warn, and the bad bars with evidence in themselves are found (0.9).
+[gates-newest-later.txt](gates-newest-later.txt) scores `later.csv`: each event
+under the code it expects (recall 0.9 per kind). Besides the per-code metrics,
+these use `<kind> recall`: the share of a fault kind's labels found at warn and
+above under a code they expect. `ctest -R synth.newest` runs both on seeds 1
+and 2.
+
+On seeds 1-3, as of the end, DE-13's pending findings make warn-and-above
+precision 1.00 for every DQ20x code, on 27-30 reports. With `[price]
+provisional_severity = "warn"` (0.14's behaviour) it is 0.86-0.91 for DQ201 and
+0.88-0.96 for DQ202, on 80 reports: unreported splits and changes of scale
+reported as bad prints, with a repair that deletes correct bars. Ten sessions on,
+every event of every kind is found.
 
 ## Statements
 
