@@ -160,7 +160,7 @@ Keys follow the caller's plan, so one key means one item in both repositories.
 | 1 Precision | [DE-11](https://github.com/rtrimble13/dorq/issues/43) | A series-level structural model for identities and ties (DQ903, DQ904): per (series, identity or tie, period type) a break rate shrunk to the cross-section, and a gap distribution; "unexplained" no longer counts as error by default (`[statements] unexplained_is_error`); DQ904 gets a posterior; chronic breaks become one series-level report | L | ⬜ |
 | | [DE-12](https://github.com/rtrimble13/dorq/issues/44) | One condition, one report: fold versions with the same gap or value, identities broken by one field, and basic and diluted counts. Record keys change; a minor version | M | ⬜ |
 | | [DE-13](https://github.com/rtrimble13/dorq/issues/45) | Provisional means pending: with the evidence after a bar missing, report at info unless the posterior without those terms reaches the error band and an independent term agrees (OHLC inconsistency, zero volume on a liquid series, an implausible level, peers). `kBlockDecay` and `revert_max_bars` become calibratable | M | merged: [#59](https://github.com/rtrimble13/dorq/pull/59), in 0.15.0 (§4.1) |
-| | [DE-14](https://github.com/rtrimble13/dorq/issues/46) | DQ403, DQ107 and DQ705 become models (pooled rates across class, move size against the grid, an indicative-quote hypothesis) or default to info; their priors move to config | M | ⬜ |
+| | [DE-14](https://github.com/rtrimble13/dorq/issues/46) | DQ403, DQ107 and DQ705 become models (pooled rates across class, move size against the grid, an indicative-quote hypothesis) or default to info; their priors move to config | M | 🔄 on branch `claude/wizardly-einstein-pgcegr`, for 0.16.0 (§4.1) |
 | 2 Recall | [DE-21](https://github.com/rtrimble13/dorq/issues/47) | Cross-sectional evidence in both directions: (a) a latent "load failed on date d for group g" from every series' own miss probability, thin ones included, with group keys configurable from `--meta` (`[coverage] cohort_by`), feeding each member's DQ301 posterior both ways; (b) DQ601 takes provisional moves; (c) the sibling term enters the posterior before severity | L | ⬜ |
 | | [DE-22](https://github.com/rtrimble13/dorq/issues/48) | Optional per-bar `source` and `known_from`/`loaded_on` columns: a source-seam evidence term on the scale, segment and bad-print hypotheses (as `precision_term`, model.cpp:1017); a load cohort for bars, as DQ951's | L | ⬜ |
 | | [DE-23](https://github.com/rtrimble13/dorq/issues/49) | DQ916's recall on quarters stored year to date: partial storage, one quarter at a time, mixed vintages | M | ⬜ |
@@ -200,6 +200,29 @@ is re-measured. The next phase starts from that evidence, not from this table.
     reports were provisional; those that the bar itself does not settle move to info.
   - Not in DE-13: DQ701-DQ704's provisional findings stay at most warn, and DQ601
     still leaves provisional moves out (DE-21).
+- **2026-11-24.** DE-14 is implemented on `claude/wizardly-einstein-pgcegr`, for
+  0.16.0. DQ403, DQ107 and DQ705 become models; their priors move to `[priors]`
+  (`lost_volume`, `indicative_quote`, `copied_bar`, `dividend_slip`) and DQ403's
+  constants to `[price]` (`quote_steps`, `quote_strength`), each left out of
+  `config_hash` at its default.
+  - DQ403 weighs a lost volume against an indicative quote (a mark within about a
+    grid step, whose rate is a class rate from how often the series trades,
+    e^-(trades a day) above a floor, shrunk with the series' own) and the feed's
+    habit (its other zero-volume moves).
+  - DQ107, among ranged bars, weighs a copied close against a real day at one
+    price: the bars nearby's range, Rayleigh, to the power of the day's volume in
+    typical days. With no ranged bar nearby it is deterministic, as before.
+  - DQ705's ten-times branch weighs a slip (a power of ten, give or take the
+    series' own spread of amounts) against a real special or cut, by the ratio
+    and the ex-date close.
+  - Synthetic effect (seeds 1-8, against 0.15.0's rules): indicative quotes at
+    warn+ from 69-77 a universe to none, real flat days from up to 6 to none,
+    special dividends from up to 3 to at most 1; DQ403's precision 0.06-0.07 to
+    1.00 and DQ107's 0.42-0.67 to 0.73-1.00, recall held at 1.00; DQ705's
+    0.70-1.00 to 0.83-1.00, one slip missed on one seed (a day that fell by about
+    the slipped amount).
+  - **Effect on the audit: not yet measured**, as for DE-13. On fafnir's 15
+    nights DQ403, DQ107 and DQ705 were 35% of the bars' warn+, none judged.
 
 ## 5. Generality rules for this plan
 

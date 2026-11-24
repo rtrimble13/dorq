@@ -22,10 +22,11 @@ DQ205 precision 0.80
 DQ205 recall 0.80
 
 # Integrity. DQ107 also fires, rightly, on other faults that leave a bar flat (a
-# scale error rounding the range away), so it is held to fault precision; its few
-# false positives are rare flat days on low-priced names, which a deterministic
-# check reports. The newest-bar faults it also counted are in `dorq-synth newest`
-# since DE-13 (gates-newest-end.txt, gates-newest-later.txt).
+# scale error rounding the range away), so it is held to fault precision. Its
+# false positives are flat days the generator makes on low-priced liquid names, on
+# one and a half to three times the volume of bars that span five or more steps:
+# not a day one price could hold (DE-14). The newest-bar faults it also counted
+# are in `dorq-synth newest` since DE-13 (gates-newest-end.txt, -later.txt).
 DQ107 fault_precision 0.5
 DQ107 recall 0.9
 # DQ108 on the rates (points.csv), with the bounds tools/synth/dorq.toml sets.
@@ -62,8 +63,8 @@ DQ703 precision 0.90
 DQ703 recall 0.75
 DQ704 precision 0.90
 DQ704 recall 0.60
-DQ705 precision 1.0
-DQ705 recall 1.0
+DQ705 precision 0.8
+DQ705 recall 0.85
 
 # Hard negatives: real events that must not be reported. Earnings gaps, the crash
 # day, tick moves and splits on file never; thin names' spike-and-revert trades are
@@ -76,6 +77,17 @@ hn_thin max 3
 hn_split_on_file max 0
 hn_split_between_bars max 0
 hn_rate max 1
+# DE-14: an indicative quote (a thin name's untraded day marked a step of its grid
+# from the last close), a real flat day (a low-priced name whose bars span a few
+# steps, one price all day on its usual volume) and a special dividend (twelve to
+# forty times the usual, which the price falls by) are not errors. A special
+# dividend on a day that moves about as much again, or a slip on a day that falls
+# by about the slipped amount, reads the other way, and the dividend history may
+# not pin down the usual amount (0.03 to 0.16 a quarter): the gates allow one of
+# either a universe (DQ705 at 0.8 and 0.85, among its five to eight reports).
+hn_indicative_quote max 0
+hn_real_flat max 0
+hn_special_dividend max 1
 
 # Statements (M9). The gate runs dorq on dorq-synth's statements universe with
 # tools/synth/statements.toml and its items, actions and meta (tests/

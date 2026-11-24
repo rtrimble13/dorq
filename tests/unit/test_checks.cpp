@@ -30,10 +30,10 @@ dorq::Series one_series(const std::string& csv) {
 
 std::vector<dorq::Violation> run_check(const dorq::Check& check, const dorq::Series& series,
                                        const dorq::IntegritySettings& settings = {},
-                                       const dorq::CoverageSettings& coverage = {}) {
+                                       const dorq::CoverageSettings& coverage = {},
+                                       const dorq::PriceSettings& price = {}) {
   static const dorq::Calendar kCalendar;
   static const dorq::SeverityThresholds kThresholds;
-  static const dorq::PriceSettings kPrice;
   std::vector<dorq::Violation> out;
   const dorq::SeriesContext context{
       .series = series,
@@ -41,11 +41,19 @@ std::vector<dorq::Violation> run_check(const dorq::Check& check, const dorq::Ser
       .coverage = coverage,
       .calendar = kCalendar,
       .thresholds = kThresholds,
-      .price = kPrice,
+      .price = price,
       .frequency = dorq::infer_frequency(series.date),
   };
   check.run(context, out);
   return out;
+}
+
+// DQ107's screen alone: with a copied bar as likely as a real day (DE-14's prior
+// at a half), whatever the screen passes is reported.
+dorq::PriceSettings screen_only() {
+  dorq::PriceSettings price;
+  price.priors.copied_bar = 0.5;
+  return price;
 }
 
 std::string bars(const std::vector<std::string>& rows) {
@@ -164,9 +172,16 @@ TEST_CASE("DQ107: flat_bar_steps sets what a coarse grid is") {
                            : bar_row(d, c, c + 0.02, c - 0.02, c, 500000 + 100 * d));
   }
   const dorq::Series series = one_series(bars(rows));
-  // Bars span 4 cents: more than the default 3 steps.
-  CHECK(run_check(dorq::ZeroRangeWithVolume{}, series).size() == 1);
-  CHECK(run_check(dorq::ZeroRangeWithVolume{}, series, {.flat_bar_steps = 4.0}).empty());
+  // Bars span 4 cents: more than the default 3 steps, so the screen passes it.
+  CHECK(run_check(dorq::ZeroRangeWithVolume{}, series, {}, {}, screen_only()).size() == 1);
+  CHECK(run_check(dorq::ZeroRangeWithVolume{}, series, {.flat_bar_steps = 4.0}, {}, screen_only())
+            .empty());
+  // The model then judges it (DE-14). A typical day of bars that span 4 steps
+  // stays at one price about 1% of the time; this one traded 1.8 typical days'
+  // worth, and stayed there: P(error) about 0.78, warn.
+  const auto judged = run_check(dorq::ZeroRangeWithVolume{}, series);
+  REQUIRE(judged.size() == 1);
+  CHECK(judged[0].severity == dorq::Severity::kWarn);
 }
 
 namespace {
@@ -307,7 +322,8 @@ TEST_CASE("DQ107: the steps nearby print to two decimals, so a median above 3 is
     rows.push_back(d == 30 ? bar_row(d, 10.13, 10.13, 10.13, 10.13, 900000)
                            : bar_row(d, c, c + 0.02, c - 0.01, c, 500000 + 100 * d));
   }
-  const auto found = run_check(dorq::ZeroRangeWithVolume{}, one_series(bars(rows)));
+  const auto found =
+      run_check(dorq::ZeroRangeWithVolume{}, one_series(bars(rows)), {}, {}, screen_only());
   REQUIRE(found.size() == 1);
   CHECK(dorq::test::contains(found[0].message, "span a median 3.04 steps"));
   CHECK(std::get<double>(detail(found[0], "nearby_range_steps")) > 3.0);
@@ -426,7 +442,9 @@ TEST_CASE("DQ107: a flat bar on typical volume, not on a thin day") {
   }
   rows.emplace_back("2024-02-01,10,10,10,10,150000");  // flat on above-median volume
   rows.emplace_back("2024-02-02,10,10,10,10,3000");    // flat on a thin day: normal
-  const auto found = run_check(dorq::ZeroRangeWithVolume{}, one_series(bars(rows)));
+  // Prices on a 0.5 grid, whose bars span 4 steps: the screen's question only.
+  const auto found =
+      run_check(dorq::ZeroRangeWithVolume{}, one_series(bars(rows)), {}, {}, screen_only());
   REQUIRE(found.size() == 1);
   CHECK(found[0].date->to_string() == "2024-02-01");
 
@@ -461,18 +479,19 @@ TEST_CASE("N1: DQ107 on a thin series is info, unless the day itself is a large 
     return out;
   };
   // 2,000 shares a day is under the 5,000 floor: the typical day is info, the
-  // large one (12,000 shares) warn.
+  // large one (12,000 shares) at the severity its P(error) gives. Bars a hundred
+  // steps wide leave a real flat day all but impossible (DE-14): error.
   const auto thin = run_check(dorq::ZeroRangeWithVolume{}, series_with_median(2000.0));
-  CHECK(severities(thin) == "info warn ");
+  CHECK(severities(thin) == "info error ");
   CHECK(dorq::test::contains(thin.front().message, "a thin series (a median 2,0"));
-  // 50,000 shares a day: both at warn, as before.
+  // 50,000 shares a day: both at error.
   CHECK(severities(run_check(dorq::ZeroRangeWithVolume{}, series_with_median(50000.0))) ==
-        "warn warn ");
+        "error error ");
   // A dollar floor above its $2M a day makes it thin too.
   dorq::IntegritySettings dollars;
   dollars.flat_bar_min_median_dollar_volume = 5e6;
   CHECK(severities(run_check(dorq::ZeroRangeWithVolume{}, series_with_median(50000.0), dollars)) ==
-        "info warn ");
+        "info error ");
   // The multiple is a setting.
   dorq::IntegritySettings multiple;
   multiple.flat_bar_volume_multiple = 8.0;

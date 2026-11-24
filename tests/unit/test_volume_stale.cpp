@@ -296,6 +296,49 @@ TEST_CASE("DQ403: a move on zero volume, where the series has none") {
   CHECK(run({"--isolated", "--select", "DQ403"}, bars_csv("Z", bars)).out.empty());
 }
 
+TEST_CASE("DE-14: DQ403 weighs an indicative quote and the feed's habit against a lost volume") {
+  // A thin name: 800 shares a day (under one 1,000-share trade), untraded one day
+  // in six and carried at the last close. A mark one cent from the last close on an
+  // untraded day is an indicative quote.
+  std::vector<Bar> thin = stock(400, 6.0, 0.03, 800, 21);
+  for (std::size_t i = 6; i < thin.size(); i += 6) {
+    thin[i].open = thin[i].high = thin[i].low = thin[i].close = thin[i - 1].close;
+    thin[i].volume = 0.0;
+  }
+  thin[300].close = thin[299].close + 0.01;
+  thin[300].open = thin[300].high = thin[300].low = thin[300].close;
+  thin[300].volume = 0.0;
+  const Result quote = run({"--isolated", "--select", "DQ403", "--format", "jsonl", "--show-info"},
+                           bars_csv("T", thin));
+  CAPTURE(quote.out);
+  CHECK_FALSE(contains(quote.out, R"("severity":"warn")"));
+  CHECK_FALSE(contains(quote.out, R"("severity":"error")"));
+
+  // The same cent on a name that trades two million shares a day: a lost volume,
+  // since a day with no trade is all but impossible there.
+  std::vector<Bar> liquid = stock(400, 6.0, 0.015, 2e6, 22);
+  liquid[300].volume = 0.0;
+  liquid[300].close = liquid[299].close + 0.01;
+  liquid[300].high = std::max(liquid[300].high, liquid[300].close);
+  liquid[300].low = std::min(liquid[300].low, liquid[300].close);
+  const Result lost =
+      run({"--isolated", "--select", "DQ403", "--format", "jsonl"}, bars_csv("L", liquid));
+  CAPTURE(lost.out);
+  CHECK(count_matching(lost.out, R"("code":"DQ403")") == 1);
+  CHECK(contains(lost.out, R"("hypothesis":"lost_volume")"));
+  CHECK(contains(lost.out, "1 step of the 0.01 grid"));
+
+  // [priors] lost_volume is a setting: at a millionth per bar, the cent is a quote.
+  const dorq::test::TempDir dir;
+  const std::string config = (dir.path() / "dorq.toml").string();
+  dorq::test::write_file(config, "[priors]\nlost_volume = 1e-6\n");
+  const Result rare = dorq::test::run_in(
+      dir.path(), {"--config", config.c_str(), "--select", "DQ403", "--format", "jsonl"},
+      bars_csv("L", liquid));
+  CAPTURE(rare.out);
+  CHECK(rare.out.empty());
+}
+
 // ---------------------------------------------------------------------------
 // Stale values
 

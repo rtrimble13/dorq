@@ -156,6 +156,17 @@ struct PricePriors {
   // DQ501: the prior chance that a run of repeated closes starting at a bar is a
   // stale feed rather than an unchanged price (per bar, not normalized with the rest).
   double stale_run = 3e-5;
+  // DE-14, per bar and not normalized with the rest. DQ403: a traded bar's volume
+  // lost (the field dropped, the bar kept). An indicative quote: a mark that moved
+  // on a day with no trade, on a series that always trades; a series that trades
+  // less adds the chance of a day with no trade, e^-(trades a day).
+  double lost_volume = 1e-3;
+  double indicative_quote = 1e-4;
+  // DQ107: a traded bar whose open, high and low were overwritten with its close.
+  double copied_bar = 1e-3;
+  // DQ705: a dividend ten times off its series' others being a slip (an amount
+  // stored at the wrong scale) rather than a special dividend or a cut.
+  double dividend_slip = 0.5;
 };
 
 // Settings for the price action checks (DQ2xx); doc/checks/DQ201.md explains the
@@ -195,6 +206,11 @@ struct PriceSettings {
   // amount: a share of that close, and a share of the amount.
   double dividend_tolerance = 0.015;
   double dividend_amount_tolerance = 0.25;
+  // DQ403 (DE-14): an indicative quote's mark lands within about this many steps of
+  // the price grid of the last close (a normal sd); and the class rate of such
+  // marks weighs this many bars against the series' own.
+  double quote_steps = 1.0;
+  double quote_strength = 50.0;
   PricePriors priors;
   // [calibration] p_error_map (from `dorq calibrate`): a monotone map from the
   // model's p_error to a calibrated one, as (raw, calibrated) knots in rising
@@ -224,6 +240,8 @@ struct PricePatch {
   std::optional<Transform> transform;
   std::optional<double> dividend_tolerance;
   std::optional<double> dividend_amount_tolerance;
+  std::optional<double> quote_steps;
+  std::optional<double> quote_strength;
   // [priors]
   std::optional<double> market_move;
   std::optional<double> bad_print;
@@ -237,6 +255,10 @@ struct PricePatch {
   std::optional<double> pending_distribution;
   std::optional<double> split_on_file_error;
   std::optional<double> stale_run;
+  std::optional<double> lost_volume;
+  std::optional<double> indicative_quote;
+  std::optional<double> copied_bar;
+  std::optional<double> dividend_slip;
 
   void apply_to(PriceSettings& settings) const;
 };

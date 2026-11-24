@@ -108,8 +108,10 @@ jump_scale = 6
 min_price = 1e-05     # prices outside [min_price, max_price] are implausible
 max_price = 1000000
 transform = "auto"    # point series: "log", "diff" (rates, spreads) or "auto" (log if all > 0)
-dividend_tolerance = 0.015  # DQ705: an ex-date close within this share of the close before,
-dividend_amount_tolerance = 0.25  # or of the amount, of (close before - amount) corroborates
+dividend_tolerance = 0.015  # DQ705: how far an ex-date close may sit from the close before
+dividend_amount_tolerance = 0.25  # less the amount: this share of the close, or of the amount
+quote_steps = 1       # DQ403: an indicative quote moves about this many grid steps (sd)
+quote_strength = 50   # DQ403: the class quote rate's weight, in bars, against the series' own
 
 [priors]              # each explanation's prior weight for a scored bar
 market_move = 0.9
@@ -124,6 +126,11 @@ explained_dividend = 0.9  # with --actions: a cash dividend on file between the 
 pending_distribution = 0.05  # with --meta: a NAV fund's drop with no dividend on file (x2 Sep-Dec)
 split_on_file_error = 0.06  # with --actions: a split on file being wrong (DQ701-DQ704)
 stale_run = 3e-05     # DQ501: a run of repeated closes being a stale feed, per bar
+lost_volume = 0.001   # DQ403: a traded bar's volume lost, per bar (DE-14)
+indicative_quote = 0.0001  # DQ403: a moved zero-volume mark, per bar, on a series that
+                      # always trades; plus e^-(trades a day) on one that does not
+copied_bar = 0.001    # DQ107: a bar's open, high and low overwritten with its close
+dividend_slip = 0.5   # DQ705: a dividend ten times off the others is a slip, not special
 
 [severity]            # p_error -> severity, for the probabilistic checks
 info = 0.2            # below this, nothing is reported
@@ -295,7 +302,10 @@ covers:
 - `[statements]` and `[fafnir.tables]`, but only where they differ from their
   defaults: the releases that added them (DR-0901, DR-0902) left every existing
   hash as it was. So did DR-0911's identity and filing priors and
-  `[statements.calibration]`.
+  `[statements.calibration]`, DE-13's `[price] block_decay` and
+  `provisional_severity`, and DE-14's `[price] quote_steps` and `quote_strength`
+  and `[priors] lost_volume`, `indicative_quote`, `copied_bar` and
+  `dividend_slip`.
 
 It does not cover:
 

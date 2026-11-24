@@ -87,13 +87,16 @@ which becomes a `context_gap`. A hard negative becomes a `market_fact`.
 | `split_without_jump` | DQ702 | 4 splits on file that the bars never show |
 | `split_ratio_mismatch` | DQ703 | 4 splits on file at the wrong ratio: inverted, or another split's |
 | `split_double_applied` | DQ704 | 3 splits the bars apply at the ex-date and again 2-12 sessions later |
-| `dividend_slip`, `dividend_above_price` | DQ705 | 3 dividends ×100, and 2 at four times the price (quarterly dividends on every liquid name) |
+| `dividend_slip`, `dividend_above_price` | DQ705 | 3 dividends ×100, and 2 at four times the price (quarterly dividends on every liquid name); and (DE-14) 2 slips of ×10 from an amount whose ten times is at least eleven times the series' median amount and yield |
 | `hn_split_on_file` | - | 8 splits on file, in the bars at their ex-date (DQ2 and DQ70) |
 | `hn_split_between_bars` | - | 3 reverse splits on thin names whose ex-date is a session with no bar (DQ2 and DQ70) |
 | `hn_earnings` | - | each earnings reaction |
 | `hn_crash` | - | the crash day, every series |
 | `hn_tick` | - | every penny and 1/16 series, all its bars |
 | `hn_thin` | - | every thin series, all its bars (DQ20x only) |
+| `hn_indicative_quote` | - | (DE-14) 4 untraded days on each thin name marked a step of its price grid from the last close (DQ403) |
+| `hn_real_flat` | - | (DE-14) 6 days at one price on mid names under $8 whose bars nearby span six steps of their grid or fewer, on 1-1.2 times their volume (DQ107) |
+| `hn_special_dividend` | - | (DE-14) 6 dividends 12-40 times the usual that the price falls by, on a day that also moves 2-4% half the time (DQ705) |
 | `hn_rate` | - | every rate series, all its values (DQ2xx only) |
 
 Faults keep 60 sessions clear of each other and of earnings days, so each label
@@ -138,11 +141,21 @@ close twice now and then, so such runs are reported at info if at all. A
 rate's quarter-point move that half-reverts the next day is ambiguous; one
 such report is allowed.
 
-DQ107 is held to fault precision 0.5 and recall 0.9. It reports 10-20 bars a
-universe: every injected flat bar, other faults that leave a bar flat, and a few
-rare flat days on low-priced names. Since DE-13 moved the newest-bar faults to
-[their own universe](#the-newest-bars), it runs 0.53-0.67 on seeds 1 and 2: those
-flat newest bars were faults it counted. On the penny and 1/16 series it reports 0-4
+DQ107 is held to fault precision 0.5 and recall 0.9. It reports 8-13 bars a
+universe since DE-14: every injected flat bar, other faults that leave a bar flat,
+and a few flat days the generator makes on low-priced liquid names, on one and a
+half to three times the volume of bars five or more steps wide, which no real day
+at one price would show. DE-13 moved the newest-bar faults, flat newest bars it
+counted among faults, to [their own universe](#the-newest-bars).
+
+DE-14's cases are drawn last, after every other, so the rest of a seed's universe
+is as it was. Against 0.15.0's rules on seeds 1-8, warn-and-above reports on them
+fall from 69-77 indicative quotes a universe to none, real flat days from up to 6
+to none, and special dividends from up to 3 to at most 1 (a special on a day that
+moves about as much again, or one whose series pays 0.03 to 0.16 a quarter, can
+read as a slip). DQ705's gates allow that one, at precision 0.8 and recall 0.85.
+All gates hold on seeds 1-7; seed 8 misses DQ201's precision by one thin name's
+spike, as it did before. On the penny and 1/16 series it reports 0-4
 bars, where it reported over a thousand before it learned the price grid.
 
 ## The newest bars
