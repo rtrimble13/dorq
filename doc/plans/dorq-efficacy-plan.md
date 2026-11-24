@@ -1,7 +1,8 @@
 # Plan: dorq efficacy (DE)
 
 - Status: **in progress**. Accepted 2026-11-23; Phase 0's dorq items merged
-  2026-11-23 (DE-01, DE-02), Phase 1 started 2026-11-24 (DE-13). Tracked in
+  2026-11-23 (DE-01, DE-02), Phase 1 started 2026-11-24 (DE-13). All three are in
+  the 0.15.0 release. Tracked in
   [#40](https://github.com/rtrimble13/dorq/issues/40). The caller's side, in `rtrimble13/fafnir`, is
   `doc/plans/dorq-efficacy.md` there, tracked in fafnir#267.
 - Builds on: the [development plan](dorq-development-plan.md) and the
@@ -158,7 +159,7 @@ Keys follow the caller's plan, so one key means one item in both repositories.
 | | [DE-02](https://github.com/rtrimble13/dorq/issues/42) | Calibration honours `verified` (weight or exclude, configurable); one p_error map per code; the fixed-p rules emit a raw score the map can take | M | merged: [#57](https://github.com/rtrimble13/dorq/pull/57) |
 | 1 Precision | [DE-11](https://github.com/rtrimble13/dorq/issues/43) | A series-level structural model for identities and ties (DQ903, DQ904): per (series, identity or tie, period type) a break rate shrunk to the cross-section, and a gap distribution; "unexplained" no longer counts as error by default (`[statements] unexplained_is_error`); DQ904 gets a posterior; chronic breaks become one series-level report | L | ⬜ |
 | | [DE-12](https://github.com/rtrimble13/dorq/issues/44) | One condition, one report: fold versions with the same gap or value, identities broken by one field, and basic and diluted counts. Record keys change; a minor version | M | ⬜ |
-| | [DE-13](https://github.com/rtrimble13/dorq/issues/45) | Provisional means pending: with the evidence after a bar missing, report at info unless the posterior without those terms reaches the error band and an independent term agrees (OHLC inconsistency, zero volume on a liquid series, an implausible level, peers). `kBlockDecay` and `revert_max_bars` become calibratable | M | 🔄 on branch `claude/wizardly-einstein-pgcegr` (§4.1) |
+| | [DE-13](https://github.com/rtrimble13/dorq/issues/45) | Provisional means pending: with the evidence after a bar missing, report at info unless the posterior without those terms reaches the error band and an independent term agrees (OHLC inconsistency, zero volume on a liquid series, an implausible level, peers). `kBlockDecay` and `revert_max_bars` become calibratable | M | merged: [#59](https://github.com/rtrimble13/dorq/pull/59), in 0.15.0 (§4.1) |
 | | [DE-14](https://github.com/rtrimble13/dorq/issues/46) | DQ403, DQ107 and DQ705 become models (pooled rates across class, move size against the grid, an indicative-quote hypothesis) or default to info; their priors move to config | M | ⬜ |
 | 2 Recall | [DE-21](https://github.com/rtrimble13/dorq/issues/47) | Cross-sectional evidence in both directions: (a) a latent "load failed on date d for group g" from every series' own miss probability, thin ones included, with group keys configurable from `--meta` (`[coverage] cohort_by`), feeding each member's DQ301 posterior both ways; (b) DQ601 takes provisional moves; (c) the sibling term enters the posterior before severity | L | ⬜ |
 | | [DE-22](https://github.com/rtrimble13/dorq/issues/48) | Optional per-bar `source` and `known_from`/`loaded_on` columns: a source-seam evidence term on the scale, segment and bad-print hypotheses (as `precision_term`, model.cpp:1017); a load cohort for bars, as DQ951's | L | ⬜ |
@@ -178,11 +179,12 @@ is re-measured. The next phase starts from that evidence, not from this table.
   ([#57](https://github.com/rtrimble13/dorq/pull/57)) merged, under 0.15.0, which is not
   yet tagged. fafnir's DE-03 and DE-04 merged (fafnir#278). Phase 0's last item, the
   baseline audit (fafnir DE-05, fafnir#270), runs on the warehouse host and is open.
-- **2026-11-24.** DE-13 is implemented on `claude/wizardly-einstein-pgcegr`, also
-  under 0.15.0. It does not disturb the baseline: the baseline is dorq 0.14.0 as
-  deployed, and nothing on main reaches the host until a release. A build of main now
-  reports `0.15.0-dev` ([ADR 0006](../adr/0006-versions-and-releases.md)), so a run
-  on one cannot be mistaken for 0.14.0 or 0.15.0.
+- **2026-11-24.** DE-13 merged ([#59](https://github.com/rtrimble13/dorq/pull/59)),
+  and 0.15.0 is released: DE-01, DE-02 and DE-13. It does not disturb the baseline:
+  the baseline is dorq 0.14.0 as deployed, so the host stays on 0.14.0 until fafnir's
+  DE-05 has run there, and installs 0.15.0 for the Phase 1 re-measure. A build of
+  main reports `0.15.0-dev` until the tag ([ADR 0006](../adr/0006-versions-and-releases.md)),
+  so a run on one cannot be mistaken for 0.14.0 or 0.15.0.
   - The rule: a provisional DQ2xx finding is pending, at `[price]
     provisional_severity` (info), unless its block has reverted within the data, or
     its p_error is in the error band and the bar's own evidence (its fields'
