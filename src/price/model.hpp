@@ -92,7 +92,7 @@ struct PriceFinding {
   // least kOwnBarSupport. Reported at no more than [price] provisional_severity.
   [[nodiscard]] bool pending(double error_threshold) const noexcept {
     return provisional && !reverted &&
-           !(p_error >= error_threshold && own_bar_log_bf >= kOwnBarSupport);
+           (p_error < error_threshold || own_bar_log_bf < kOwnBarSupport);
   }
   int block = 1;                             // bars in a bad print
   double factor = 1.0;                       // close / previous close
