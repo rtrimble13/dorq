@@ -121,69 +121,50 @@ how it changes. While the version is `0.y.z`, a change to check codes, names or
 output fields bumps the minor version. From `1.0.0` on, renaming or renumbering a
 check is a major change ([ADR 0003](doc/adr/0003-check-codes.md)).
 
-**Main carries the number of the release it is becoming.** The first pull request
-that changes the code after a release sets the next version, with the change:
+**Every version that reaches main is a release**
+([ADR 0008](doc/adr/0008-every-version-on-main-is-a-release.md), the model
+rtrimble13/alpha-tango uses). A pull request that changes the code (`src/`,
+`include/`, `cmake/`, `CMakeLists.txt`) raises the version, with the change:
 
 ```bash
 scripts/release.sh                 # the version, the latest release, what changed since
-scripts/release.sh bump minor      # or patch, major, X.Y.Z: from the latest release
+scripts/release.sh bump minor      # or patch, major, X.Y.Z: from the version on main
 ```
 
-A binary reports the version as tagged (`0.15.0`) only when it is built from a
-clean tree at the tag `v0.15.0`, or from a source tree without git (a release
-archive). Any other build reports `0.15.0-dev`: `--version`, `dorq version` (whose
-JSON says `"release": false`, and names the commit) and every output record's
-`dorq.version`. A record from a build of main is never mistaken for the release.
-`-DDORQ_RELEASE=ON` or `OFF` (or the environment variable `DORQ_RELEASE`)
-overrides the guess; the release workflow sets `ON`.
+`bump` sets `CMakeLists.txt` and `README.md`'s install steps. Merging the pull
+request publishes the release: `.github/workflows/release.yml` finds the version on
+main with no GitHub release, builds and tests the merge commit on Linux x86-64,
+checks that the binary reports the version from a clean tree, then creates the tag
+`vX.Y.Z` at that commit and the GitHub release with the archives and `SHA256SUMS`.
+The release notes are generated from the merged PR titles. A pull request that
+leaves the code alone (docs, tests, tooling) keeps the version, and its merge
+releases nothing.
 
-**CI holds the version to the tags** (`scripts/check_version.sh`, the `version`
+A binary reports the version as tagged (`0.16.0`) only when it is built from a
+clean tree at the tag `v0.16.0`, or from a source tree without git (a release
+archive). Any other build reports `0.16.0-dev`: `--version`, `dorq version` (whose
+JSON says `"release": false`, and names the commit) and every output record's
+`dorq.version`. A build of a branch, or of main past its release, is never
+mistaken for the release. `-DDORQ_RELEASE=ON` or `OFF` (or the environment
+variable `DORQ_RELEASE`) overrides the guess; the release workflow sets `ON`.
+
+**CI holds the version to these rules** (`scripts/check_version.sh`, the `version`
 job, on every pull request and push to main):
 
 1. It is `X.Y.Z`, and never below the latest release (the newest tag `vX.Y.Z` in
    the history).
-2. Once `src/`, `include/`, `cmake/` or `CMakeLists.txt` differs from the latest
-   release, it is above it.
+2. In a pull request that changes the code, it is above the base branch's
+   version. Once the code differs from the latest release, it is above that too.
 3. A change to the bars output since the latest release
    (`tests/data/bars-golden.sha256`) is at least a minor bump.
-4. `README.md`'s install steps name the latest release, or this version (the
-   release's own pull request), or a release whose pull request has merged and
-   that the release workflow has yet to tag.
+4. `README.md`'s install steps name it.
 
-**A release publishes when its pull request merges**
-([ADR 0007](doc/adr/0007-releases-publish-on-merge.md)):
-
-1. On a branch, `scripts/release.sh prepare` sets `README.md`'s install steps to
-   the version `CMakeLists.txt` carries (or `prepare minor` and so on, to choose
-   another), checks the rules, and commits `Release vX.Y.Z`. Open a pull request
-   and merge it.
-2. The merge runs `.github/workflows/release.yml`. It finds the release that is
-   due (`scripts/release.sh plan`: the install steps name the version
-   `CMakeLists.txt` carries, and no GitHub release `vX.Y.Z` exists), and the commit
-   where the install steps first named it: the merge. It builds and tests that
-   commit on Linux x86-64, checks that the binary reports the version from a clean
-   tree, tags the commit `vX.Y.Z`, and publishes the archives and `SHA256SUMS` as a
-   GitHub release. The release notes are generated from the merged PR titles.
-3. Every other push to main finds nothing due, in a few seconds. A release that
-   failed half-way publishes on the next push to main, or from the Actions tab
-   (`release`, "Run workflow", on main). A tag already there must name the
-   commit built.
-
-`scripts/release.sh plan` shows what the next run would release. `scripts/release.sh
-tag --push` is for when the workflow cannot tag: it tags the commit the workflow
-would, from main at `origin/main`, and the pushed tag runs the same workflow. The
-workflow cannot tag a commit whose `.github/workflows` differ from main's (GitHub
-would need a `workflows` permission that its token cannot have): a release tagged
-late, after a pull request that changed a workflow. Its plan job then fails at
-once and names this command. It also cannot tag past a tag ruleset that does not
-let GitHub Actions create tags. Tagging by hand needs credentials that may touch
-workflow files: an SSH key, or a token with the `workflow` scope.
-
-The workflow only picks a commit whose `CMakeLists.txt` says the release's
-version, so its version check fails only for a tag pushed by hand on another
-commit: delete that tag (`git push --delete origin vX.Y.Z`) and let the workflow
-tag the release. Never move a tag once a release is published: a checkout that
-already has it will not see the move.
+The release workflow runs on every push to main and finds nothing to do, in a few
+seconds, when the version is already released. It never cancels a run half-way,
+and one that failed can be run again from the Actions tab (`release`, "Run
+workflow", on main). `scripts/release.sh plan` shows what it would release. Never
+move or delete a tag once a release is published: a checkout that already has it
+will not see the move. Fix forward with the next version instead.
 
 **Callers move in lockstep.** fafnir runs dorq and reads its output. A release
 whose output fafnir's code needs is paired with fafnir's change, which raises

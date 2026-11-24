@@ -1,6 +1,8 @@
 # ADR 0007: A release publishes when its pull request merges
 
-- Status: Accepted
+- Status: Superseded by [ADR 0008](0008-every-version-on-main-is-a-release.md)
+  (every version on main is a release, alpha-tango's model). Kept for the record
+  of 0.15.0's failed tag (decision 7)
 - Date: 2026-11-24
 - Amends: [ADR 0006](0006-versions-and-releases.md), decision 4 (`scripts/release.sh
   tag` was the release)

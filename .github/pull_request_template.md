@@ -29,9 +29,10 @@
 ## Version
 
 <!-- The version CMakeLists.txt carries after this PR, and why: unchanged (nothing
-     a binary does changed), or the bump `scripts/release.sh bump` made. The
-     `version` check holds it to the tags (CONTRIBUTING.md, "Versioning and
-     releasing"). Does a caller (fafnir) need this release, in lockstep? -->
+     a binary does changed), or the bump `scripts/release.sh bump` made. A PR that
+     changes the code must raise it, and merging it publishes that release (the
+     `version` check; CONTRIBUTING.md, "Versioning and releasing"). Does a caller
+     (fafnir) need this release, in lockstep? -->
 
 - Version:
 - Caller in lockstep: none

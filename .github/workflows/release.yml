@@ -1,22 +1,17 @@
 name: release
 
-# A release publishes itself when its pull request merges. A release is due when
-# README.md's install steps name the version CMakeLists.txt carries
-# (scripts/release.sh prepare sets them) and no GitHub release vX.Y.Z exists. This
-# workflow then builds and tests the commit where the install steps first named it
-# (the merge of prepare's pull request), checks that the binary reports the version
-# from a clean tree, tags that commit vX.Y.Z and publishes the archives. Any other
-# push to main finds nothing due, in a few seconds. Nothing else publishes a
-# release. See CONTRIBUTING.md, "Versioning and releasing", and ADR 0007.
+# Publishes the version on main when it has no GitHub release yet: every version
+# that reaches main is a release (ADR 0008). A pull request that changes the code
+# raises the version (scripts/check_version.sh holds it to that), so its merge is
+# the release. This builds and tests the merge commit, checks that the binary
+# reports the version from a clean tree, then creates the tag vX.Y.Z at that commit
+# and the GitHub release with the archives. A push that leaves the version as
+# released finds nothing to do, in a few seconds. See CONTRIBUTING.md, "Versioning
+# and releasing".
 on:
   push:
     branches: [main]
-    # A tag pushed by hand (scripts/release.sh tag --push, where this workflow
-    # cannot tag) publishes the same way. The tag this workflow pushes does not
-    # start another run: a push made with GITHUB_TOKEN starts no workflow.
-    tags: ["v*"]
-  # By hand, from the Actions tab: after a failure, or to publish a release that is
-  # due without waiting for the next push to main.
+  # By hand, from the Actions tab: after a transient failure.
   workflow_dispatch:
 
 permissions:
@@ -33,11 +28,11 @@ jobs:
     outputs:
       version: ${{ steps.plan.outputs.version }}
       commit: ${{ steps.plan.outputs.commit }}
+      tagged: ${{ steps.plan.outputs.tagged }}
     steps:
       - uses: actions/checkout@v4
         with:
-          # The history and the tags: where the release was prepared, and whether
-          # it is tagged.
+          # The tags: whether this version is already released.
           fetch-depth: 0
 
       - name: Find the release that is due
@@ -46,23 +41,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            version="${GITHUB_REF_NAME#v}"
-            commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
-          elif [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
-            # Run by hand on a branch: a release publishes from main, once merged.
+          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
             echo "::error::A release publishes from main; this run is on ${GITHUB_REF}." >&2
             exit 1
-          else
-            plan="$(scripts/release.sh plan)"
-            version="$(sed -n 's/^version=//p' <<< "${plan}")"
-            commit="$(sed -n 's/^commit=//p' <<< "${plan}")"
           fi
-          if [[ -z "${version}" ]]; then
-            echo "Nothing to release: README.md's install steps name no prepared release." |
-              tee -a "${GITHUB_STEP_SUMMARY}"
-            exit 0
-          fi
+          plan="$(scripts/release.sh plan)"
+          version="$(sed -n 's/^version=//p' <<< "${plan}")"
+          commit="$(sed -n 's/^commit=//p' <<< "${plan}")"
+          tagged="$(sed -n 's/^tagged=//p' <<< "${plan}")"
           if out="$(gh release view "v${version}" --repo "${GITHUB_REPOSITORY}" --json tagName 2>&1)"; then
             echo "v${version} is published; nothing to release." | tee -a "${GITHUB_STEP_SUMMARY}"
             exit 0
@@ -70,30 +56,13 @@ jobs:
             echo "::error::Could not ask GitHub whether v${version} is published: ${out}" >&2
             exit 1
           fi
-          # GitHub refuses a tag from this workflow's token on a commit whose workflow
-          # files differ from main's: to GitHub that tag creates workflows, which needs
-          # the workflows permission, and GITHUB_TOKEN cannot have it. The release's
-          # commit is normally main's head, so this is a release tagged late, after a
-          # pull request that changed a workflow. Say so now, not after the build.
-          if [[ "${GITHUB_REF_TYPE}" != "tag" ]] &&
-             ! git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; then
-            git fetch -q origin main
-            if ! git diff --quiet "${commit}" origin/main -- .github/workflows; then
-              {
-                echo "v${version} is due at $(git rev-parse --short "${commit}"), but its workflow files"
-                echo "differ from main's, so this workflow cannot tag it (GitHub would need the"
-                echo "workflows permission, which GITHUB_TOKEN cannot have). Tag it from main, and"
-                echo "the pushed tag publishes it:"
-                echo ""
-                echo "    git checkout main && git pull && scripts/release.sh tag --push"
-              } | tee -a "${GITHUB_STEP_SUMMARY}"
-              echo "::error::v${version} must be tagged by hand: scripts/release.sh tag --push, on main (see the run summary)." >&2
-              exit 1
-            fi
-          fi
           echo "Releasing v${version} from $(git log -1 --format='%h (%s)' "${commit}")." |
             tee -a "${GITHUB_STEP_SUMMARY}"
-          { echo "version=${version}"; echo "commit=${commit}"; } >> "${GITHUB_OUTPUT}"
+          {
+            echo "version=${version}"
+            echo "commit=${commit}"
+            echo "tagged=${tagged}"
+          } >> "${GITHUB_OUTPUT}"
 
   build:
     name: build (${{ matrix.platform }})
@@ -139,8 +108,7 @@ jobs:
           echo "release: v${VERSION}  binary: ${reported}"
           if [[ "${reported}" != "${VERSION}" ]]; then
             echo "::error::v${VERSION} is due, but the binary built from" \
-                 "$(git rev-parse --short HEAD) reports ${reported}. A tag pushed by hand on" \
-                 "the wrong commit? Delete it, and let this workflow tag the release." >&2
+                 "$(git rev-parse --short HEAD) reports ${reported}." >&2
             exit 1
           fi
           if build/release/src/dorq version | grep -q '+dirty'; then
@@ -177,10 +145,8 @@ jobs:
     env:
       VERSION: ${{ needs.plan.outputs.version }}
       COMMIT: ${{ needs.plan.outputs.commit }}
+      TAGGED: ${{ needs.plan.outputs.tagged }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -189,38 +155,18 @@ jobs:
         working-directory: dist
         run: sha256sum -- *.tar.gz | tee SHA256SUMS
 
-      # Annotated, as scripts/release.sh tag makes it. A tag already there (pushed
-      # by hand, or by a run that failed after it) must name the commit built. The
-      # plan job has checked that GitHub will take the push (the workflow files are
-      # main's).
-      - name: Tag the release's commit
-        run: |
-          set -euo pipefail
-          tag="v${VERSION}"
-          if existing="$(git rev-parse -q --verify "refs/tags/${tag}^{commit}")"; then
-            if [[ "${existing}" != "${COMMIT}" ]]; then
-              echo "::error::${tag} already names ${existing}, not ${COMMIT}, the commit built." \
-                   "Never move a pushed tag; prepare the next version instead." >&2
-              exit 1
-            fi
-            echo "${tag} is already tagged at ${COMMIT}."
-          else
-            git -c user.name="github-actions[bot]" \
-                -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-                tag -a "${tag}" -m "dorq ${VERSION}" "${COMMIT}"
-            if ! git push origin "refs/tags/${tag}"; then
-              echo "::error::GitHub refused ${tag}. If main's workflow files changed since the" \
-                   "plan job ran, tag it from main: scripts/release.sh tag --push." >&2
-              exit 1
-            fi
-          fi
-
-      - name: Create the GitHub release
+      # The release creates the tag vX.Y.Z at the commit built, as alpha-tango's
+      # does. A tag already there (pushed by hand) is used as it is: plan took its
+      # commit.
+      - name: Create the tag and the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          where=(--target "${COMMIT}")
+          [[ "${TAGGED}" == "true" ]] && where=(--verify-tag)
           gh release create "v${VERSION}" dist/*.tar.gz dist/SHA256SUMS \
             --repo "${GITHUB_REPOSITORY}" \
             --title "dorq ${VERSION}" \
-            --verify-tag \
+            "${where[@]}" \
             --generate-notes
