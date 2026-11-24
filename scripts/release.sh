@@ -258,9 +258,12 @@ case "${COMMAND}" in
     ;;
 
   tag)
-    # The release workflow tags a release itself. This is for when it cannot (a
-    # ruleset that keeps the workflow from creating tags, say): it tags the commit
-    # the workflow would, and the pushed tag runs the same workflow.
+    # The release workflow tags a release itself. This is for when it cannot: a
+    # release tagged late, whose workflow files differ from main's (GitHub refuses
+    # that tag from GITHUB_TOKEN; the run's plan job says so), or a ruleset that
+    # keeps the workflow from creating tags. It tags the commit the workflow would,
+    # and the pushed tag runs the same workflow. Your push needs credentials that
+    # may touch workflow files: an SSH key, or a token with the workflow scope.
     require_clean
     [[ "$(git rev-parse --abbrev-ref HEAD)" == "main" ]] || die "tag on main, once the release's pull request has merged"
     run git fetch -q origin main --tags

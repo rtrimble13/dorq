@@ -70,6 +70,27 @@ jobs:
             echo "::error::Could not ask GitHub whether v${version} is published: ${out}" >&2
             exit 1
           fi
+          # GitHub refuses a tag from this workflow's token on a commit whose workflow
+          # files differ from main's: to GitHub that tag creates workflows, which needs
+          # the workflows permission, and GITHUB_TOKEN cannot have it. The release's
+          # commit is normally main's head, so this is a release tagged late, after a
+          # pull request that changed a workflow. Say so now, not after the build.
+          if [[ "${GITHUB_REF_TYPE}" != "tag" ]] &&
+             ! git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; then
+            git fetch -q origin main
+            if ! git diff --quiet "${commit}" origin/main -- .github/workflows; then
+              {
+                echo "v${version} is due at $(git rev-parse --short "${commit}"), but its workflow files"
+                echo "differ from main's, so this workflow cannot tag it (GitHub would need the"
+                echo "workflows permission, which GITHUB_TOKEN cannot have). Tag it from main, and"
+                echo "the pushed tag publishes it:"
+                echo ""
+                echo "    git checkout main && git pull && scripts/release.sh tag --push"
+              } | tee -a "${GITHUB_STEP_SUMMARY}"
+              echo "::error::v${version} must be tagged by hand: scripts/release.sh tag --push, on main (see the run summary)." >&2
+              exit 1
+            fi
+          fi
           echo "Releasing v${version} from $(git log -1 --format='%h (%s)' "${commit}")." |
             tee -a "${GITHUB_STEP_SUMMARY}"
           { echo "version=${version}"; echo "commit=${commit}"; } >> "${GITHUB_OUTPUT}"
@@ -169,7 +190,9 @@ jobs:
         run: sha256sum -- *.tar.gz | tee SHA256SUMS
 
       # Annotated, as scripts/release.sh tag makes it. A tag already there (pushed
-      # by hand, or by a run that failed after it) must name the commit built.
+      # by hand, or by a run that failed after it) must name the commit built. The
+      # plan job has checked that GitHub will take the push (the workflow files are
+      # main's).
       - name: Tag the release's commit
         run: |
           set -euo pipefail
@@ -185,7 +208,11 @@ jobs:
             git -c user.name="github-actions[bot]" \
                 -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
                 tag -a "${tag}" -m "dorq ${VERSION}" "${COMMIT}"
-            git push origin "refs/tags/${tag}"
+            if ! git push origin "refs/tags/${tag}"; then
+              echo "::error::GitHub refused ${tag}. If main's workflow files changed since the" \
+                   "plan job ran, tag it from main: scripts/release.sh tag --push." >&2
+              exit 1
+            fi
           fi
 
       - name: Create the GitHub release

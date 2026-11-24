@@ -52,20 +52,33 @@ finds each version that has no tag, and tags and publishes it.
    accepts install steps that name it. `bump` and `prepare` count from it, so the
    pull request after a release can set the next version while the workflow runs.
 6. **`scripts/release.sh tag` stays, as the fallback** for when the workflow cannot
-   create a tag (a tag ruleset that leaves out GitHub Actions). It tags the same
-   commit the workflow would, and the workflow publishes a tag pushed by hand the
-   same way. A tag the workflow pushes with `GITHUB_TOKEN` starts no second run.
+   create a tag. It tags the same commit the workflow would, and the workflow
+   publishes a tag pushed by hand the same way. A tag the workflow pushes with
+   `GITHUB_TOKEN` starts no second run.
+7. **A release tagged late is tagged by hand.** GitHub refuses a tag from
+   `GITHUB_TOKEN` on a commit whose `.github/workflows` differ from main's: to
+   GitHub, that tag creates workflow files, which needs the `workflows`
+   permission, and `GITHUB_TOKEN` cannot have it. The release's commit is normally
+   main's head when the workflow runs, so this happens only when a pull request
+   that changes a workflow lands first. The plan job checks for it and fails at
+   once, with the command to run (`scripts/release.sh tag --push`, on main),
+   rather than after the build.
 
 ## Consequences
 
 - Releasing is one pull request. Nobody has to remember a second step, and nobody
   needs tag push access outside CI.
-- 0.15.0 publishes itself on the first push to main after this lands: README.md
-  has named it since #60's merge, and it has no tag. The release is that merge
-  commit, 917eea6.
+- 0.15.0 was the first release tagged late. Its commit, 917eea6 (#60's merge),
+  predates this change to the workflows. The first run (after #61's merge) built
+  and tested it, then GitHub refused the tag push ("refusing to allow a GitHub App
+  to create or update workflow `.github/workflows/ci.yml` without `workflows`
+  permission"). Decision 7 comes from that run. 0.15.0 is tagged by hand with
+  `scripts/release.sh tag --push`.
 - Every push to main runs a short `plan` job that usually finds nothing to do.
 - The workflow needs `contents: write` to push the tag. A repository ruleset that
   stops GitHub Actions creating `v*` tags would stop it. Then the fallback above
   applies, or the ruleset lets `github-actions[bot]` through.
+- Whoever tags by hand needs credentials that may touch workflow files: an SSH
+  key, or a token with the `workflow` scope (`gh auth refresh -s workflow`).
 - A release's notes stay GitHub's generated list of merged pull request titles
   (ADR 0006, recommendation 3, still applies).
