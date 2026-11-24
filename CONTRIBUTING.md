@@ -116,25 +116,59 @@ the tag in a comment. A new dependency:
 ## Versioning and releasing
 
 dorq uses [Semantic Versioning](https://semver.org/). The version is written in
-one place, the `project()` call in `CMakeLists.txt`. The binary reports it, and the
-release workflow refuses a tag that disagrees with it.
+one place, the `project()` call in `CMakeLists.txt`, and `scripts/release.sh` is
+how it changes. While the version is `0.y.z`, a change to check codes, names or
+output fields bumps the minor version. From `1.0.0` on, renaming or renumbering a
+check is a major change ([ADR 0003](doc/adr/0003-check-codes.md)).
 
-While the version is `0.y.z`, a change to check codes, names or output fields bumps
-the minor version. From `1.0.0` on, renaming or renumbering a check is a major
-change ([ADR 0003](doc/adr/0003-check-codes.md)).
+**Main carries the number of the release it is becoming.** The first pull request
+that changes the code after a release sets the next version, with the change:
+
+```bash
+scripts/release.sh                 # the version, the latest release, what changed since
+scripts/release.sh bump minor      # or patch, major, X.Y.Z: from the latest release
+```
+
+A binary reports the version as tagged (`0.15.0`) only when it is built from a
+clean tree at the tag `v0.15.0`, or from a source tree without git (a release
+archive). Any other build reports `0.15.0-dev`: `--version`, `dorq version` (whose
+JSON says `"release": false`, and names the commit) and every output record's
+`dorq.version`. A record from a build of main is never mistaken for the release.
+`-DDORQ_RELEASE=ON` or `OFF` (or the environment variable `DORQ_RELEASE`)
+overrides the guess; the release workflow sets `ON`.
+
+**CI holds the version to the tags** (`scripts/check_version.sh`, the `version`
+job, on every pull request and push to main):
+
+1. It is `X.Y.Z`, and never below the latest release (the newest tag `vX.Y.Z` in
+   the history).
+2. Once `src/`, `include/`, `cmake/` or `CMakeLists.txt` differs from the latest
+   release, it is above it.
+3. A change to the bars output since the latest release
+   (`tests/data/bars-golden.sha256`) is at least a minor bump.
+4. `README.md`'s install steps name the latest release, or this version (the
+   release's own pull request).
 
 To release:
 
-1. In a PR, set the new version in `CMakeLists.txt` and merge it to `main`.
-2. Tag the merge commit and push the tag:
-   ```bash
-   git checkout main && git pull
-   git tag -a v0.1.0 -m "dorq 0.1.0"
-   git push origin v0.1.0
-   ```
-3. `.github/workflows/release.yml` builds and tests on Linux x86-64. It checks that the binary reports the tag's version from a clean tree,
-   then publishes the archives and `SHA256SUMS` as a GitHub release. The release
-   notes are generated from the merged PR titles.
+1. On a branch, `scripts/release.sh prepare` sets `README.md`'s install steps to
+   the version `CMakeLists.txt` carries (or `prepare minor` and so on, to choose
+   another), checks the rules, and commits `Release vX.Y.Z`. Open a pull request
+   and merge it.
+2. On main, `scripts/release.sh tag --push` tags the merge commit `vX.Y.Z` and
+   pushes the tag. It refuses unless main is `origin/main`, clean, above the latest
+   release, and prepared, and unless the tag is new. Without `--push` it tags
+   locally and prints the push.
+3. `.github/workflows/release.yml` builds and tests on Linux x86-64. It checks that
+   the binary reports the tag's version from a clean tree, then publishes the
+   archives and `SHA256SUMS` as a GitHub release. The release notes are generated
+   from the merged PR titles.
 
 If the tag check fails, delete the tag (`git push --delete origin vX.Y.Z`), fix the
-version, and tag again.
+version, and tag again. Never move a tag once a release is published: a checkout
+that already has it will not see the move.
+
+**Callers move in lockstep.** fafnir runs dorq and reads its output. A release
+whose output fafnir's code needs is paired with fafnir's change, which raises
+`DORQ_MIN_VERSION` (`src/fafnir/dq/dorq.py` there) and its install steps
+(`doc/dorq.md`) to it. fafnir refuses an older binary.

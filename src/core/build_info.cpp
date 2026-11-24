@@ -38,6 +38,8 @@ std::string to_json(const BuildInfo& info) {
   std::string out;
   out += R"({"version":)";
   append_json_string(out, info.version);
+  out += R"(,"release":)";
+  out += info.release ? "true" : "false";
   out += R"(,"commit":)";
   append_json_string(out, info.commit);
   out += R"(,"dirty":)";

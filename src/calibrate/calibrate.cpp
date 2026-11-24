@@ -15,8 +15,8 @@
 #include <utility>
 #include <vector>
 
+#include "dorq/build_info.hpp"
 #include "dorq/number.hpp"
-#include "dorq/version.hpp"
 #include "stats/special.hpp"
 
 namespace dorq {
@@ -756,7 +756,8 @@ CalibrationReport calibrate(const std::vector<Series>& series, const std::vector
 std::string priors_toml(const CalibrationReport& r) {
   const PricePriors& p = r.after.priors;
   std::string out;
-  out += "# Written by `dorq calibrate` (dorq " + std::string{kVersion} + "). Include it from a\n";
+  out += "# Written by `dorq calibrate` (dorq " + std::string{build_info().version} +
+         "). Include it from a\n";
   out += "# config file: include = \"priors.toml\". See doc/calibration.md.\n#\n";
   out += "# labels: " + std::to_string(r.labels) + ", of which " + std::to_string(r.price_labels) +
          " about price moves and " + std::to_string(r.matched_labels) + " matching a scored move\n";

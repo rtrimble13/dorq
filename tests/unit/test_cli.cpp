@@ -10,8 +10,8 @@
 #include <doctest/doctest.h>
 
 #include "cli/app.hpp"
+#include "dorq/build_info.hpp"
 #include "dorq/exit_code.hpp"
-#include "dorq/version.hpp"
 #include "test_support.hpp"
 
 namespace {
@@ -49,7 +49,7 @@ TEST_CASE("exit codes are a fixed contract") {
 TEST_CASE("--version prints the bare version on stdout") {
   const Result result = run({"--version"});
   CHECK(result.status == 0);
-  CHECK(result.out == std::string{dorq::kVersion} + "\n");
+  CHECK(result.out == std::string{dorq::build_info().version} + "\n");
   CHECK(result.err.empty());
 }
 
@@ -76,11 +76,12 @@ TEST_CASE("an unknown option is a usage error") {
 TEST_CASE("version prints build information, as text or JSON") {
   const Result text = run({"version"});
   CHECK(text.status == 0);
-  CHECK(text.out.rfind("dorq " + std::string{dorq::kVersion} + "\n", 0) == 0);
+  CHECK(text.out.rfind("dorq " + std::string{dorq::build_info().version} + "\n", 0) == 0);
   const Result json = run({"version", "--format", "json"});
   CHECK(json.status == 0);
   CHECK(json.out.front() == '{');
-  CHECK(contains(json.out, R"("version":")" + std::string{dorq::kVersion} + R"(")"));
+  CHECK(contains(json.out, R"("version":")" + std::string{dorq::build_info().version} + R"(")"));
+  CHECK(contains(json.out, R"("release":)"));
   CHECK(run({"version", "--format", "xml"}).status == kUsage);
 }
 

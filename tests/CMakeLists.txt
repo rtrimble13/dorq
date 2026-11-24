@@ -33,8 +33,9 @@ doctest_discover_tests(dorq_tests TEST_PREFIX "unit.")
 # CLI tests: the real binary, as a script or job would run it. Every check run is
 # --isolated, so a config file on the machine cannot change the result.
 add_test(NAME cli.version-flag COMMAND dorq --version)
+# The project's version, with -dev unless this is a build of its tag.
 set_tests_properties(cli.version-flag PROPERTIES PASS_REGULAR_EXPRESSION
-                                                 "^${PROJECT_VERSION}\n$")
+                                                 "^${PROJECT_VERSION}(-dev)?\n$")
 
 set(DATA "${CMAKE_CURRENT_SOURCE_DIR}/data")
 

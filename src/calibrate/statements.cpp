@@ -17,8 +17,8 @@
 #include <vector>
 
 #include "calibrate/calibrate.hpp"
+#include "dorq/build_info.hpp"
 #include "dorq/number.hpp"
-#include "dorq/version.hpp"
 #include "engine/engine.hpp"
 #include "stats/special.hpp"
 
@@ -954,7 +954,7 @@ StatementCalibrationReport calibrate_statements(const std::vector<Series>& serie
 
 std::string statements_toml(const StatementCalibrationReport& r) {
   std::string out;
-  out += "# Written by `dorq calibrate` (dorq " + std::string{kVersion} +
+  out += "# Written by `dorq calibrate` (dorq " + std::string{build_info().version} +
          ") on statements labels.\n# Include it from a config file: include = \"...\". See "
          "doc/calibration.md.\n#\n";
   out += "# labels: " + std::to_string(r.labels) + ", of which " +

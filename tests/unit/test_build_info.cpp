@@ -31,7 +31,8 @@ TEST_CASE("the version is MAJOR.MINOR.PATCH and agrees with its components") {
 
 TEST_CASE("build_info describes this binary") {
   const dorq::BuildInfo& info = dorq::build_info();
-  CHECK(info.version == dorq::kVersion);
+  // The project's version as tagged, or with -dev for a build of anything else.
+  CHECK(info.version == std::string{dorq::kVersion} + (info.release ? "" : "-dev"));
   CHECK_FALSE(info.commit.empty());
   CHECK_FALSE(info.compiler.empty());
   CHECK_FALSE(info.system.empty());
@@ -39,7 +40,7 @@ TEST_CASE("build_info describes this binary") {
 
 TEST_CASE("to_text leads with the name and version") {
   const std::string text = dorq::to_text(dorq::build_info());
-  CHECK(text.rfind("dorq " + std::string{dorq::kVersion} + "\n", 0) == 0);
+  CHECK(text.rfind("dorq " + std::string{dorq::build_info().version} + "\n", 0) == 0);
   CHECK(text.find("\ncommit ") != std::string::npos);
   CHECK(text.back() == '\n');
 }
@@ -54,6 +55,7 @@ TEST_CASE("to_text marks a dirty build") {
 TEST_CASE("to_json is one object on one line, fields in a fixed order") {
   const dorq::BuildInfo info{
       .version = "1.2.3",
+      .release = true,
       .commit = "abc123",
       .dirty = false,
       .build_type = "Release",
@@ -61,7 +63,8 @@ TEST_CASE("to_json is one object on one line, fields in a fixed order") {
       .system = "Linux x86_64",
   };
   CHECK(dorq::to_json(info) ==
-        R"({"version":"1.2.3","commit":"abc123","dirty":false,"build_type":"Release",)"
+        R"({"version":"1.2.3","release":true,"commit":"abc123","dirty":false,)"
+        R"("build_type":"Release",)"
         R"("compiler":"GNU 13.3.0","system":"Linux x86_64"})");
 }
 

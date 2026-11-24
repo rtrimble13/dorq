@@ -25,3 +25,13 @@
 <!-- Does this change any output for the same input and config? Could it make output
      depend on thread count, input order or the platform? If so, say how that is
      handled. "No output change" is a fine answer. -->
+
+## Version
+
+<!-- The version CMakeLists.txt carries after this PR, and why: unchanged (nothing
+     a binary does changed), or the bump `scripts/release.sh bump` made. The
+     `version` check holds it to the tags (CONTRIBUTING.md, "Versioning and
+     releasing"). Does a caller (fafnir) need this release, in lockstep? -->
+
+- Version:
+- Caller in lockstep: none

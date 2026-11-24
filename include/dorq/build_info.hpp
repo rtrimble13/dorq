@@ -9,7 +9,11 @@ namespace dorq {
 // records it beside the flags a run writes, so a flag can always be traced to the
 // code that raised it.
 struct BuildInfo {
-  std::string_view version;     // from project() in CMakeLists.txt
+  // From project() in CMakeLists.txt, with "-dev" after it for a build that is not
+  // the release: anything but a clean tree at the tag v<version> (or a source tree
+  // without git, a release archive). What `dorq --version` and every record report.
+  std::string_view version;
+  bool release;                 // the version as tagged: no "-dev"
   std::string_view commit;      // short git commit at build time, or "unknown"
   bool dirty;                   // the source tree differed from `commit`
   std::string_view build_type;  // Release, Debug, ...

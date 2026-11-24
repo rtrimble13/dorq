@@ -26,6 +26,10 @@ jobs:
     env:
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
+      # Report the version as the release, X.Y.Z: the job runs only for a tag, and
+      # the step below checks that the tag is the version CMakeLists.txt carries.
+      # Elsewhere a build decides from git (X.Y.Z-dev off the tagged commit).
+      DORQ_RELEASE: "ON"
     steps:
       - uses: actions/checkout@v4
       - name: Install Ninja
@@ -37,6 +41,7 @@ jobs:
       # A tag is a promise that a commit is a version. `git tag` will put any name on
       # any commit, so this is where the promise is checked: the binary built from
       # the tagged commit must report the tag's version, from a clean tree.
+      # scripts/release.sh tag checks the same before it tags.
       - name: The tag must match the version the binary reports
         shell: bash
         run: |
