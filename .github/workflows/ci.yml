@@ -13,11 +13,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The version rules (scripts/check_version.sh): never below the latest release,
-  # above it once the code has changed, a minor bump for a change to the bars
-  # output, and README's install steps naming a release that exists, this version,
-  # or a merged release the release workflow is publishing. They are judged against
-  # the tags, so this checkout has the whole history.
+  # The version rules (scripts/check_version.sh): every version on main is a
+  # release, so a pull request that changes the code raises the version above its
+  # base's, README's install steps name it, and a change to the bars output is a
+  # minor bump. They are judged against the base branch and the tags, so this
+  # checkout has the whole history.
   version:
     runs-on: ubuntu-24.04
     steps:
@@ -25,7 +25,14 @@ jobs:
         with:
           fetch-depth: 0
       - name: Version rules
-        run: scripts/check_version.sh
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [[ -n "${BASE_REF}" ]]; then
+            scripts/check_version.sh --base "origin/${BASE_REF}"
+          else
+            scripts/check_version.sh
+          fi
       - name: Release status
         run: scripts/release.sh
 
