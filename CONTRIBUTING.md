@@ -170,9 +170,14 @@ job, on every pull request and push to main):
    commit built.
 
 `scripts/release.sh plan` shows what the next run would release. `scripts/release.sh
-tag --push` is for when the workflow cannot tag (a tag ruleset that does not let
-GitHub Actions create tags): it tags the commit the workflow would, from main at
-`origin/main`, and the pushed tag runs the same workflow.
+tag --push` is for when the workflow cannot tag: it tags the commit the workflow
+would, from main at `origin/main`, and the pushed tag runs the same workflow. The
+workflow cannot tag a commit whose `.github/workflows` differ from main's (GitHub
+would need a `workflows` permission that its token cannot have): a release tagged
+late, after a pull request that changed a workflow. Its plan job then fails at
+once and names this command. It also cannot tag past a tag ruleset that does not
+let GitHub Actions create tags. Tagging by hand needs credentials that may touch
+workflow files: an SSH key, or a token with the `workflow` scope.
 
 The workflow only picks a commit whose `CMakeLists.txt` says the release's
 version, so its version check fails only for a tag pushed by hand on another
