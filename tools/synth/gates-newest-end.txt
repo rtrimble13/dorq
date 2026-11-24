@@ -1,0 +1,20 @@
+# dorq-synth's newest-bar universe (DE-13; `dorq-synth newest`), as of the night its
+# events are on the last one to three bars: tests/synth_newest_gate.cmake. Same
+# format as gates.txt, plus `<fault kind> recall`: the share of that kind's labels
+# reported, at warn and above, under a code they expect.
+#
+# What is reported at warn and above is right. Until the bars after an event are
+# in, its size alone cannot tell a bad print from a split, a change of scale or
+# news, so 0.14, which reported each at warn, put a split's bars under DQ201 with
+# a repair that deletes them (DQ201 precision 0.86-0.91 here; the 13 ETFs of
+# 2026-11-19). They wait at info now.
+DQ201 precision 0.95
+DQ202 precision 0.95
+DQ203 precision 0.95
+DQ204 precision 0.95
+# Real moves on the newest bar, by up to half or double, on 1.5 to 12 times the
+# usual volume: never an error at warn.
+newest_jump max 0
+# Evidence in the bar itself (it moved on no volume, its close is outside its own
+# range, or it is at a price no security trades at) settles a bad print at once.
+newest_evident recall 0.9

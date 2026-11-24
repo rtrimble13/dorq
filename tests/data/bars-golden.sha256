@@ -1,5 +1,6 @@
-# The bars output on dorq-synth seed 1 (tests/bars_golden.cmake), as v0.10.0
-# wrote it on Linux, GCC 13 and Clang 18 alike. A change meant to move bars
-# output updates these and says so in its pull request.
-jsonl 6c99fc5eaa2142bcadd05c2a9d634a2f26098fd1b22833320e1283595cca1081
-text 290bd931e0f4483fa1ae6bf894f3f3515b02e7a6d4227e5bc8c27def39de9a3d
+# The bars output on dorq-synth seed 1 (tests/bars_golden.cmake), on Linux, GCC 13
+# and Clang 18 alike. A change meant to move bars output updates these and says so
+# in its pull request. Last moved by DE-13 (provisional findings pending at info,
+# and the newest-bar faults moved to `dorq-synth newest`).
+jsonl a7f61ea06a8fa1b4bb97faf1a88684c9312514ad2bd57eae2f89043ea2d4764e
+text 47e5f1e131c52efb7231d9ef8ee14238984fccbe6e3cea4aeb85377e3502e6b4

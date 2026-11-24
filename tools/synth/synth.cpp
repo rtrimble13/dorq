@@ -6,6 +6,8 @@
 //   dorq-synth statements [--seed N] --out DIR   writes DIR/statements.csv, items.csv,
 //                                                actions.csv, meta.csv, labels.csv, labels.jsonl
 //   dorq-synth verify-statements --dir DIR --config F
+//   dorq-synth newest [--seed N] --out DIR       writes DIR/end.csv, later.csv, labels.csv:
+//                                                events on the newest bars (DE-13)
 //   dorq-synth score --labels F --results F [--gates F] [--verbose]
 //
 // The generator draws from its own PRNG (xoshiro256**) and its own normal and t
@@ -46,7 +48,8 @@ using synth::Rng;
 // ---------------------------------------------------------------------------
 // Generation
 
-enum class Class : std::uint8_t { kLiquid, kMid, kThin, kPenny, kSixteenths };
+// kFund: a quiet fund or ETF (the newest-bar universe), with no earnings.
+enum class Class : std::uint8_t { kLiquid, kMid, kThin, kPenny, kSixteenths, kFund };
 
 struct Bar {
   Date date;
@@ -174,6 +177,16 @@ class Generator {
   };
   void run(const Outputs& out);
 
+  // The newest-bar universe (DE-13): each series ends with an event on one of its
+  // last provisional_bars bars. `end` is the universe as of that night; `later`
+  // the same series kLaterSessions sessions on, when the bars after are in.
+  struct NewestOutputs {
+    std::ostream& end;
+    std::ostream& later;
+    std::ostream& labels;
+  };
+  void run_newest(const NewestOutputs& out);
+
  private:
   [[nodiscard]] std::vector<Date> sessions(Date from, int count) const {
     std::vector<Date> out;
@@ -189,7 +202,6 @@ class Generator {
                 std::size_t crash_index);
   void inject(std::vector<SeriesPlan>& universe);
   void inject_bad_prints(Pool& tradable);
-  void inject_newest(Pool& tradable);
   void inject_bad_closes(Pool& tradable);
   void inject_splits(Pool& tradable);
   void inject_scale_eras(Pool& tradable);
@@ -381,23 +393,6 @@ void Generator::inject_bad_prints(Pool& tradable) {
       plan.bars[i].volume = std::round(plan.bars[i].volume * rng_.uniform(0.2, 1.0));
     }
     label(plan, t, t + k - 1, "bad_print", "DQ201");
-    ++done;
-  }
-}
-
-// The newest bar wrong: provisional.
-void Generator::inject_newest(Pool& tradable) {
-  for (int done = 0; done < 4;) {
-    SeriesPlan& plan = any(tradable);
-    const std::size_t t = plan.bars.size() - 1;
-    if (!reserve(plan.id, t, t)) {
-      continue;
-    }
-    Bar& bar = plan.bars[t];
-    bar.close = round_price(bar.close * (rng_.chance(0.5) ? 100.0 : 0.01), plan.cls);
-    bar.open = bar.high = bar.low = bar.close;
-    // With no later bar, a bad print and a scale change look alike.
-    label(plan, t, t, "bad_print_newest", "DQ201|DQ202");
     ++done;
   }
 }
@@ -701,7 +696,6 @@ void Generator::inject(std::vector<SeriesPlan>& universe) {
     }
   }
   inject_bad_prints(tradable);
-  inject_newest(tradable);
   inject_bad_closes(tradable);
   inject_splits(tradable);
   inject_scale_eras(tradable);
@@ -965,6 +959,8 @@ void Generator::run(const Outputs& out) {
           plan.volume = rng_.log_uniform(1e4, 1e5);
           plan.beta = 0.0;
           break;
+        case Class::kFund:  // the newest-bar universe's (run_newest)
+          break;
       }
       universe.push_back(std::move(plan));
     }
@@ -1074,6 +1070,208 @@ void Generator::run(const Outputs& out) {
   for (std::size_t t = 0; t < n; ++t) {
     level *= std::exp(market[t]);
     out.market << dates[t].to_string() << ',' << dorq::format_number(round_to(level, 0.01)) << '\n';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The newest-bar universe (DE-13)
+
+// Sessions the later view adds after the end view's last bar: more than
+// provisional_bars, so nothing on the end view's last bars is provisional there.
+constexpr int kLaterSessions = 10;
+
+// A move of `size` (above 1), up or down, that is no clean split ratio: on the
+// newest bars a real move or a bad print at 2:1 is a split by its size alone.
+double off_ratio(Rng& rng, double lo, double hi) {
+  static constexpr std::array<double, 4> kRatios = {1.25, 1.5, 2.0, 2.5};
+  for (;;) {
+    const double size = rng.log_uniform(lo, hi);
+    if (std::none_of(kRatios.begin(), kRatios.end(),
+                     [size](double r) { return std::fabs(std::log(size / r)) < 0.06; })) {
+      return rng.chance(0.5) ? size : 1.0 / size;
+    }
+  }
+}
+
+// A wrong factor for a bad print on the newest bars: a decimal slip, or a
+// plausible-looking wrong price. A slip is one series' on its night: several
+// series off by x0.1 on one night are a cohort (DQ601), which the later view
+// would report as one.
+double newest_bad_factor(Rng& rng, std::size_t night,
+                         std::set<std::pair<std::size_t, double>>& slips) {
+  if (rng.chance(0.3)) {
+    const double slip = rng.chance(0.5) ? 10.0 : 0.1;
+    if (slips.insert({night, slip}).second) {
+      return slip;
+    }
+  }
+  return off_ratio(rng, 1.35, 2.5);
+}
+
+void Generator::run_newest(const NewestOutputs& out) {
+  constexpr int kEndSessions = 320;
+  const std::vector<Date> dates =
+      sessions(Date::from_ymd(2024, 1, 2), kEndSessions + kLaterSessions);
+  const std::size_t n = dates.size();
+  const std::size_t end = kEndSessions - 1;  // the end view's last bar
+  std::vector<double> market(n);
+  double variance = 0.01 * 0.01;
+  for (std::size_t t = 0; t < n; ++t) {
+    market[t] = std::sqrt(variance) * rng_.t4();
+    variance = 0.01 * 0.01 * 0.04 + 0.08 * market[t] * market[t] + 0.88 * variance;
+  }
+
+  std::vector<SeriesPlan> universe;
+  const auto add = [&](const char* prefix, int count, Class cls) {
+    for (int i = 0; i < count; ++i) {
+      SeriesPlan plan;
+      plan.id = std::string{prefix} + (i < 9 ? "0" : "") + std::to_string(i + 1);
+      plan.cls = cls;
+      if (cls == Class::kFund) {  // quiet funds, some of them low-priced (leveraged ETFs)
+        plan.price = rng_.log_uniform(4, 120);
+        plan.vol = rng_.uniform(0.004, 0.009);
+        plan.volume = rng_.log_uniform(1e5, 2e6);
+        plan.beta = rng_.uniform(0.3, 1.0);
+      } else if (cls == Class::kMid) {
+        plan.price = rng_.log_uniform(5, 40);
+        plan.vol = rng_.uniform(0.025, 0.04);
+        plan.volume = rng_.log_uniform(3e4, 3e5);
+        plan.beta = rng_.uniform(0.6, 1.4);
+      } else {
+        plan.price = rng_.log_uniform(20, 200);
+        plan.vol = rng_.uniform(0.012, 0.025);
+        plan.volume = rng_.log_uniform(5e5, 5e6);
+        plan.beta = rng_.uniform(0.6, 1.3);
+      }
+      universe.push_back(std::move(plan));
+    }
+  };
+  add("NLQ", 40, Class::kLiquid);
+  add("NFD", 40, Class::kFund);
+  add("NMD", 20, Class::kMid);
+  for (SeriesPlan& plan : universe) {
+    simulate(plan, dates, market, n);
+  }
+
+  // Splits on one night are each at a ratio no other series splits by that
+  // night, so that none is a cohort (DQ601).
+  static constexpr std::array<SplitShares, 5> kForward = {{{2, 1}, {3, 1}, {3, 2}, {4, 1}, {5, 1}}};
+  static constexpr std::array<SplitShares, 5> kReverse = {
+      {{1, 4}, {1, 5}, {1, 8}, {1, 10}, {1, 20}}};
+  std::set<std::pair<std::size_t, double>> split_nights;  // (bar, price factor)
+  std::set<std::pair<std::size_t, double>> slips;         // likewise, decimal slips and scales
+  int evident = 0;
+  for (std::size_t i = 0; i < universe.size(); ++i) {
+    SeriesPlan& plan = universe[i];
+    // The event's first bar: the end view's last, or one or two before it.
+    std::size_t t = end - static_cast<std::size_t>(rng_.integer(0, 2));
+    const double prev = plan.bars[t - 1].close;
+    switch (i % 5) {
+      case 0: {  // a real jump: the bar trades to the new level on a surge of volume
+        const double factor = off_ratio(rng_, 1.25, 2.0);
+        for (std::size_t j = t; j < n; ++j) {
+          scale_bar(plan.bars[j], factor, plan.cls);
+        }
+        Bar& bar = plan.bars[t];
+        bar.open = round_price(prev * std::exp(rng_.uniform(0.2, 0.8) * std::log(bar.close / prev)),
+                               plan.cls);
+        bar.high = round_price(std::max(bar.open, bar.close) * (1.0 + rng_.uniform(0.002, 0.02)),
+                               plan.cls);
+        bar.low = round_price(std::min(bar.open, bar.close) * (1.0 - rng_.uniform(0.002, 0.02)),
+                              plan.cls);
+        // From half again the usual volume (news on a quiet fund) to twelve times.
+        const double surge = rng_.log_uniform(1.5, 12.0);
+        for (std::size_t j = t; j < n; ++j) {
+          const double decay = std::pow(0.6, static_cast<double>(j - t));
+          plan.bars[j].volume = std::round(plan.bars[j].volume * (1.0 + (surge - 1.0) * decay));
+        }
+        labels_.emplace_back(plan.id, dates[t], dates[t], "newest_jump", "", "DQ2");
+        break;
+      }
+      case 1: {  // a split the data does not record
+        const auto& ratios = prev >= 12.0 ? kForward : kReverse;
+        std::size_t pick = static_cast<std::size_t>(rng_.integer(0, 4));
+        const auto factor_of = [&](std::size_t r) {
+          return ratios.at(r).before / ratios.at(r).after;
+        };
+        for (int tries = 0; split_nights.contains({t, factor_of(pick)}) && tries < 15; ++tries) {
+          pick = (pick + 1) % ratios.size();
+          if (pick == 0) {
+            t = t == end - 2 ? end : t - 1;
+          }
+        }
+        const double factor = factor_of(pick);
+        split_nights.insert({t, factor});
+        for (std::size_t j = t; j < n; ++j) {
+          scale_bar(plan.bars[j], factor, plan.cls);
+          plan.bars[j].volume = std::round(plan.bars[j].volume / factor);
+        }
+        labels_.emplace_back(plan.id, dates[t], dates[t], "newest_split", "DQ203", "");
+        break;
+      }
+      case 2: {  // a bad print of one or two bars, which the later view reverts from
+        const std::size_t k = rng_.chance(0.6) ? 1 : 2;
+        const double factor = newest_bad_factor(rng_, t, slips);
+        for (std::size_t j = t; j < t + k; ++j) {
+          scale_bar(plan.bars[j], factor, plan.cls);
+          plan.bars[j].volume = std::round(plan.bars[j].volume * rng_.uniform(0.2, 1.0));
+        }
+        labels_.emplace_back(plan.id, dates[t], dates[t + k - 1], "newest_bad_print", "DQ201", "");
+        break;
+      }
+      case 3: {  // a bad print with evidence in the bar itself
+        const int how = evident++ % 3;
+        const char* expect = "DQ201|DQ202";
+        if (how == 0) {  // it moved on no volume
+          scale_bar(plan.bars[t], newest_bad_factor(rng_, t, slips), plan.cls);
+          plan.bars[t].volume = 0.0;
+        } else if (how == 1) {  // only the close is off: outside the bar's range
+          plan.bars[t].close =
+              round_price(plan.bars[t].close * newest_bad_factor(rng_, t, slips), plan.cls);
+          expect = "DQ204|DQ201";
+        } else {  // a price no security trades at
+          scale_bar(plan.bars[t], 1e6, plan.cls);
+          expect = "DQ202|DQ201";
+        }
+        labels_.emplace_back(plan.id, dates[t], dates[t], "newest_evident", expect, "");
+        break;
+      }
+      default: {  // the level at the wrong scale from here on
+        static constexpr std::array<double, 4> kScales = {100.0, 0.01, 1000.0, 0.001};
+        auto pick = static_cast<std::size_t>(rng_.integer(0, 3));
+        for (int tries = 0; tries < 4 && !slips.insert({t, kScales.at(pick)}).second; ++tries) {
+          pick = (pick + 1) % kScales.size();  // one series per factor and night (DQ601)
+        }
+        const double factor = kScales.at(pick);
+        for (std::size_t j = t; j < n; ++j) {
+          scale_bar(plan.bars[j], factor, plan.cls);
+        }
+        labels_.emplace_back(plan.id, dates[t], dates[t], "newest_scale", "DQ202", "");
+        break;
+      }
+    }
+  }
+
+  for (std::ostream* bars : {&out.end, &out.later}) {
+    *bars << "series,date,open,high,low,close,volume\n";
+  }
+  for (const SeriesPlan& plan : universe) {
+    for (std::size_t j = 0; j < n; ++j) {
+      const Bar& bar = plan.bars[j];
+      std::ostringstream row;
+      row << plan.id << ',' << bar.date.to_string() << ',' << price_text(bar.open, plan.cls) << ','
+          << price_text(bar.high, plan.cls) << ',' << price_text(bar.low, plan.cls) << ','
+          << price_text(bar.close, plan.cls) << ',' << dorq::format_number(bar.volume) << '\n';
+      if (j <= end) {
+        out.end << row.str();
+      }
+      out.later << row.str();
+    }
+  }
+  out.labels << "series,first,last,kind,expect,codes\n";
+  for (const Label& l : labels_) {
+    out.labels << l.series << ',' << l.first.to_string() << ',' << l.last.to_string() << ','
+               << l.kind << ',' << l.expect << ',' << l.codes << '\n';
   }
 }
 
@@ -1334,6 +1532,9 @@ class Tally {
         return expects(l, r.code) && overlaps(r, l, kSlack);
       });
       c.found += found ? 1 : 0;
+      Counts& k = by_kind_[l.kind];
+      ++k.labels;
+      k.found += found ? 1 : 0;
       if (!found && narrate(code)) {
         std::cout << "missed (" << l.kind << "): " << l.series << " " << l.first.to_string() << ".."
                   << l.last.to_string() << scope(l) << " " << l.expect << "\n";
@@ -1362,6 +1563,10 @@ class Tally {
       cell(std::to_string(c.found), 7);
       cell(fixed3(ratio(c.found, c.labels)), 8);
       std::cout << line << "\n";
+    }
+    std::cout << "\nfaults found with a code they expect, by kind:";
+    for (const auto& [kind, k] : by_kind_) {
+      std::cout << " " << kind << " " << k.found << "/" << k.labels;
     }
     std::cout << "\nhard negatives reported at warn or above:";
     std::set<std::string> kinds;
@@ -1424,6 +1629,11 @@ class Tally {
     if (gate.metric == "max") {  // a code's reports, or a hard-negative kind's
       return gate.code.starts_with("DQ") ? by_code_[gate.code].reported : hard_hits_[gate.code];
     }
+    if (!gate.code.starts_with("DQ")) {  // a fault kind: its labels found with a code they expect
+      const Counts& k = by_kind_[gate.code];
+      return gate.metric == "recall" ? std::optional<double>{ratio(k.found, k.labels)}
+                                     : std::nullopt;
+    }
     const Counts& c = by_code_[gate.code];
     if (gate.metric == "precision") {
       return ratio(c.correct, c.reported);
@@ -1441,7 +1651,8 @@ class Tally {
   const std::vector<Gate>& gates_;
   bool verbose_ = false;
   std::map<std::string, Counts> by_code_;
-  std::map<std::string, int> hard_hits_;  // by hard-negative kind
+  std::map<std::string, Counts> by_kind_;  // faults, by label kind: labels and found
+  std::map<std::string, int> hard_hits_;   // by hard-negative kind
 };
 
 int score(const std::string& labels_path, const std::string& results_path,
@@ -1469,6 +1680,7 @@ int usage() {
   std::cerr << "usage: dorq-synth generate [--seed N] --out DIR\n"
                "       dorq-synth statements [--seed N] --out DIR\n"
                "       dorq-synth verify-statements --dir DIR --config F\n"
+               "       dorq-synth newest [--seed N] --out DIR\n"
                "       dorq-synth score --labels F --results F [--gates F] [--verbose]\n"
                "       dorq-synth bench --copies K [--seed N] --out FILE\n";
   return 2;
@@ -1507,6 +1719,19 @@ int main(int argc, char** argv) {
       std::ofstream market(std::filesystem::path(*out) / "market.csv", std::ios::binary);
       Generator(seed).run({bars, points, labels, labels_jsonl, actions, meta, market});
       return 0;
+    }
+    if (args[1] == "newest") {
+      const auto out = value("--out");
+      if (!out) {
+        return usage();
+      }
+      const std::uint64_t seed = std::stoull(value("--seed").value_or("1"));
+      std::filesystem::create_directories(*out);
+      std::ofstream end(std::filesystem::path(*out) / "end.csv", std::ios::binary);
+      std::ofstream later(std::filesystem::path(*out) / "later.csv", std::ios::binary);
+      std::ofstream labels(std::filesystem::path(*out) / "labels.csv", std::ios::binary);
+      Generator(seed).run_newest({end, later, labels});
+      return end && later && labels ? 0 : 2;
     }
     if (args[1] == "statements") {
       const auto out = value("--out");

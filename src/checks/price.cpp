@@ -269,6 +269,10 @@ Violation make_violation(const SeriesContext& context, const PriceAnalysis& anal
   v.p_error = finding.p_error;
   v.provisional = finding.provisional;
   const bool market = &info == &large_move_info();
+  // DE-13: a provisional finding whose case rests on bars not yet in, and that the
+  // bar itself does not settle, waits at [price] provisional_severity (info by
+  // default) for the bars after it. Any other provisional one is at most warn.
+  const bool pending = !market && finding.pending(context.thresholds.error);
   std::optional<H> explanation;  // DQ209's: the most probable that is not an error
   if (market) {
     v.severity = Severity::kInfo;
@@ -277,7 +281,8 @@ Violation make_violation(const SeriesContext& context, const PriceAnalysis& anal
   } else {
     v.severity = context.thresholds.for_probability(finding.p_error).value_or(Severity::kInfo);
     if (finding.provisional) {
-      v.severity = std::min(v.severity, Severity::kWarn);
+      v.severity =
+          std::min(v.severity, pending ? context.price.provisional_severity : Severity::kWarn);
     }
     v.classification = finding.hypothesis == H::kUnreportedSplit ? Classification::kContextGap
                                                                  : Classification::kDataError;
@@ -307,7 +312,9 @@ Violation make_violation(const SeriesContext& context, const PriceAnalysis& anal
   }
   if (with_probability) {
     v.message += "; P(error) = " + format_probability(finding.p_error);
-    if (finding.provisional) {
+    if (pending) {
+      v.message += ", pending the bars after it";
+    } else if (finding.provisional) {
       v.message += ", provisional";
     }
   }
@@ -341,6 +348,9 @@ Violation make_violation(const SeriesContext& context, const PriceAnalysis& anal
     v.detail.push_back({"range_vs_typical", *finding.range_vs_typical});
   }
   v.detail.push_back({"leading_hypothesis", std::string{to_string(finding.leading)}});
+  if (finding.provisional && !market) {
+    v.detail.push_back({"pending", pending});
+  }
   if (explanation) {
     v.detail.push_back({"hypothesis", std::string{to_string(*explanation)}});
   }

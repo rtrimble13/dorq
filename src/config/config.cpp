@@ -304,6 +304,14 @@ void read_price(const toml::table& table, const std::string& where, const std::s
       patch.split_ratios = std::move(ratios);
     } else if (key == "provisional_bars") {
       patch.provisional_bars = read_int(node, where, path, 0, 100);
+    } else if (key == "block_decay") {
+      patch.block_decay = read_double(node, where, path, 0.01, 0.99);
+    } else if (key == "provisional_severity") {
+      const auto severity = parse_severity(read_string(node, where, path));
+      if (!severity || *severity == Severity::kError) {
+        fail(where, node, "\"" + path + R"(" must be "info" or "warn")");
+      }
+      patch.provisional_severity = severity;
     } else if (key == "segment_gap") {
       patch.segment_gap = read_int(node, where, path, 2, 100000);
     } else if (key == "volatility_discount") {
@@ -1025,6 +1033,8 @@ PricePatch full_patch(const PriceSettings& settings) {
   full.ratio_tolerance = settings.ratio_tolerance;
   full.split_ratios = settings.split_ratios;
   full.provisional_bars = settings.provisional_bars;
+  full.block_decay = settings.block_decay;
+  full.provisional_severity = settings.provisional_severity;
   full.segment_gap = settings.segment_gap;
   full.volatility_discount = settings.volatility_discount;
   full.tail_dof = settings.tail_dof;
@@ -1085,6 +1095,12 @@ void append_price_patch(std::string& out, const PricePatch& patch) {
     out += '\n';
   }
   append_integer(out, "provisional_bars", patch.provisional_bars);
+  append_number(out, "block_decay", patch.block_decay);
+  if (patch.provisional_severity) {
+    out += "provisional_severity = \"";
+    out += to_string(*patch.provisional_severity);
+    out += "\"\n";
+  }
   append_integer(out, "segment_gap", patch.segment_gap);
   append_number(out, "volatility_discount", patch.volatility_discount);
   append_number(out, "tail_dof", patch.tail_dof);
@@ -1367,6 +1383,8 @@ void PricePatch::apply_to(PriceSettings& settings) const {
   set(settings.ratio_tolerance, ratio_tolerance);
   set(settings.split_ratios, split_ratios);
   set(settings.provisional_bars, provisional_bars);
+  set(settings.block_decay, block_decay);
+  set(settings.provisional_severity, provisional_severity);
   set(settings.segment_gap, segment_gap);
   set(settings.volatility_discount, volatility_discount);
   set(settings.tail_dof, tail_dof);
@@ -1854,7 +1872,18 @@ std::string render(const Config& config, bool all_sections) {
   out += "\nconfident_density = " + format_number(config.cohort.confident_density);
   out += "\ncohort_move_max_tail = " + format_number(config.cohort.move_max_tail) + "\n";
 
-  const PricePatch price = full_patch(config.price);
+  PricePatch price = full_patch(config.price);
+  // DE-13's settings are left out of config_hash where they hold their defaults,
+  // so the release that added them changed no existing hash.
+  if (!all_sections) {
+    const PriceSettings defaults;
+    if (config.price.block_decay == defaults.block_decay) {
+      price.block_decay.reset();
+    }
+    if (config.price.provisional_severity == defaults.provisional_severity) {
+      price.provisional_severity.reset();
+    }
+  }
   out += "\n[price]\n";
   append_price_patch(out, price);
   out += "\n[priors]\n";
@@ -2080,7 +2109,9 @@ violent_range = 5             # a bar's range this many times the usual: a viole
 ratio_tolerance = 0.01        # slack on a clean ratio, on the log scale
 split_ratios = ["2:1", "3:1", "3:2", "4:1", "5:1", "5:4", "8:1", "10:1", "15:1", "20:1", "1:2", "1:3", "1:4", "1:5", "1:8", "1:10", "1:15", "1:20", "1:25", "1:30", "1:40", "1:50", "1:100"]
 provisional_bars = 3          # fewer bars after a bar than this: provisional, at most warn
-segment_gap = 60              # DQ205: sessions without a bar before a new history
+block_decay = 0.5             # a bad print of k bars has prior weight block_decay^k
+provisional_severity = "info" # a provisional finding the bar alone cannot settle: pending
+segment_gap = 60             # DQ205: sessions without a bar before a new history
 volatility_discount = 0.97    # volatility follows about 1 / (1 - discount) returns
 tail_dof = 4                  # degrees of freedom of ordinary returns (Student t)
 jump_prob = 0.03              # a real move's chance of being a jump,

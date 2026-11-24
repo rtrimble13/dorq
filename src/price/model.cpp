@@ -44,8 +44,6 @@ constexpr double kNoiseSpread = 0.7;
 double noise_ll(double log_ratio) noexcept {
   return stats::student_t_log_pdf(log_ratio, 4.0, kNoiseSpread);
 }
-// A bad print's block of k bars has prior weight proportional to this to the k.
-constexpr double kBlockDecay = 0.5;
 // Volume on the day of a real large move, against the usual: about e times.
 constexpr double kSurge = 1.0;
 // Volume on the day of a bad print: a little below the usual.
@@ -170,6 +168,9 @@ struct Term {
   DetailValue value;
   std::string note;
   Terms ll{};
+  // The term reads bars after the candidate: on a provisional finding, evidence
+  // that is not all in yet (DE-13).
+  bool after = false;
 };
 
 // A term's log-likelihood under one hypothesis.
@@ -730,7 +731,7 @@ Term Scorer::return_term(const Candidate& c, PriceFinding& out) const {
 NextBars Scorer::next_bars(const Candidate& c) const {
   const std::size_t t = c.t;
   NextBars out;
-  out.term = Term{"next_bars", false, {}, {}};
+  out.term = Term{"next_bars", false, {}, {}, true};
   std::vector<double> plain;  // log density of each later return, as ordinary
   double all_plain = 0.0;
   double all_stirred = 0.0;      // and as ordinary after a real move
@@ -745,14 +746,15 @@ NextBars Scorer::next_bars(const Candidate& c) const {
     largest = std::fabs(f_.ret[t + j]) > std::fabs(largest) ? f_.ret[t + j] : largest;
   }
   double norm = 0.0;
+  const double decay = settings_.block_decay;
   for (std::size_t k = 1; k <= c.max_block; ++k) {
-    norm += std::pow(kBlockDecay, static_cast<double>(k));
+    norm += std::pow(decay, static_cast<double>(k));
   }
   double mixture = kNegInf;
   double best = kNegInf;
   double first = all_plain;
   for (std::size_t k = 1; k <= c.max_block; ++k) {
-    const double weight = std::log(std::pow(kBlockDecay, static_cast<double>(k)) / norm);
+    const double weight = std::log(std::pow(decay, static_cast<double>(k)) / norm);
     double ll = all_plain;  // not yet reverted within the data: nothing to score
     if (k <= plain.size()) {
       // The block's own moves cancel: from before it to after it is ordinary.
@@ -906,6 +908,8 @@ void Scorer::volume_terms(const Candidate& c, PriceFinding& out, std::vector<Ter
     at(term, H::kExplainedDividend) = ll(0.002, lpre + kSurge * surprise(c, c.net_r), spread);
     at(term, H::kPendingDistribution) = ll(0.002, lpre, spread);
     term.note = "against the median before";
+    // The split and segment columns lean on the level after, when there is one.
+    term.after = have_post;
     terms.push_back(std::move(term));
   }
   if (!have_post) {
@@ -948,6 +952,7 @@ void Scorer::volume_terms(const Candidate& c, PriceFinding& out, std::vector<Ter
   at(term, H::kExplainedDividend) =
       log_normal_pdf(dv, -0.5 * c.net_r, std::hypot(kVolumeDrift, noise));
   term.note = "median after / before";
+  term.after = true;
   terms.push_back(std::move(term));
 }
 
@@ -1025,6 +1030,7 @@ std::optional<Term> Scorer::precision_term(const Candidate& c) const {
   }
   Term term = uniform_term("precision_shift", after - before, std::log(0.1));
   term.note = "decimal places after - before";
+  term.after = true;
   at(term, H::kScaleError) = 0.0;
   return term;
 }
@@ -1045,6 +1051,7 @@ void Scorer::segment_terms(const Candidate& c, std::vector<Term>& terms) const {
   Term vol = uniform_term("volatility_shift", std::exp(shift), log_normal_pdf(shift, 0.0, 0.35));
   at(vol, H::kHistorySegment) = log_normal_pdf(shift, 0.0, 1.0);
   vol.note = "after / before";
+  vol.after = true;
   terms.push_back(std::move(vol));
 }
 
@@ -1088,6 +1095,47 @@ std::size_t conclude(const std::vector<Term>& terms, PriceFinding& out,
   out.p_error = std::min(out.p_error, 1.0);
   out.hypothesis = static_cast<H>(best);
   out.leading = static_cast<H>(leading);
+  return best;
+}
+
+// The evidence from the bar itself (DE-13): the log Bayes factor, over the terms
+// that read neither the bars after it nor the size of its move, of an error
+// against the most probable explanation that is not one, for the error it favours
+// most. The prior and the return are left out: the size of a move is what a
+// provisional finding cannot yet tell apart. The volume on the day counts against
+// an error whenever it does, and for one only when it is zero on a series with a
+// volume base: a low but traded volume is what a reverse split or a quiet print
+// shows too.
+double own_bar_log_bf(const std::vector<Term>& terms, const PriceFinding& out, bool zero_volume) {
+  std::optional<std::size_t> other;  // the most probable explanation that is not an error
+  for (std::size_t h = 0; h < kCount; ++h) {
+    if (out.considered.at(h) && !is_error(static_cast<H>(h)) &&
+        (!other || out.posterior.at(h) > out.posterior.at(*other))) {
+      other = h;
+    }
+  }
+  if (!other) {
+    return std::numeric_limits<double>::infinity();
+  }
+  double best = -std::numeric_limits<double>::infinity();
+  for (std::size_t h = 0; h < kCount; ++h) {
+    if (!out.considered.at(h) || !is_error(static_cast<H>(h))) {
+      continue;
+    }
+    double total = 0.0;
+    for (std::size_t i = 0; i < terms.size(); ++i) {
+      const Term& term = terms[i];
+      if (i == 0 || term.after || term.feature == "return") {
+        continue;
+      }
+      const double log_bf = term.ll.at(h) - term.ll.at(*other);
+      if (std::isnan(log_bf) || (term.feature == "volume_on_day" && !zero_volume && log_bf > 0.0)) {
+        continue;
+      }
+      total += log_bf;
+    }
+    best = std::max(best, total);
+  }
   return best;
 }
 
@@ -1170,6 +1218,13 @@ PriceFinding Scorer::score(std::size_t t) const {
   if (out.hypothesis == H::kBadPrint) {
     out.block = static_cast<int>(next.best_block);
     out.end_bar = std::min(t + next.best_block, n_) - 1;
+    // The bar after the block is in: the series has gone back (DE-13).
+    out.reverted = next.count > 0 && t + next.best_block < n_;
+  }
+  if (out.provisional) {
+    const double v = volume(t);
+    out.own_bar_log_bf =
+        own_bar_log_bf(terms, out, !out.base_volume_zero && shift.judged && v == 0.0);
   }
 
   // Evidence for the reported hypothesis, against a market move. The bars after

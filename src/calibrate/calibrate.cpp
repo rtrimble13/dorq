@@ -164,7 +164,52 @@ struct Hyper {
   double jump_prob = 0.03;
   double jump_scale = 6.0;
   double ratio_tolerance = 0.01;
+  double block_decay = 0.5;
+  int revert_max_bars = 5;
 };
+
+// Whether a label is about a bad print: a data error it expects DQ201 of.
+bool about_bad_print(const Label& label) {
+  if (label.label_class != LabelClass::kDataError || label.about_statements()) {
+    return false;
+  }
+  std::stringstream codes(label.expect);
+  for (std::string code; std::getline(codes, code, '|');) {
+    if (code == "DQ201") {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Each bad-print label's block: the bars of its series within its span, and its
+// weight. A span of more than 20 bars is no block (a label over a repair's range).
+std::vector<std::pair<int, double>> labelled_blocks(const std::vector<Series>& series,
+                                                    const std::vector<Label>& labels) {
+  std::unordered_map<std::string, const Series*> by_key;
+  for (const Series& s : series) {
+    for (const std::string* key : {&s.label, &s.id}) {
+      if (!key->empty()) {
+        by_key[*key] = &s;
+      }
+    }
+  }
+  std::vector<std::pair<int, double>> blocks;
+  for (const Label& label : labels) {
+    const auto it = by_key.find(label.series);
+    if (!about_bad_print(label) || it == by_key.end()) {
+      continue;
+    }
+    const std::vector<Date>& dates = it->second->date;
+    const auto bars = std::count_if(dates.begin(), dates.end(), [&label](Date day) {
+      return day >= label.first && day <= label.last;
+    });
+    if (bars >= 1 && bars <= 20) {
+      blocks.emplace_back(static_cast<int>(bars), label.weight);
+    }
+  }
+  return blocks;
+}
 
 class Collector {
  public:
@@ -238,6 +283,8 @@ class Collector {
     settings.price.jump_prob = hyper.jump_prob;
     settings.price.jump_scale = hyper.jump_scale;
     settings.price.ratio_tolerance = hyper.ratio_tolerance;
+    settings.price.block_decay = hyper.block_decay;
+    settings.price.revert_max_bars = hyper.revert_max_bars;
     settings.price.priors = priors;
     settings.price.p_error_map.clear();
     const PriceAnalysis analysis =
@@ -454,6 +501,8 @@ Fit evaluate(const std::vector<Observation>& obs, const Weights& w, const Weight
   fit.jump_prob = hyper.jump_prob;
   fit.jump_scale = hyper.jump_scale;
   fit.ratio_tolerance = hyper.ratio_tolerance;
+  fit.block_decay = hyper.block_decay;
+  fit.revert_max_bars = hyper.revert_max_bars;
   const Objective train = objective(obs, w, w0, false, nullptr);
   const Objective test = objective(obs, w, w0, true, nullptr);
   fit.objective = train.value;
@@ -478,6 +527,18 @@ std::string weight(double value) {
   const double magnitude = std::floor(std::log10(value));
   const double scale = std::pow(10.0, 3.0 - magnitude);
   return format_number(std::round(value * scale) / scale);
+}
+
+// The block fit for people: "bad-print blocks: 30 labels, longest 3 bars".
+std::string blocks_text(const BlockFit& b) {
+  std::string out = "bad-print blocks: " + std::to_string(b.labels) + " labels";
+  if (b.labels > 0) {
+    out += ", longest " + std::to_string(b.longest) + " bar" + (b.longest == 1 ? "" : "s");
+  }
+  if (!b.fitted) {
+    out += " (fewer than " + std::to_string(kMinBlockLabels) + ": as configured)";
+  }
+  return out;
 }
 
 }  // namespace
@@ -563,6 +624,37 @@ double expected_calibration_error(const std::vector<WeightedPoint>& points, std:
   return ece;
 }
 
+BlockFit fit_blocks(const std::vector<std::pair<int, double>>& blocks, double block_decay,
+                    int revert_max_bars) {
+  BlockFit fit;
+  fit.block_decay = block_decay;
+  fit.revert_max_bars = revert_max_bars;
+  fit.labels = blocks.size();
+  double weight = 0.0;
+  double bars = 0.0;
+  for (const auto& [k, w] : blocks) {
+    fit.longest = std::max(fit.longest, k);
+    weight += w;
+    bars += w * k;
+  }
+  if (blocks.size() < kMinBlockLabels) {
+    return fit;
+  }
+  fit.fitted = true;
+  // A geometric distribution on 1, 2, ... with P(k) proportional to d^k has mean
+  // 1 / (1 - d); its maximum-likelihood d from blocks of mean m is (m - 1) / m. The
+  // pseudo-labels add the configured distribution's mean.
+  const double n = weight + kBlockPseudoLabels;
+  const double total = bars + kBlockPseudoLabels / (1.0 - block_decay);
+  fit.block_decay = std::clamp((total - n) / total, 0.01, 0.99);
+  int k = std::max(fit.longest, 1);
+  while (k < 20 && std::pow(fit.block_decay, k) > 1.0 / (weight + 1.0)) {
+    ++k;
+  }
+  fit.revert_max_bars = k;
+  return fit;
+}
+
 CalibrationReport calibrate(const std::vector<Series>& series, const std::vector<Label>& labels,
                             const Config& config, const Calendar& calendar, const Context& context,
                             const CalibrateOptions& options) {
@@ -580,7 +672,12 @@ CalibrationReport calibrate(const std::vector<Series>& series, const std::vector
   Collector collector(series, kept.labels, config, calendar, context, options);
   const PricePriors& base = config.price.priors;
   const Weights w0 = log_weights(base);
-  const Hyper given{config.price.jump_prob, config.price.jump_scale, config.price.ratio_tolerance};
+  const Hyper given{config.price.jump_prob, config.price.jump_scale, config.price.ratio_tolerance,
+                    config.price.block_decay, config.price.revert_max_bars};
+  // DE-13: the block length, from the labelled blocks, before the grid: the bars
+  // after a candidate are scored with it.
+  report.blocks = fit_blocks(labelled_blocks(series, kept.labels), config.price.block_decay,
+                             config.price.revert_max_bars);
 
   // As configured.
   const std::vector<Observation> before_obs = collector.collect(given, base);
@@ -590,12 +687,15 @@ CalibrationReport calibrate(const std::vector<Series>& series, const std::vector
   // Each setting of the grid, the priors fitted to it; the best by the mean
   // penalized log-likelihood of the training observations (the grid's settings
   // can score slightly different sets of moves).
-  std::vector<Hyper> grid = {given};
+  Hyper fitted = given;
+  fitted.block_decay = report.blocks.block_decay;
+  fitted.revert_max_bars = report.blocks.revert_max_bars;
+  std::vector<Hyper> grid = {fitted};
   if (options.grid) {
     for (const double jp : {0.01, 0.02, 0.03, 0.05}) {
       for (const double js : {4.0, 6.0, 8.0}) {
         for (const double rt : {0.005, 0.01, 0.02}) {
-          grid.push_back({jp, js, rt});
+          grid.push_back({jp, js, rt, report.blocks.block_decay, report.blocks.revert_max_bars});
         }
       }
     }
@@ -677,6 +777,9 @@ std::string priors_toml(const CalibrationReport& r) {
   out += "jump_prob = " + format_number(r.after.jump_prob) + "\n";
   out += "jump_scale = " + format_number(r.after.jump_scale) + "\n";
   out += "ratio_tolerance = " + format_number(r.after.ratio_tolerance) + "\n";
+  out += "# " + blocks_text(r.blocks) + "\n";
+  out += "block_decay = " + weight(r.after.block_decay) + "\n";
+  out += "revert_max_bars = " + std::to_string(r.after.revert_max_bars) + "\n";
   out += "\n[priors]\n";
   out += "market_move = " + weight(p.market_move) + "\n";
   out += "tick_move = " + weight(p.tick_move) + "\n";
@@ -716,6 +819,10 @@ std::string calibration_summary(const CalibrationReport& r) {
   }
   out += "\nexpected calibration error: " + fixed(r.ece_before, 4) + " -> " +
          fixed(r.ece_after, 4) + "\n";
+  out += blocks_text(r.blocks) + "; block_decay " + format_number(r.before.block_decay) + " -> " +
+         weight(r.after.block_decay) + ", revert_max_bars " +
+         std::to_string(r.before.revert_max_bars) + " -> " +
+         std::to_string(r.after.revert_max_bars) + "\n";
   return out;
 }
 

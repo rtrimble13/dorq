@@ -340,14 +340,103 @@ TEST_CASE("DQ205: a new history after a long gap") {
   CHECK(contains(result.out, R"("kind":"split_history")"));
 }
 
-TEST_CASE("the newest bar is provisional, and at most a warning") {
+TEST_CASE("DE-13: the newest bar is pending at info until the bars after it are in") {
   std::vector<Row> rows = walk(300, 50.0, 0.015, 1e6, 9);
   scale_bar(rows.back(), 100.0);
-  const Result result = check_prices(to_csv("A", rows));
+  const std::string csv = to_csv("A", rows);
+  // Nothing about the bar itself says error: its fields agree, it traded as usual,
+  // and 5,000 is a price. Only its size does, and whether it reverts is not in.
+  const Result quiet = check_prices(csv);
+  CAPTURE(quiet.out);
+  CHECK(quiet.out.empty());
+  const Result result = check_prices(csv, true);
   CAPTURE(result.out);
   CHECK(count_matching(result.out, R"("provisional":true)") == 1);
-  CHECK(count_matching(result.out, R"("severity":"warn")") == 1);
-  CHECK(contains(result.out, ", provisional"));
+  CHECK(count_matching(result.out, R"("severity":"info")") == 1);
+  CHECK(contains(result.out, R"("pending":true)"));
+  CHECK(contains(result.out, ", pending the bars after it"));
+  CHECK_FALSE(contains(result.out, R"("code":"DQ209")"));
+
+  // [price] provisional_severity = "warn" reports it as 0.14 did.
+  const dorq::test::TempDir dir;
+  const std::string config = (dir.path() / "dorq.toml").string();
+  dorq::test::write_file(config, "[price]\nprovisional_severity = \"warn\"\n");
+  const Result warned = dorq::test::run_in(
+      dir.path(),
+      {"--config", config.c_str(), "--select", "DQ2", "--ignore", "DQ206", "--format", "jsonl"},
+      csv);
+  CAPTURE(warned.out);
+  CAPTURE(warned.err);
+  CHECK(count_matching(warned.out, R"("severity":"warn")") == 1);
+  CHECK(contains(warned.out, R"("pending":true)"));
+
+  // Once three bars after it are in, the case is decided either way: a bad print
+  // that went back is an error; a level that held is not reported as one.
+  std::vector<Row> later = walk(303, 50.0, 0.015, 1e6, 9);
+  scale_bar(later[299], 100.0);
+  const Result back = check_prices(to_csv("A", later));
+  CAPTURE(back.out);
+  CHECK(count_matching(back.out, R"("code":"DQ201","check":"bad-print","severity":"error")") == 1);
+  CHECK_FALSE(contains(back.out, R"("pending")"));
+}
+
+TEST_CASE("DE-13: evidence from the newest bar itself settles it") {
+  const auto newest = [](double factor) {
+    std::vector<Row> rows = walk(300, 50.0, 0.015, 1e6, 9);
+    scale_bar(rows.back(), factor);
+    return rows;
+  };
+  const auto settled = [](const Result& r) {
+    CHECK(count_matching(r.out, R"("severity":"warn")") == 1);
+    CHECK(contains(r.out, R"("pending":false)"));
+    CHECK(contains(r.out, ", provisional"));
+    CHECK_FALSE(contains(r.out, R"("severity":"error")"));
+  };
+  // It moved on no volume, on a series that trades a million shares a day.
+  std::vector<Row> zero = newest(100.0);
+  zero.back().volume = 0.0;
+  const Result no_volume = check_prices(to_csv("A", zero));
+  CAPTURE(no_volume.out);
+  settled(no_volume);
+
+  // Its close is far outside a range that held the level before (DQ204's case).
+  std::vector<Row> close_only = walk(300, 50.0, 0.015, 1e6, 9);
+  close_only.back().close *= 3.0;
+  const Result outside = check_prices(to_csv("A", close_only));
+  CAPTURE(outside.out);
+  settled(outside);
+
+  // A price no security trades at.
+  const Result implausible = check_prices(to_csv("A", newest(1e5)));
+  CAPTURE(implausible.out);
+  settled(implausible);
+
+  // A bad print the next bar undoes has its evidence after it: not pending.
+  std::vector<Row> spike = walk(301, 50.0, 0.015, 1e6, 9);
+  scale_bar(spike[299], 100.0);
+  const Result reverted = check_prices(to_csv("A", spike));
+  CAPTURE(reverted.out);
+  CHECK(count_matching(reverted.out, R"("code":"DQ201","check":"bad-print","severity":"warn")") ==
+        1);
+  CHECK(contains(reverted.out, R"("pending":false)"));
+}
+
+TEST_CASE("DE-13: a real jump on the newest bar is not reported at warn") {
+  // A low-volatility fund jumps 60% on ten times its volume, and the bar trades
+  // from the old level to the new: news, not an error, though by size alone the
+  // model leans to an error until the bars after say otherwise.
+  std::vector<Row> rows = walk(300, 40.0, 0.006, 2e5, 31);
+  Row& bar = rows.back();
+  const double prev = rows[rows.size() - 2].close;
+  bar.close = prev * 1.6;
+  bar.open = prev * 1.05;
+  bar.low = prev * 1.02;
+  bar.high = bar.close * 1.02;
+  bar.volume *= 10.0;
+  const Result result = check_prices(to_csv("F", rows));
+  CAPTURE(result.out);
+  CHECK_FALSE(contains(result.out, R"("severity":"warn")"));
+  CHECK_FALSE(contains(result.out, R"("severity":"error")"));
 }
 
 TEST_CASE("tick moves on a coarse grid are not errors") {
@@ -596,11 +685,12 @@ TEST_CASE("P5: DQ203 needs share volume to shift inversely, or no volume to judg
   // newest bar is its own first print, a fifth of them, on its usual volume.
   std::vector<Row> rows = walk(200, 57.0, 0.01, 5.3e4, 25);
   scale_bar(rows.back(), 0.2013);
-  const Result flat = check_prices(to_csv("O", rows));
+  const Result flat = check_prices(to_csv("O", rows), true);
   CAPTURE(flat.out);
   CHECK(count_matching(flat.out, R"("code":"DQ203")") == 0);
   CHECK(count_matching(flat.out, R"("code":"DQ201")") == 1);
   CHECK(contains(flat.out, R"("provisional":true)"));
+  CHECK(contains(flat.out, R"("pending":true)"));  // DE-13: at info until the bars after
 
   // The same level change with the volume five times over is a 5:1 split.
   std::vector<Row> split = walk(200, 57.0, 0.01, 5.3e4, 25);
@@ -645,10 +735,13 @@ TEST_CASE("P4: a NAV fund's drop that holds, with no dividend on file, is a pend
   CHECK(contains(fund.out, "likely a distribution not yet on file"));
   CHECK(contains(fund.out, R"("suggested_action":{"kind":"check_distribution")"));
 
-  // Not NAV-priced (no metadata): the same drop is an error to report.
-  const Result plain = check_prices(csv);
+  // Not NAV-priced (no metadata): the same drop is an error to report, pending
+  // the bars after it (DE-13).
+  const Result plain = check_prices(csv, true);
   CAPTURE(plain.out);
   CHECK(count_matching(plain.out, R"("code":"DQ20)") == 1);
+  CHECK_FALSE(contains(plain.out, R"("code":"DQ209")"));
+  CHECK(contains(plain.out, R"("pending":true)"));
 
   // A NAV fund's bad print that reverts is still a bad print.
   std::vector<Row> spike = walk(260, 24.35, 0.004, 0.0, 28);
