@@ -287,6 +287,50 @@ struct ExDateMove {
   bool corroborated = false;
 };
 
+// DE-14: P(a slip) for a dividend `ratio` times its series' usual amount, from the
+// ratio and, where the close on the ex-date is known, from it (judge_dividend).
+// Sets `moved->corroborated`.
+double slip_posterior(double ratio, const std::vector<double>& others, double usual,
+                      double prior_close, double amount, const PriceSettings& settings,
+                      std::optional<ExDateMove>& moved) {
+  constexpr double kSlipBroad = 0.1;
+  constexpr double kSlipSpread = 0.05;  // the least spread of a slip's ratio, on the log scale
+  constexpr std::array<double, 3> kSlipPowers = {0.6, 0.3, 0.1};
+  constexpr double kLogMost = 3.0 * std::numbers::ln10;  // a thousand times off
+  constexpr double kSpan = 2.0 * std::numbers::ln10;     // from ten times off to a thousand
+  const double log_ratio = std::log(ratio);
+  std::vector<double> log_amounts;
+  log_amounts.reserve(others.size());
+  for (const double other : others) {
+    log_amounts.push_back(std::log(other));
+  }
+  const double spread = std::hypot(kSlipSpread, stats::mad(log_amounts));
+  const auto broad = [](double x) {  // anywhere from ten to a thousand times off, either way
+    return -std::log(2.0 * kSpan) - std::max(std::fabs(x) - kLogMost, 0.0);
+  };
+  double slip = std::log(kSlipBroad) + broad(log_ratio);
+  for (std::size_t k = 0; k < kSlipPowers.size(); ++k) {
+    const double power = static_cast<double>(k + 1) * std::numbers::ln10;
+    for (const double sign : {-1.0, 1.0}) {
+      slip = stats::log_add(slip, std::log((1.0 - kSlipBroad) * kSlipPowers.at(k) / 2.0) +
+                                      normal_log_pdf(log_ratio, sign * power, spread));
+    }
+  }
+  double real = broad(log_ratio);
+  if (moved) {
+    const double tolerance = std::max(settings.dividend_tolerance * prior_close,
+                                      settings.dividend_amount_tolerance * amount);
+    const double usual_residual = moved->on - (prior_close - usual);
+    moved->corroborated =
+        std::fabs(moved->residual) <= tolerance && std::fabs(usual_residual) > tolerance;
+    real += normal_log_pdf(moved->residual, 0.0, tolerance);
+    slip += normal_log_pdf(usual_residual, 0.0, tolerance);
+  }
+  const double prior = settings.priors.dividend_slip;
+  const double log_slip = std::log(prior) + slip;
+  return std::exp(log_slip - stats::log_add(log_slip, std::log1p(-prior) + real));
+}
+
 // DQ705 for dividend d of a series, if it is implausible.
 std::optional<Violation> judge_dividend(const Series& s,
                                         const std::vector<DividendAction>& dividends, std::size_t d,
@@ -424,40 +468,8 @@ std::optional<Violation> judge_dividend(const Series& s,
     //   usual amount does. Each a normal about its level, the larger of
     //   dividend_tolerance of the close and dividend_amount_tolerance of the amount
     //   wide.
-    constexpr double kSlipBroad = 0.1;
-    constexpr double kSlipSpread = 0.05;  // the least spread of a slip's ratio, on the log scale
-    constexpr std::array<double, 3> kSlipPowers = {0.6, 0.3, 0.1};
-    const double log_ratio = std::log(ratio);
-    std::vector<double> log_amounts;
-    for (const double other : spread_amounts) {
-      log_amounts.push_back(std::log(other));
-    }
-    const double spread = std::hypot(kSlipSpread, stats::mad(log_amounts));
-    const double span = std::log(1000.0) - std::log(kOrder);
-    const auto broad = [span](double x) {  // anywhere from kOrder to 1000 times off, either way
-      return -std::log(2.0 * span) - std::max(std::fabs(x) - std::log(1000.0), 0.0);
-    };
-    double slip = std::log(kSlipBroad) + broad(log_ratio);
-    for (std::size_t k = 0; k < kSlipPowers.size(); ++k) {
-      const double power = static_cast<double>(k + 1) * std::numbers::ln10;
-      for (const double sign : {-1.0, 1.0}) {
-        slip = stats::log_add(slip, std::log((1.0 - kSlipBroad) * kSlipPowers.at(k) / 2.0) +
-                                        normal_log_pdf(log_ratio, sign * power, spread));
-      }
-    }
-    double real = broad(log_ratio);
-    if (moved) {
-      const double tolerance = std::max(settings.dividend_tolerance * prior_close,
-                                        settings.dividend_amount_tolerance * dividend.amount);
-      const double usual_residual = moved->on - (prior_close - usual);
-      moved->corroborated =
-          std::fabs(moved->residual) <= tolerance && std::fabs(usual_residual) > tolerance;
-      real += normal_log_pdf(moved->residual, 0.0, tolerance);
-      slip += normal_log_pdf(usual_residual, 0.0, tolerance);
-    }
-    const double prior = settings.priors.dividend_slip;
-    const double log_slip = std::log(prior) + slip;
-    const double p = std::exp(log_slip - stats::log_add(log_slip, std::log1p(-prior) + real));
+    const double p =
+        slip_posterior(ratio, spread_amounts, usual, prior_close, dividend.amount, settings, moved);
     const bool fell_by_it = p < 0.5;  // a real dividend, more than a slip
     v.p_error = p;
     // A real one is still reported, at info: the caller may want to know of it.

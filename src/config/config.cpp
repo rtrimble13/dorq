@@ -385,11 +385,18 @@ void read_priors(const toml::table& table, const std::string& where, const std::
              "\"" + path + "\" is a probability: from 0 to 1" +
                  (key == "dividend_slip" ? std::string{", both excluded"} : std::string{}));
       }
-      (key == "stale_run"          ? patch.stale_run
-       : key == "lost_volume"      ? patch.lost_volume
-       : key == "indicative_quote" ? patch.indicative_quote
-       : key == "copied_bar"       ? patch.copied_bar
-                                   : patch.dividend_slip) = value;
+      const std::array<std::pair<std::string_view, std::optional<double>*>, 5> per_bar = {{
+          {"stale_run", &patch.stale_run},
+          {"lost_volume", &patch.lost_volume},
+          {"indicative_quote", &patch.indicative_quote},
+          {"copied_bar", &patch.copied_bar},
+          {"dividend_slip", &patch.dividend_slip},
+      }};
+      for (const auto& [name, target] : per_bar) {
+        if (key == name) {
+          *target = value;
+        }
+      }
     } else {
       fail(where, node, "unknown key \"" + path + "\"");
     }

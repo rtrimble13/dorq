@@ -489,6 +489,30 @@ FlatBarNeighbours flat_bar_neighbours(const Series& s, const std::vector<double>
   return out;
 }
 
+// DQ107 (DE-14): a flat bar's judgement among ranged bars.
+struct CopiedClose {
+  double real_flat = 0.0;  // the chance that a real day like it stays at one price
+  double p_error = 0.0;    // P(a copied close), at [priors] copied_bar
+};
+
+// The chance that a real day of `volume`, among the bars `nearby`, stays at one
+// price, from how many steps of the grid they span, and P(a copied close)
+// (ZeroRangeWithVolume::run); nullopt with no ranged bar nearby to judge by.
+std::optional<CopiedClose> copied_close(const FlatBarNeighbours& nearby, double volume,
+                                        double prior) {
+  if (!std::isfinite(nearby.usual)) {
+    return std::nullopt;
+  }
+  const double days = std::isfinite(nearby.volume) && nearby.volume > 0.0
+                          ? std::max(1.0, volume / nearby.volume)
+                          : 1.0;
+  const double one_day = -std::expm1(-std::numbers::ln2 * std::pow(0.5 / nearby.usual, 2.0));
+  CopiedClose out;
+  out.real_flat = std::pow(one_day, days);
+  out.p_error = prior / (prior + (1.0 - prior) * out.real_flat);
+  return out;
+}
+
 }  // namespace
 
 ThinSeries thin_series(double median_volume, double median_dollar_volume,
@@ -609,18 +633,11 @@ void ZeroRangeWithVolume::run(const SeriesContext& context, std::vector<Violatio
     // typical days of trading, each of which stays at one price: that chance to the
     // k. With no ranged bar nearby, there is no range to judge by, and the rules
     // above (pinned, under a lot a day) decide: reported.
-    std::optional<double> p;
-    std::optional<double> real_flat;
-    if (std::isfinite(usual)) {
-      const double days = std::isfinite(nearby.volume) && nearby.volume > 0.0
-                              ? std::max(1.0, volume / nearby.volume)
-                              : 1.0;
-      real_flat = std::pow(-std::expm1(-std::numbers::ln2 * std::pow(0.5 / usual, 2.0)), days);
-      const double prior = context.price.priors.copied_bar;
-      p = prior / (prior + (1.0 - prior) * *real_flat);
-    }
-    const std::optional<Severity> level =
-        p ? context.thresholds.for_probability(*p) : std::optional<Severity>{Severity::kWarn};
+    const std::optional<CopiedClose> judged =
+        copied_close(nearby, volume, context.price.priors.copied_bar);
+    const std::optional<Severity> level = judged
+                                              ? context.thresholds.for_probability(judged->p_error)
+                                              : std::optional<Severity>{Severity::kWarn};
     if (!level) {
       continue;
     }
@@ -638,17 +655,18 @@ void ZeroRangeWithVolume::run(const SeriesContext& context, std::vector<Violatio
                          volume >= integrity.flat_bar_min_median_volume &&
                          volume * c >= integrity.flat_bar_min_median_dollar_volume;
     const Severity severity = thin.thin && !big_day ? Severity::kInfo : *level;
+    if (judged) {
+      message += ": a copied close more than a day at one price; P(error) = " +
+                 format_probability(judged->p_error);
+    }
     if (thin.thin && !big_day) {
       message += "; a thin series (" + thin.why + "), where a flat bar is how trading looks";
     }
-    if (p) {
-      message +=
-          ": a copied close more than a day at one price; P(error) = " + format_probability(*p);
-    }
     Violation v = make_violation(info(), severity, s, i, std::move(message));
-    if (p) {
-      v.p_error = *p;
-      v.classification = *p >= 0.5 ? Classification::kDataError : Classification::kMarketFact;
+    if (judged) {
+      v.p_error = judged->p_error;
+      v.classification =
+          judged->p_error >= 0.5 ? Classification::kDataError : Classification::kMarketFact;
     }
     v.detail = {{"close", c},
                 {"volume", volume},
@@ -660,8 +678,8 @@ void ZeroRangeWithVolume::run(const SeriesContext& context, std::vector<Violatio
                 {"ranged_nearby", std::isfinite(usual)},
                 {"flat_nearby", static_cast<std::int64_t>(nearby.flat)},
                 {"traded_nearby", static_cast<std::int64_t>(nearby.traded)}};
-    if (real_flat) {
-      v.detail.push_back({"real_flat_chance", *real_flat});
+    if (judged) {
+      v.detail.push_back({"real_flat_chance", judged->real_flat});
     }
     if (std::isfinite(usual)) {
       v.detail.push_back({"nearby_range_steps", usual});

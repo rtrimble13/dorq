@@ -8,6 +8,7 @@
 #include <numbers>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -516,6 +517,16 @@ void MoveOnZeroVolume::run(const SeriesContext& context, std::vector<Violation>&
       continue;
     }
     const double steps = std::fabs(c - before) / m.grid;
+    // The likeliest of the three, and how the message names it.
+    std::string_view hypothesis = "lost_volume";
+    std::string_view verdict = "a lost volume, more than an indicative quote or the feed's habit";
+    if (p < 0.5 && quote >= habit) {
+      hypothesis = "indicative_quote";
+      verdict = "an indicative quote more than a lost volume";
+    } else if (p < 0.5) {
+      hypothesis = "feed_habit";
+      verdict = "the feed's habit more than a lost volume";
+    }
     Violation v;
     v.check = &info();
     v.severity = *severity;
@@ -526,10 +537,7 @@ void MoveOnZeroVolume::run(const SeriesContext& context, std::vector<Violation>&
     v.message = "close " + significant(before, 6) + "→" + significant(c, 6) + " on zero volume, " +
                 significant(steps, 3) + (significant(steps, 3) == "1" ? " step" : " steps") +
                 " of the " + format_number(m.grid) + " grid where an ordinary move is " +
-                significant(sd * 100.0, 2) + "%: " +
-                (p >= 0.5 ? "a lost volume, more than an indicative quote or the feed's habit"
-                 : quote >= habit ? "an indicative quote more than a lost volume"
-                                  : "the feed's habit more than a lost volume") +
+                significant(sd * 100.0, 2) + "%: " + std::string{verdict} +
                 ", on a series that trades about " + significant(trades, 2) +
                 " times a day, with " + with_commas(static_cast<long long>(others)) +
                 " other such bars of " + with_commas(static_cast<long long>(with_volume)) +
@@ -542,9 +550,7 @@ void MoveOnZeroVolume::run(const SeriesContext& context, std::vector<Violation>&
                 {"trades_a_day", trades},
                 {"quote_rate", quote_rate},
                 {"habit_rate", habit_rate},
-                {"hypothesis", std::string{p >= 0.5         ? "lost_volume"
-                                           : quote >= habit ? "indicative_quote"
-                                                            : "feed_habit"}}};
+                {"hypothesis", std::string{hypothesis}}};
     SuggestedAction action;
     action.kind = "refetch_bar";
     action.fields = {{"date", s.date[m.row].to_string()}, {"field", std::string{"volume"}}};

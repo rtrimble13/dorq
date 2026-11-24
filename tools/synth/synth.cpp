@@ -229,6 +229,9 @@ class Generator {
   void inject_family_split(Pool& liquid);
   // DE-14's cases, drawn last so that every draw before them is as it was.
   void inject_de14(std::vector<SeriesPlan>& universe);
+  void inject_indicative_quotes(Pool& thin);
+  void inject_real_flats(Pool& mid);
+  void inject_dividend_cases(Pool& liquid);
   void splits_on_file(Pool& tradable, Pool& thin);
   void wrong_splits(Pool& tradable);
   void dividends(Pool& liquid);
@@ -927,8 +930,20 @@ void Generator::inject_de14(std::vector<SeriesPlan>& universe) {
   Pool mid;
   Pool liquid;
   for (SeriesPlan& plan : universe) {
-    (plan.cls == Class::kThin ? thin : plan.cls == Class::kMid ? mid : liquid).push_back(&plan);
+    if (plan.cls == Class::kThin) {
+      thin.push_back(&plan);
+    } else if (plan.cls == Class::kMid) {
+      mid.push_back(&plan);
+    } else {
+      liquid.push_back(&plan);
+    }
   }
+  inject_indicative_quotes(thin);
+  inject_real_flats(mid);
+  inject_dividend_cases(liquid);
+}
+
+void Generator::inject_indicative_quotes(Pool& thin) {
   // Indicative quotes: four marks on each thin name, on untraded days, a step of
   // its price grid either way from the close before.
   for (SeriesPlan* plan : thin) {
@@ -947,6 +962,9 @@ void Generator::inject_de14(std::vector<SeriesPlan>& universe) {
       ++done;
     }
   }
+}
+
+void Generator::inject_real_flats(Pool& mid) {
   // Real flat days: on mid names under $8 whose bars nearby span six steps of the
   // grid or fewer, one price all day on about their volume. A typical day there
   // holds one price about one time in two hundred.
@@ -979,6 +997,9 @@ void Generator::inject_de14(std::vector<SeriesPlan>& universe) {
     labels_.emplace_back(plan.id, bar.date, bar.date, "hn_real_flat", "", "DQ107");
     ++done;
   }
+}
+
+void Generator::inject_dividend_cases(Pool& liquid) {
   // Special dividends, and slips of ten, among the liquid names' quarterly ones.
   std::vector<std::size_t> rows;
   const auto labelled = [this](const Action& a) {
