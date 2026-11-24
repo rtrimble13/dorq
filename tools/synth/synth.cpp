@@ -188,6 +188,18 @@ class Generator {
   void run_newest(const NewestOutputs& out);
 
  private:
+  // What one night's events in the newest-bar universe have used: a series per
+  // split ratio, and per decimal slip or scale, so that none is a cohort (DQ601).
+  struct NewestNights {
+    std::set<std::pair<std::size_t, double>> splits;  // (bar, price factor)
+    std::set<std::pair<std::size_t, double>> slips;
+    int evident = 0;
+  };
+  // Series `plan`'s event of kind `kind` (0 to 4), from bar t, the end view's last
+  // bar `end` or one or two before it.
+  void newest_event(SeriesPlan& plan, std::size_t kind, std::size_t t, std::size_t end,
+                    const std::vector<Date>& dates, NewestNights& nights);
+
   [[nodiscard]] std::vector<Date> sessions(Date from, int count) const {
     std::vector<Date> out;
     for (Date d = from; static_cast<int>(out.size()) < count; d = Date::from_days(d.days() + 1)) {
@@ -1108,6 +1120,102 @@ double newest_bad_factor(Rng& rng, std::size_t night,
   return off_ratio(rng, 1.35, 2.5);
 }
 
+void Generator::newest_event(SeriesPlan& plan, std::size_t kind, std::size_t t, std::size_t end,
+                             const std::vector<Date>& dates, NewestNights& nights) {
+  // Splits on one night are each at a ratio no other series splits by that
+  // night, so that none is a cohort (DQ601).
+  static constexpr std::array<SplitShares, 5> kForward = {{{2, 1}, {3, 1}, {3, 2}, {4, 1}, {5, 1}}};
+  static constexpr std::array<SplitShares, 5> kReverse = {
+      {{1, 4}, {1, 5}, {1, 8}, {1, 10}, {1, 20}}};
+  const std::size_t n = dates.size();
+  const double prev = plan.bars[t - 1].close;
+  auto& slips = nights.slips;
+  switch (kind) {
+    case 0: {  // a real jump: the bar trades to the new level on a surge of volume
+      const double factor = off_ratio(rng_, 1.25, 2.0);
+      for (std::size_t j = t; j < n; ++j) {
+        scale_bar(plan.bars[j], factor, plan.cls);
+      }
+      Bar& bar = plan.bars[t];
+      bar.open = round_price(prev * std::exp(rng_.uniform(0.2, 0.8) * std::log(bar.close / prev)),
+                             plan.cls);
+      bar.high =
+          round_price(std::max(bar.open, bar.close) * (1.0 + rng_.uniform(0.002, 0.02)), plan.cls);
+      bar.low =
+          round_price(std::min(bar.open, bar.close) * (1.0 - rng_.uniform(0.002, 0.02)), plan.cls);
+      // From half again the usual volume (news on a quiet fund) to twelve times.
+      const double surge = rng_.log_uniform(1.5, 12.0);
+      for (std::size_t j = t; j < n; ++j) {
+        const double decay = std::pow(0.6, static_cast<double>(j - t));
+        plan.bars[j].volume = std::round(plan.bars[j].volume * (1.0 + (surge - 1.0) * decay));
+      }
+      labels_.emplace_back(plan.id, dates[t], dates[t], "newest_jump", "", "DQ2");
+      break;
+    }
+    case 1: {  // a split the data does not record
+      const auto& ratios = prev >= 12.0 ? kForward : kReverse;
+      auto pick = static_cast<std::size_t>(rng_.integer(0, 4));
+      const auto factor_of = [&](std::size_t r) {
+        return ratios.at(r).before / ratios.at(r).after;
+      };
+      for (int tries = 0; nights.splits.contains({t, factor_of(pick)}) && tries < 15; ++tries) {
+        pick = (pick + 1) % ratios.size();
+        if (pick == 0) {
+          t = t == end - 2 ? end : t - 1;
+        }
+      }
+      const double factor = factor_of(pick);
+      nights.splits.insert({t, factor});
+      for (std::size_t j = t; j < n; ++j) {
+        scale_bar(plan.bars[j], factor, plan.cls);
+        plan.bars[j].volume = std::round(plan.bars[j].volume / factor);
+      }
+      labels_.emplace_back(plan.id, dates[t], dates[t], "newest_split", "DQ203", "");
+      break;
+    }
+    case 2: {  // a bad print of one or two bars, which the later view reverts from
+      const std::size_t k = rng_.chance(0.6) ? 1 : 2;
+      const double factor = newest_bad_factor(rng_, t, slips);
+      for (std::size_t j = t; j < t + k; ++j) {
+        scale_bar(plan.bars[j], factor, plan.cls);
+        plan.bars[j].volume = std::round(plan.bars[j].volume * rng_.uniform(0.2, 1.0));
+      }
+      labels_.emplace_back(plan.id, dates[t], dates[t + k - 1], "newest_bad_print", "DQ201", "");
+      break;
+    }
+    case 3: {  // a bad print with evidence in the bar itself
+      const int how = nights.evident++ % 3;
+      const char* expect = "DQ201|DQ202";
+      if (how == 0) {  // it moved on no volume
+        scale_bar(plan.bars[t], newest_bad_factor(rng_, t, slips), plan.cls);
+        plan.bars[t].volume = 0.0;
+      } else if (how == 1) {  // only the close is off: outside the bar's range
+        plan.bars[t].close =
+            round_price(plan.bars[t].close * newest_bad_factor(rng_, t, slips), plan.cls);
+        expect = "DQ204|DQ201";
+      } else {  // a price no security trades at
+        scale_bar(plan.bars[t], 1e6, plan.cls);
+        expect = "DQ202|DQ201";
+      }
+      labels_.emplace_back(plan.id, dates[t], dates[t], "newest_evident", expect, "");
+      break;
+    }
+    default: {  // the level at the wrong scale from here on
+      static constexpr std::array<double, 4> kScales = {100.0, 0.01, 1000.0, 0.001};
+      auto pick = static_cast<std::size_t>(rng_.integer(0, 3));
+      for (int tries = 0; tries < 4 && !slips.insert({t, kScales.at(pick)}).second; ++tries) {
+        pick = (pick + 1) % kScales.size();  // one series per factor and night (DQ601)
+      }
+      const double factor = kScales.at(pick);
+      for (std::size_t j = t; j < n; ++j) {
+        scale_bar(plan.bars[j], factor, plan.cls);
+      }
+      labels_.emplace_back(plan.id, dates[t], dates[t], "newest_scale", "DQ202", "");
+      break;
+    }
+  }
+}
+
 void Generator::run_newest(const NewestOutputs& out) {
   constexpr int kEndSessions = 320;
   const std::vector<Date> dates =
@@ -1153,103 +1261,11 @@ void Generator::run_newest(const NewestOutputs& out) {
     simulate(plan, dates, market, n);
   }
 
-  // Splits on one night are each at a ratio no other series splits by that
-  // night, so that none is a cohort (DQ601).
-  static constexpr std::array<SplitShares, 5> kForward = {{{2, 1}, {3, 1}, {3, 2}, {4, 1}, {5, 1}}};
-  static constexpr std::array<SplitShares, 5> kReverse = {
-      {{1, 4}, {1, 5}, {1, 8}, {1, 10}, {1, 20}}};
-  std::set<std::pair<std::size_t, double>> split_nights;  // (bar, price factor)
-  std::set<std::pair<std::size_t, double>> slips;         // likewise, decimal slips and scales
-  int evident = 0;
+  NewestNights nights;
   for (std::size_t i = 0; i < universe.size(); ++i) {
-    SeriesPlan& plan = universe[i];
     // The event's first bar: the end view's last, or one or two before it.
-    std::size_t t = end - static_cast<std::size_t>(rng_.integer(0, 2));
-    const double prev = plan.bars[t - 1].close;
-    switch (i % 5) {
-      case 0: {  // a real jump: the bar trades to the new level on a surge of volume
-        const double factor = off_ratio(rng_, 1.25, 2.0);
-        for (std::size_t j = t; j < n; ++j) {
-          scale_bar(plan.bars[j], factor, plan.cls);
-        }
-        Bar& bar = plan.bars[t];
-        bar.open = round_price(prev * std::exp(rng_.uniform(0.2, 0.8) * std::log(bar.close / prev)),
-                               plan.cls);
-        bar.high = round_price(std::max(bar.open, bar.close) * (1.0 + rng_.uniform(0.002, 0.02)),
-                               plan.cls);
-        bar.low = round_price(std::min(bar.open, bar.close) * (1.0 - rng_.uniform(0.002, 0.02)),
-                              plan.cls);
-        // From half again the usual volume (news on a quiet fund) to twelve times.
-        const double surge = rng_.log_uniform(1.5, 12.0);
-        for (std::size_t j = t; j < n; ++j) {
-          const double decay = std::pow(0.6, static_cast<double>(j - t));
-          plan.bars[j].volume = std::round(plan.bars[j].volume * (1.0 + (surge - 1.0) * decay));
-        }
-        labels_.emplace_back(plan.id, dates[t], dates[t], "newest_jump", "", "DQ2");
-        break;
-      }
-      case 1: {  // a split the data does not record
-        const auto& ratios = prev >= 12.0 ? kForward : kReverse;
-        std::size_t pick = static_cast<std::size_t>(rng_.integer(0, 4));
-        const auto factor_of = [&](std::size_t r) {
-          return ratios.at(r).before / ratios.at(r).after;
-        };
-        for (int tries = 0; split_nights.contains({t, factor_of(pick)}) && tries < 15; ++tries) {
-          pick = (pick + 1) % ratios.size();
-          if (pick == 0) {
-            t = t == end - 2 ? end : t - 1;
-          }
-        }
-        const double factor = factor_of(pick);
-        split_nights.insert({t, factor});
-        for (std::size_t j = t; j < n; ++j) {
-          scale_bar(plan.bars[j], factor, plan.cls);
-          plan.bars[j].volume = std::round(plan.bars[j].volume / factor);
-        }
-        labels_.emplace_back(plan.id, dates[t], dates[t], "newest_split", "DQ203", "");
-        break;
-      }
-      case 2: {  // a bad print of one or two bars, which the later view reverts from
-        const std::size_t k = rng_.chance(0.6) ? 1 : 2;
-        const double factor = newest_bad_factor(rng_, t, slips);
-        for (std::size_t j = t; j < t + k; ++j) {
-          scale_bar(plan.bars[j], factor, plan.cls);
-          plan.bars[j].volume = std::round(plan.bars[j].volume * rng_.uniform(0.2, 1.0));
-        }
-        labels_.emplace_back(plan.id, dates[t], dates[t + k - 1], "newest_bad_print", "DQ201", "");
-        break;
-      }
-      case 3: {  // a bad print with evidence in the bar itself
-        const int how = evident++ % 3;
-        const char* expect = "DQ201|DQ202";
-        if (how == 0) {  // it moved on no volume
-          scale_bar(plan.bars[t], newest_bad_factor(rng_, t, slips), plan.cls);
-          plan.bars[t].volume = 0.0;
-        } else if (how == 1) {  // only the close is off: outside the bar's range
-          plan.bars[t].close =
-              round_price(plan.bars[t].close * newest_bad_factor(rng_, t, slips), plan.cls);
-          expect = "DQ204|DQ201";
-        } else {  // a price no security trades at
-          scale_bar(plan.bars[t], 1e6, plan.cls);
-          expect = "DQ202|DQ201";
-        }
-        labels_.emplace_back(plan.id, dates[t], dates[t], "newest_evident", expect, "");
-        break;
-      }
-      default: {  // the level at the wrong scale from here on
-        static constexpr std::array<double, 4> kScales = {100.0, 0.01, 1000.0, 0.001};
-        auto pick = static_cast<std::size_t>(rng_.integer(0, 3));
-        for (int tries = 0; tries < 4 && !slips.insert({t, kScales.at(pick)}).second; ++tries) {
-          pick = (pick + 1) % kScales.size();  // one series per factor and night (DQ601)
-        }
-        const double factor = kScales.at(pick);
-        for (std::size_t j = t; j < n; ++j) {
-          scale_bar(plan.bars[j], factor, plan.cls);
-        }
-        labels_.emplace_back(plan.id, dates[t], dates[t], "newest_scale", "DQ202", "");
-        break;
-      }
-    }
+    const std::size_t t = end - static_cast<std::size_t>(rng_.integer(0, 2));
+    newest_event(universe[i], i % 5, t, end, dates, nights);
   }
 
   for (std::ostream* bars : {&out.end, &out.later}) {
