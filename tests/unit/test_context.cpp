@@ -975,20 +975,28 @@ TEST_CASE("P3: a dividend ten times the usual that the close fell by is corrobor
   CHECK(contains(corroborated.out, R"("kind":"special")"));
   CHECK(run_705(bars, paid, false).out.empty());
 
-  // The same amount where the price did not fall: a slip, at warn.
+  // The same amount where the price did not fall: an amount stored wrong, at error
+  // (DE-14: the close held where 3.0 would have come off it).
   const std::vector<Bar> held = stock(400, 35.0, 0.004, 54);
   const Result slip = run_705(held, paid, false);
   CAPTURE(slip.out);
-  CHECK(count_matching(slip.out, R"("severity":"warn")") == 1);
+  CHECK(count_matching(slip.out, R"("severity":"error")") == 1);
   CHECK(contains(slip.out, R"("corroborated":false)"));
   CHECK(contains(slip.out, R"("kind":"slip")"));
-  CHECK(contains(slip.out, "did not fall by it"));
+  CHECK(contains(slip.out, "(a slip) more than a special dividend"));
 
-  // A tenth of the usual comes off within a day's noise either way: no close can
-  // corroborate it, so it is reported.
-  const Result small = run_705(held, actions + "A," + day(390) + ",dividend,,,0.003000\n", false);
-  CAPTURE(small.out);
-  CHECK(count_matching(small.out, R"("severity":"warn")") == 1);
+  // A tenth of the usual comes off within a day's noise either way, so no close
+  // judges it; the ratio does. An exact tenth is a decimal slip, reported.
+  const Result tenth = run_705(held, actions + "A," + day(390) + ",dividend,,,0.011000\n", false);
+  CAPTURE(tenth.out);
+  CHECK(count_matching(tenth.out, R"("kind":"slip")") == 1);
+  CHECK_FALSE(contains(tenth.out, R"("severity":"info")"));
+  // A thirty-seventh is no power of ten: a cut more than a slip, at info.
+  const Result cut = run_705(held, actions + "A," + day(390) + ",dividend,,,0.003000\n", true);
+  CAPTURE(cut.out);
+  CHECK(count_matching(cut.out, R"("severity":"info")") == 1);
+  CHECK(contains(cut.out, R"("kind":"special")"));
+  CHECK(run_705(held, actions + "A," + day(390) + ",dividend,,,0.003000\n", false).out.empty());
 }
 
 TEST_CASE("P3: a switch to daily accruals is one report, at the first accrual") {
@@ -997,16 +1005,18 @@ TEST_CASE("P3: a switch to daily accruals is one report, at the first accrual") 
   for (int i = 10; i < 390; i += 21) {
     monthly += "A," + day(i) + ",dividend,,,0.041000\n";
   }
-  // The first accrual alone looks like a slip, at its own date.
-  const Result first =
-      check(bars_csv("A", bars),
-            {{"a.csv",
-              std::string{kActionsHeader} + monthly + "A," + day(392) + ",dividend,,,0.001447\n"}},
-            {"--isolated", "--select", "DQ705", "--format", "fafnir", "--actions", "a.csv"});
+  // The first accrual alone is a dividend 1/28 of the usual, at its own date: no
+  // power of ten, so a cut more than a slip, at info (DE-14).
+  const Result first = check(bars_csv("A", bars),
+                             {{"a.csv", std::string{kActionsHeader} + monthly + "A," + day(392) +
+                                            ",dividend,,,0.001447\n"}},
+                             {"--isolated", "--select", "DQ705", "--format", "fafnir", "--actions",
+                              "a.csv", "--show-info"});
   CAPTURE(first.out);
   CHECK(count_matching(first.out, R"("check_name":"dorq_dividend_implausible")") == 1);
   CHECK(contains(first.out, R"("record_key":{"trade_date":")" + day(392) + "\"}"));
-  CHECK(contains(first.out, R"("kind":"slip")"));
+  CHECK(contains(first.out, R"("kind":"special")"));
+  CHECK(contains(first.out, R"("severity":"info")"));
 
   // With more of them, a weekend's three-day accrual among them: one report, under
   // the same key.

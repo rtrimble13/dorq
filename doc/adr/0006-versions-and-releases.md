@@ -1,6 +1,7 @@
 # ADR 0006: The version on main is the next release's, and only the release says so
 
-- Status: Accepted
+- Status: Accepted; decision 4 amended by [ADR 0007](0007-releases-publish-on-merge.md)
+  (a release publishes when its pull request merges)
 - Date: 2026-11-24
 - Implemented by: `scripts/release.sh`, `scripts/check_version.sh`, the `version`
   job in `.github/workflows/ci.yml`, `cmake/WriteBuildInfo.cmake` (`-dev`, and
@@ -81,7 +82,9 @@ notes (below).
    install steps to the version, checks the rules and commits `Release vX.Y.Z`,
    for a pull request like any other. `tag` (on main, at `origin/main`, clean,
    prepared, the tag new) tags the merge commit and, with `--push`, pushes it. It
-   refuses rather than guesses, as fafnir's does.
+   refuses rather than guesses, as fafnir's does. *Amended by ADR 0007: the
+   release workflow tags and publishes the merge itself, and `tag` is the fallback
+   for when it cannot.*
 5. **fafnir states the oldest dorq it runs**: `DORQ_MIN_VERSION` (0.13.0), which a
    run checks before it exports a row. An older binary is refused; a `-dev` build
    whose own version meets the minimum runs, with a warning, since its flags name a

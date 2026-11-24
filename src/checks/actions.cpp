@@ -1,9 +1,11 @@
 #include "checks/actions.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <numbers>
 #include <optional>
 #include <string>
 #include <utility>
@@ -13,6 +15,7 @@
 #include "checks/price.hpp"
 #include "dorq/number.hpp"
 #include "stats/robust.hpp"
+#include "stats/special.hpp"
 
 namespace dorq {
 namespace {
@@ -194,7 +197,12 @@ std::optional<std::size_t> close_on_or_after(const Series& s, Date day) {
 }
 
 constexpr std::size_t kMinHistory = 3;  // other positive dividends needed to judge one
-constexpr double kOrder = 10.0;         // ten times off the usual, either way
+
+double normal_log_pdf(double x, double mean, double sd) noexcept {
+  const double z = (x - mean) / sd;
+  return -0.5 * z * z - std::log(sd) - 0.5 * std::log(2.0 * std::numbers::pi);
+}
+constexpr double kOrder = 10.0;  // ten times off the usual, either way
 // Daily accruals: small dividends on ex-dates at most this many calendar days apart
 // (a weekend and a holiday), each at most usual / kAccrualShare.
 constexpr int kAccrualGapDays = 5;
@@ -279,11 +287,57 @@ struct ExDateMove {
   bool corroborated = false;
 };
 
+// DE-14: P(a slip) for a dividend `ratio` times its series' usual amount, from the
+// ratio and, where the close on the ex-date is known, from it (judge_dividend).
+// Sets `moved->corroborated`.
+double slip_posterior(double ratio, const std::vector<double>& others, double usual,
+                      double prior_close, double amount, const PriceSettings& settings,
+                      std::optional<ExDateMove>& moved) {
+  constexpr double kSlipBroad = 0.1;
+  constexpr double kSlipSpread = 0.05;  // the least spread of a slip's ratio, on the log scale
+  constexpr std::array<double, 3> kSlipPowers = {0.6, 0.3, 0.1};
+  constexpr double kLogMost = 3.0 * std::numbers::ln10;  // a thousand times off
+  constexpr double kSpan = 2.0 * std::numbers::ln10;     // from ten times off to a thousand
+  const double log_ratio = std::log(ratio);
+  std::vector<double> log_amounts;
+  log_amounts.reserve(others.size());
+  for (const double other : others) {
+    log_amounts.push_back(std::log(other));
+  }
+  const double spread = std::hypot(kSlipSpread, stats::mad(log_amounts));
+  const auto broad = [](double x) {  // anywhere from ten to a thousand times off, either way
+    return -std::log(2.0 * kSpan) - std::max(std::fabs(x) - kLogMost, 0.0);
+  };
+  double slip = std::log(kSlipBroad) + broad(log_ratio);
+  for (std::size_t k = 0; k < kSlipPowers.size(); ++k) {
+    const double power = static_cast<double>(k + 1) * std::numbers::ln10;
+    for (const double sign : {-1.0, 1.0}) {
+      slip = stats::log_add(slip, std::log((1.0 - kSlipBroad) * kSlipPowers.at(k) / 2.0) +
+                                      normal_log_pdf(log_ratio, sign * power, spread));
+    }
+  }
+  double real = broad(log_ratio);
+  if (moved) {
+    const double tolerance = std::max(settings.dividend_tolerance * prior_close,
+                                      settings.dividend_amount_tolerance * amount);
+    const double usual_residual = moved->on - (prior_close - usual);
+    moved->corroborated =
+        std::fabs(moved->residual) <= tolerance && std::fabs(usual_residual) > tolerance;
+    real += normal_log_pdf(moved->residual, 0.0, tolerance);
+    slip += normal_log_pdf(usual_residual, 0.0, tolerance);
+  }
+  const double prior = settings.priors.dividend_slip;
+  const double log_slip = std::log(prior) + slip;
+  return std::exp(log_slip - stats::log_add(log_slip, std::log1p(-prior) + real));
+}
+
 // DQ705 for dividend d of a series, if it is implausible.
 std::optional<Violation> judge_dividend(const Series& s,
                                         const std::vector<DividendAction>& dividends, std::size_t d,
                                         const PaymentRegimes& regimes,
-                                        const PriceSettings& settings, const CheckInfo& info) {
+                                        const PriceSettings& settings,
+                                        const SeverityThresholds& thresholds,
+                                        const CheckInfo& info) {
   const DividendAction& dividend = dividends[d];
   const std::string amount = format_number(dividend.amount);
   const std::string ex = dividend.ex_date.to_string();
@@ -395,6 +449,7 @@ std::optional<Violation> judge_dividend(const Series& s,
       return std::nullopt;
     }
     const std::size_t count = amounts.size();
+    const std::vector<double> spread_amounts = amounts;
     const double usual = stats::median(std::move(amounts));
     const double ratio = dividend.amount / usual;
     const double yield_ratio = dividend.amount / prior_close / stats::median(std::move(yields));
@@ -402,39 +457,36 @@ std::optional<Violation> judge_dividend(const Series& s,
     if (!off(ratio) || !off(yield_ratio) || (ratio > 1.0) != (yield_ratio > 1.0)) {
       return std::nullopt;
     }
-    // A slip in the amount does not move the price; a real dividend comes off it.
-    // The close on the ex-date corroborates the amount when it is near the close
-    // before less the amount, and not near the close before less the usual one
-    // (a tenth of the usual comes off within a day's noise as well).
-    bool fell_by_it = false;
-    if (moved) {
-      const double tolerance = std::max(settings.dividend_tolerance * prior_close,
-                                        settings.dividend_amount_tolerance * dividend.amount);
-      const double usual_residual = moved->on - (prior_close - usual);
-      moved->corroborated =
-          std::fabs(moved->residual) <= tolerance && std::fabs(usual_residual) > tolerance;
-      fell_by_it = moved->corroborated;
-    }
+    // DE-14: a slip (the amount stored at the wrong scale) against a real special
+    // dividend, a distribution or a cut, by [priors] dividend_slip.
+    // - The ratio. A slip's is a power of ten, ten to a thousand times either way
+    //   (0.6, 0.3 and 0.1 of them), give or take the spread of the series' own
+    //   amounts (a slip of a dividend twice the usual is twenty times it), or now
+    //   and then anything else (kSlipBroad). A real one's is anywhere from ten to a
+    //   thousand times off.
+    // - The ex-date close. A real dividend comes off the price; after a slip, the
+    //   usual amount does. Each a normal about its level, the larger of
+    //   dividend_tolerance of the close and dividend_amount_tolerance of the amount
+    //   wide.
+    const double p =
+        slip_posterior(ratio, spread_amounts, usual, prior_close, dividend.amount, settings, moved);
+    const bool fell_by_it = p < 0.5;  // a real dividend, more than a slip
+    v.p_error = p;
+    // A real one is still reported, at info: the caller may want to know of it.
+    v.severity = thresholds.for_probability(p).value_or(Severity::kInfo);
+    v.classification = fell_by_it ? Classification::kMarketFact : Classification::kDataError;
     v.message = "dividend " + amount + " ex " + ex + " is " + times(ratio) + " the series' usual " +
                 format_number(usual) + " (the median of " + std::to_string(count) +
                 " others), and " + times(yield_ratio) + " its usual yield";
-    if (fell_by_it) {
-      // Reported at info: a real special dividend, or a fund's distribution.
-      v.severity = Severity::kInfo;
-      v.classification = Classification::kMarketFact;
-      v.p_error = 0.0;
-      v.message += ", but the close fell by it on the ex-date (" + significant(prior_close, 6) +
-                   "→" + significant(moved->on, 6) + ", where " + significant(prior_close, 6) +
-                   " less the dividend is " + significant(prior_close - dividend.amount, 6) +
-                   "): a special dividend or distribution";
-    } else {
-      v.severity = Severity::kWarn;
-      v.message += ": a decimal slip, or a special dividend";
-      if (moved && ratio > 1.0) {
-        v.message += "; the close on the ex-date (" + significant(moved->on, 6) +
-                     ") did not fall by it from " + significant(prior_close, 6);
-      }
+    if (moved) {
+      v.message += "; the close went " + significant(prior_close, 6) + "→" +
+                   significant(moved->on, 6) + " on the ex-date, where less the dividend is " +
+                   significant(prior_close - dividend.amount, 6) + " and less the usual " +
+                   significant(prior_close - usual, 6);
     }
+    v.message += fell_by_it ? ": a special dividend or distribution (or a cut) more than a slip"
+                            : ": an amount stored wrong (a slip) more than a special dividend";
+    v.message += "; P(error) = " + format_probability(p);
     v.detail.push_back({"usual_amount", usual});
     v.detail.push_back({"ratio", ratio});
     v.detail.push_back({"yield_ratio", yield_ratio});
@@ -484,8 +536,8 @@ void DividendImplausible::run(const SeriesContext& context, std::vector<Violatio
   const std::vector<DividendAction>& dividends = context.actions->dividends;
   const PaymentRegimes regimes = payment_regimes(dividends);
   for (std::size_t d = 0; d < dividends.size(); ++d) {
-    if (std::optional<Violation> v =
-            judge_dividend(context.series, dividends, d, regimes, context.price, info())) {
+    if (std::optional<Violation> v = judge_dividend(context.series, dividends, d, regimes,
+                                                    context.price, context.thresholds, info())) {
       out.push_back(std::move(*v));
     }
   }

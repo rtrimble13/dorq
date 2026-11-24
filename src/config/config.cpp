@@ -336,6 +336,10 @@ void read_price(const toml::table& table, const std::string& where, const std::s
       patch.dividend_tolerance = read_double(node, where, path, 0.0, 1.0);
     } else if (key == "dividend_amount_tolerance") {
       patch.dividend_amount_tolerance = read_double(node, where, path, 0.0, 1.0);
+    } else if (key == "quote_steps") {
+      patch.quote_steps = read_double(node, where, path, 0.01, 1000.0);
+    } else if (key == "quote_strength") {
+      patch.quote_strength = read_double(node, where, path, 0.0, 1e9);
     } else {
       fail(where, node, "unknown key \"" + path + "\"");
     }
@@ -374,11 +378,25 @@ void read_priors(const toml::table& table, const std::string& where, const std::
         fail(where, node, "\"" + path + "\" is a probability: from 0 to below 1");
       }
       patch.split_on_file_error = value;
-    } else if (key == "stale_run") {
-      if (value > 1.0) {
-        fail(where, node, "\"" + path + "\" is a probability: from 0 to 1");
+    } else if (key == "stale_run" || key == "lost_volume" || key == "indicative_quote" ||
+               key == "copied_bar" || key == "dividend_slip") {
+      if (value > 1.0 || (key == "dividend_slip" && (value <= 0.0 || value >= 1.0))) {
+        fail(where, node,
+             "\"" + path + "\" is a probability: from 0 to 1" +
+                 (key == "dividend_slip" ? std::string{", both excluded"} : std::string{}));
       }
-      patch.stale_run = value;
+      const std::array<std::pair<std::string_view, std::optional<double>*>, 5> per_bar = {{
+          {"stale_run", &patch.stale_run},
+          {"lost_volume", &patch.lost_volume},
+          {"indicative_quote", &patch.indicative_quote},
+          {"copied_bar", &patch.copied_bar},
+          {"dividend_slip", &patch.dividend_slip},
+      }};
+      for (const auto& [name, target] : per_bar) {
+        if (key == name) {
+          *target = value;
+        }
+      }
     } else {
       fail(where, node, "unknown key \"" + path + "\"");
     }
@@ -1057,6 +1075,12 @@ PricePatch full_patch(const PriceSettings& settings) {
   full.pending_distribution = settings.priors.pending_distribution;
   full.split_on_file_error = settings.priors.split_on_file_error;
   full.stale_run = settings.priors.stale_run;
+  full.lost_volume = settings.priors.lost_volume;
+  full.indicative_quote = settings.priors.indicative_quote;
+  full.copied_bar = settings.priors.copied_bar;
+  full.dividend_slip = settings.priors.dividend_slip;
+  full.quote_steps = settings.quote_steps;
+  full.quote_strength = settings.quote_strength;
   return full;
 }
 
@@ -1115,6 +1139,8 @@ void append_price_patch(std::string& out, const PricePatch& patch) {
   }
   append_number(out, "dividend_tolerance", patch.dividend_tolerance);
   append_number(out, "dividend_amount_tolerance", patch.dividend_amount_tolerance);
+  append_number(out, "quote_steps", patch.quote_steps);
+  append_number(out, "quote_strength", patch.quote_strength);
 }
 
 void append_priors_patch(std::string& out, const PricePatch& patch) {
@@ -1130,6 +1156,10 @@ void append_priors_patch(std::string& out, const PricePatch& patch) {
   append_number(out, "pending_distribution", patch.pending_distribution);
   append_number(out, "split_on_file_error", patch.split_on_file_error);
   append_number(out, "stale_run", patch.stale_run);
+  append_number(out, "lost_volume", patch.lost_volume);
+  append_number(out, "indicative_quote", patch.indicative_quote);
+  append_number(out, "copied_bar", patch.copied_bar);
+  append_number(out, "dividend_slip", patch.dividend_slip);
 }
 
 void append_statements(std::string& out, const StatementSettings& settings, bool all_sections) {
@@ -1407,6 +1437,12 @@ void PricePatch::apply_to(PriceSettings& settings) const {
   set(settings.priors.pending_distribution, pending_distribution);
   set(settings.priors.split_on_file_error, split_on_file_error);
   set(settings.priors.stale_run, stale_run);
+  set(settings.priors.lost_volume, lost_volume);
+  set(settings.priors.indicative_quote, indicative_quote);
+  set(settings.priors.copied_bar, copied_bar);
+  set(settings.priors.dividend_slip, dividend_slip);
+  set(settings.quote_steps, quote_steps);
+  set(settings.quote_strength, quote_strength);
 }
 
 std::optional<Transform> parse_transform(std::string_view text) noexcept {
@@ -1883,6 +1919,19 @@ std::string render(const Config& config, bool all_sections) {
     if (config.price.provisional_severity == defaults.provisional_severity) {
       price.provisional_severity.reset();
     }
+    // DE-14's, likewise.
+    const auto omit = [](std::optional<double>& key, double value, double fallback) {
+      if (value == fallback) {
+        key.reset();
+      }
+    };
+    omit(price.quote_steps, config.price.quote_steps, defaults.quote_steps);
+    omit(price.quote_strength, config.price.quote_strength, defaults.quote_strength);
+    omit(price.lost_volume, config.price.priors.lost_volume, defaults.priors.lost_volume);
+    omit(price.indicative_quote, config.price.priors.indicative_quote,
+         defaults.priors.indicative_quote);
+    omit(price.copied_bar, config.price.priors.copied_bar, defaults.priors.copied_bar);
+    omit(price.dividend_slip, config.price.priors.dividend_slip, defaults.priors.dividend_slip);
   }
   out += "\n[price]\n";
   append_price_patch(out, price);
@@ -2121,6 +2170,8 @@ max_price = 1000000
 transform = "auto"            # point series: "log", "diff" (rates crossing zero) or "auto"
 dividend_tolerance = 0.015    # DQ705: an ex-date close within this share of the close before,
 dividend_amount_tolerance = 0.25  # or of the amount, of (close before - amount) corroborates it
+quote_steps = 1               # DQ403: an indicative quote moves about this many grid steps (sd)
+quote_strength = 50           # DQ403: the class rate's weight, in bars, against the series' own
 
 [priors]
 # Each explanation's prior weight for a suspicious bar, normalized over those that apply.
@@ -2136,6 +2187,11 @@ explained_dividend = 0.9      # with --actions: a cash dividend on file between 
 pending_distribution = 0.05   # a NAV fund's drop with no dividend on file (x2 Sep-Dec)
 split_on_file_error = 0.06    # with --actions: a split on file being wrong (DQ701-DQ704)
 stale_run = 0.00003           # DQ501: a run of repeated closes being a stale feed, per bar
+lost_volume = 0.001           # DQ403: a traded bar's volume lost, per bar
+indicative_quote = 0.0001     # DQ403: a zero-volume mark that moved, per bar, on a series
+                              # that always trades (plus e^-(trades a day) on one that does not)
+copied_bar = 0.001            # DQ107: a bar's open, high and low overwritten with its close
+dividend_slip = 0.5           # DQ705: a dividend ten times off the others is a slip, not special
 
 [severity]
 # p_error at or above which a probabilistic check reports info, warn or error.

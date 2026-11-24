@@ -227,6 +227,11 @@ class Generator {
   void inject_failed_load(Pool& liquid);
   void inject_actions(std::vector<SeriesPlan>& universe);
   void inject_family_split(Pool& liquid);
+  // DE-14's cases, drawn last so that every draw before them is as it was.
+  void inject_de14(std::vector<SeriesPlan>& universe);
+  void inject_indicative_quotes(Pool& thin);
+  void inject_real_flats(Pool& mid);
+  void inject_dividend_cases(Pool& liquid);
   void splits_on_file(Pool& tradable, Pool& thin);
   void wrong_splits(Pool& tradable);
   void dividends(Pool& liquid);
@@ -915,6 +920,174 @@ void Generator::inject_family_split(Pool& liquid) {
                        "family_split", "DQ601", "");
 }
 
+// DE-14's cases. Hard negatives: indicative quotes (a thin name's untraded day
+// marked a tick from the last close, DQ403), real flat days (a low-priced name
+// whose bars span a few steps of the grid, one price all day on its usual volume,
+// DQ107) and special dividends (twelve to forty times the usual, which the price
+// falls by, on a noisy day half the time, DQ705). Faults: decimal slips of ten.
+void Generator::inject_de14(std::vector<SeriesPlan>& universe) {
+  Pool thin;
+  Pool mid;
+  Pool liquid;
+  for (SeriesPlan& plan : universe) {
+    if (plan.cls == Class::kThin) {
+      thin.push_back(&plan);
+    } else if (plan.cls == Class::kMid) {
+      mid.push_back(&plan);
+    } else {
+      liquid.push_back(&plan);
+    }
+  }
+  inject_indicative_quotes(thin);
+  inject_real_flats(mid);
+  inject_dividend_cases(liquid);
+}
+
+void Generator::inject_indicative_quotes(Pool& thin) {
+  // Indicative quotes: four marks on each thin name, on untraded days, a step of
+  // its price grid either way from the close before.
+  for (SeriesPlan* plan : thin) {
+    for (int done = 0, tries = 0; done < 4 && tries < 400; ++tries) {
+      const std::size_t t = pick_bar(*plan, 60);
+      Bar& bar = plan->bars[t];
+      const Bar& before = plan->bars[t - 1];
+      if (!bar.present || !before.present || bar.volume != 0.0 || bar.close != before.close ||
+          !reserve(plan->id, t, t)) {
+        continue;
+      }
+      const double step = grid_of(before.close, plan->cls);
+      bar.close = round_price(before.close + (rng_.chance(0.5) ? step : -step), plan->cls);
+      bar.open = bar.high = bar.low = bar.close;
+      labels_.emplace_back(plan->id, bar.date, bar.date, "hn_indicative_quote", "", "DQ403");
+      ++done;
+    }
+  }
+}
+
+void Generator::inject_real_flats(Pool& mid) {
+  // Real flat days: on mid names under $8 whose bars nearby span six steps of the
+  // grid or fewer, one price all day on about their volume. A typical day there
+  // holds one price about one time in two hundred.
+  for (int done = 0, tries = 0; done < 6 && tries < 2000; ++tries) {
+    SeriesPlan& plan = any(mid);
+    const std::size_t t = pick_bar(plan, 60);
+    Bar& bar = plan.bars[t];
+    if (!bar.present || bar.close >= 8.0 || bar.volume <= 0.0) {
+      continue;
+    }
+    std::vector<double> spans;
+    std::vector<double> volumes;
+    for (std::size_t j = t - 20; j <= t + 20; ++j) {
+      const Bar& b = plan.bars[j];
+      if (j != t && b.present && b.volume > 0.0) {
+        spans.push_back((b.high - b.low) / grid_of(bar.close, plan.cls));  // on its own grid
+        volumes.push_back(b.volume);
+      }
+    }
+    const auto median_of = [](std::vector<double> v) {
+      const auto mid_it = v.begin() + static_cast<std::ptrdiff_t>(v.size() / 2);
+      std::nth_element(v.begin(), mid_it, v.end());
+      return *mid_it;
+    };
+    if (spans.size() < 20 || median_of(spans) > 6.0 || !reserve(plan.id, t, t)) {
+      continue;
+    }
+    bar.open = bar.high = bar.low = bar.close;
+    bar.volume = std::round(median_of(volumes) * rng_.uniform(1.0, 1.2));
+    labels_.emplace_back(plan.id, bar.date, bar.date, "hn_real_flat", "", "DQ107");
+    ++done;
+  }
+}
+
+void Generator::inject_dividend_cases(Pool& liquid) {
+  // Special dividends, and slips of ten, among the liquid names' quarterly ones.
+  std::vector<std::size_t> rows;
+  const auto labelled = [this](const Action& a) {
+    return std::any_of(labels_.begin(), labels_.end(), [&a](const Label& l) {
+      return l.series == a.series && l.first == a.ex_date;
+    });
+  };
+  for (std::size_t a = 0; a < actions_.size(); ++a) {
+    if (!actions_[a].split && actions_[a].amount > 0.0 && !labelled(actions_[a])) {
+      rows.push_back(a);
+    }
+  }
+  std::map<std::string, SeriesPlan*> by_id;
+  for (SeriesPlan* plan : liquid) {
+    by_id[plan->id] = plan;
+  }
+  for (int done = 0, tries = 0; done < 8 && tries < 2000 && !rows.empty(); ++tries) {
+    Action& dividend = actions_.at(
+        rows.at(static_cast<std::size_t>(rng_.integer(0, static_cast<int>(rows.size()) - 1))));
+    const auto it = by_id.find(dividend.series);
+    if (it == by_id.end()) {
+      continue;
+    }
+    SeriesPlan& plan = *it->second;
+    std::size_t t = 0;
+    while (t < plan.bars.size() && plan.bars[t].date < dividend.ex_date) {
+      ++t;
+    }
+    if (t == 0 || t >= plan.bars.size() || !plan.bars[t - 1].present || !plan.bars[t].present ||
+        !reserve(plan.id, t, t)) {
+      continue;
+    }
+    const double before = plan.bars[t - 1].close;
+    if (done < 6) {
+      const double amount = round_to(dividend.amount * rng_.uniform(12.0, 40.0), 0.01);
+      if (amount >= 0.5 * before) {
+        continue;
+      }
+      dividend.amount = amount;
+      // The price comes off by it, on a day that also moves 2-4% half the time.
+      const double noise =
+          rng_.chance(0.5) ? rng_.uniform(0.02, 0.04) * (rng_.chance(0.5) ? 1 : -1) : 0.0;
+      const double factor = (before - amount) / before * (1.0 + noise);
+      for (std::size_t j = t; j < plan.bars.size(); ++j) {
+        scale_bar(plan.bars[j], factor, plan.cls);
+      }
+      labels_.emplace_back(plan.id, dividend.ex_date, dividend.ex_date, "hn_special_dividend", "",
+                           "DQ705");
+    } else {
+      // A slip of ten, from an amount whose ten times is at least eleven times the
+      // series' others' median amount and yield (DQ705 judges ten times off both).
+      const auto close_before = [&plan](Date day) {
+        double close = 0.0;
+        for (const Bar& bar : plan.bars) {
+          if (bar.date >= day) {
+            break;
+          }
+          close = bar.present ? bar.close : close;
+        }
+        return close;
+      };
+      std::vector<double> amounts;
+      std::vector<double> yields;
+      for (const Action& a : actions_) {
+        if (!a.split && a.series == dividend.series && a.ex_date != dividend.ex_date &&
+            close_before(a.ex_date) > 0.0) {
+          amounts.push_back(a.amount);
+          yields.push_back(a.amount / close_before(a.ex_date));
+        }
+      }
+      const auto median_of = [](std::vector<double> v) {
+        const auto mid_it = v.begin() + static_cast<std::ptrdiff_t>(v.size() / 2);
+        std::nth_element(v.begin(), mid_it, v.end());
+        return *mid_it;
+      };
+      const double slipped = round_to(dividend.amount * 10.0, 0.01);
+      if (amounts.size() < 3 || slipped < 11.0 * median_of(amounts) ||
+          slipped / before < 11.0 * median_of(yields)) {
+        continue;
+      }
+      dividend.amount = round_to(dividend.amount * 10.0, 0.01);
+      labels_.emplace_back(plan.id, dividend.ex_date, dividend.ex_date, "dividend_slip", "DQ705",
+                           "");
+    }
+    ++done;
+  }
+}
+
 void Generator::run(const Outputs& out) {
   const std::vector<Date> dates = sessions(Date::from_ymd(2015, 1, 2), 2000);
   const std::vector<Date> old_dates = sessions(Date::from_ymd(1998, 1, 2), 750);
@@ -1015,6 +1188,7 @@ void Generator::run(const Outputs& out) {
     inject_family_split(liquid);
   }
   inject_actions(universe);
+  inject_de14(universe);
 
   std::ostream& bars = out.bars;
   if (prefix_.empty()) {

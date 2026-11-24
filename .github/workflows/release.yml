@@ -1,17 +1,83 @@
 name: release
 
-# Pushing a tag vX.Y.Z builds, tests and publishes release binaries. Nothing else
-# publishes one. See CONTRIBUTING.md, "Releasing".
+# A release publishes itself when its pull request merges. A release is due when
+# README.md's install steps name the version CMakeLists.txt carries
+# (scripts/release.sh prepare sets them) and no GitHub release vX.Y.Z exists. This
+# workflow then builds and tests the commit where the install steps first named it
+# (the merge of prepare's pull request), checks that the binary reports the version
+# from a clean tree, tags that commit vX.Y.Z and publishes the archives. Any other
+# push to main finds nothing due, in a few seconds. Nothing else publishes a
+# release. See CONTRIBUTING.md, "Versioning and releasing", and ADR 0007.
 on:
   push:
+    branches: [main]
+    # A tag pushed by hand (scripts/release.sh tag --push, where this workflow
+    # cannot tag) publishes the same way. The tag this workflow pushes does not
+    # start another run: a push made with GITHUB_TOKEN starts no workflow.
     tags: ["v*"]
+  # By hand, from the Actions tab: after a failure, or to publish a release that is
+  # due without waiting for the next push to main.
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  # One release at a time, and never cancelled half-way.
+  group: release
+  cancel-in-progress: false
+
 jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      commit: ${{ steps.plan.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The history and the tags: where the release was prepared, and whether
+          # it is tagged.
+          fetch-depth: 0
+
+      - name: Find the release that is due
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          elif [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            # Run by hand on a branch: a release publishes from main, once merged.
+            echo "::error::A release publishes from main; this run is on ${GITHUB_REF}." >&2
+            exit 1
+          else
+            plan="$(scripts/release.sh plan)"
+            version="$(sed -n 's/^version=//p' <<< "${plan}")"
+            commit="$(sed -n 's/^commit=//p' <<< "${plan}")"
+          fi
+          if [[ -z "${version}" ]]; then
+            echo "Nothing to release: README.md's install steps name no prepared release." |
+              tee -a "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          if out="$(gh release view "v${version}" --repo "${GITHUB_REPOSITORY}" --json tagName 2>&1)"; then
+            echo "v${version} is published; nothing to release." | tee -a "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          elif ! grep -qi 'release not found' <<< "${out}"; then
+            echo "::error::Could not ask GitHub whether v${version} is published: ${out}" >&2
+            exit 1
+          fi
+          echo "Releasing v${version} from $(git log -1 --format='%h (%s)' "${commit}")." |
+            tee -a "${GITHUB_STEP_SUMMARY}"
+          { echo "version=${version}"; echo "commit=${commit}"; } >> "${GITHUB_OUTPUT}"
+
   build:
     name: build (${{ matrix.platform }})
+    needs: plan
+    if: needs.plan.outputs.version != ''
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
@@ -26,32 +92,34 @@ jobs:
     env:
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
-      # Report the version as the release, X.Y.Z: the job runs only for a tag, and
-      # the step below checks that the tag is the version CMakeLists.txt carries.
+      VERSION: ${{ needs.plan.outputs.version }}
+      # Report the version as the release, X.Y.Z: the tag does not exist yet when
+      # this builds, and the step below checks that the binary says VERSION.
       # Elsewhere a build decides from git (X.Y.Z-dev off the tagged commit).
       DORQ_RELEASE: "ON"
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.commit }}
       - name: Install Ninja
         run: sudo apt-get update && sudo apt-get install -y ninja-build
 
       - name: Configure, build, test
         run: cmake --workflow --preset release
 
-      # A tag is a promise that a commit is a version. `git tag` will put any name on
-      # any commit, so this is where the promise is checked: the binary built from
-      # the tagged commit must report the tag's version, from a clean tree.
-      # scripts/release.sh tag checks the same before it tags.
-      - name: The tag must match the version the binary reports
+      # A tag is a promise that a commit is a version. This is where the promise is
+      # checked, before the tag exists: the binary built from the commit must
+      # report the version, from a clean tree.
+      - name: The binary must report the release's version
         shell: bash
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
           reported="$(build/release/src/dorq --version)"
-          echo "tag: ${tag}  binary: ${reported}"
-          if [[ "${tag}" != "v${reported}" ]]; then
-            echo "::error::Tag ${tag} does not match the version in CMakeLists.txt" \
-                 "(${reported}). Delete the tag, fix the version, and tag again." >&2
+          echo "release: v${VERSION}  binary: ${reported}"
+          if [[ "${reported}" != "${VERSION}" ]]; then
+            echo "::error::v${VERSION} is due, but the binary built from" \
+                 "$(git rev-parse --short HEAD) reports ${reported}. A tag pushed by hand on" \
+                 "the wrong commit? Delete it, and let this workflow tag the release." >&2
             exit 1
           fi
           if build/release/src/dorq version | grep -q '+dirty'; then
@@ -64,7 +132,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          name="dorq-${GITHUB_REF_NAME#v}-${{ matrix.platform }}"
+          name="dorq-${VERSION}-${{ matrix.platform }}"
           cmake --install build/release --prefix "staging/${name}"
           # Owned by root in the archive, not by the runner's uid: tar run as root
           # keeps the recorded owner, and on a host that uid is whichever local
@@ -81,24 +149,51 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: build
+    needs: [plan, build]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      COMMIT: ${{ needs.plan.outputs.commit }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
       - name: Checksums
         working-directory: dist
-        run: sha256sum *.tar.gz | tee SHA256SUMS
+        run: sha256sum -- *.tar.gz | tee SHA256SUMS
+
+      # Annotated, as scripts/release.sh tag makes it. A tag already there (pushed
+      # by hand, or by a run that failed after it) must name the commit built.
+      - name: Tag the release's commit
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          if existing="$(git rev-parse -q --verify "refs/tags/${tag}^{commit}")"; then
+            if [[ "${existing}" != "${COMMIT}" ]]; then
+              echo "::error::${tag} already names ${existing}, not ${COMMIT}, the commit built." \
+                   "Never move a pushed tag; prepare the next version instead." >&2
+              exit 1
+            fi
+            echo "${tag} is already tagged at ${COMMIT}."
+          else
+            git -c user.name="github-actions[bot]" \
+                -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+                tag -a "${tag}" -m "dorq ${VERSION}" "${COMMIT}"
+            git push origin "refs/tags/${tag}"
+          fi
+
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" dist/*.tar.gz dist/SHA256SUMS \
+          gh release create "v${VERSION}" dist/*.tar.gz dist/SHA256SUMS \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "dorq ${GITHUB_REF_NAME#v}" \
+            --title "dorq ${VERSION}" \
             --verify-tag \
             --generate-notes

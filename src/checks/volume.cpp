@@ -8,6 +8,7 @@
 #include <numbers>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -392,15 +393,25 @@ void MoveOnZeroVolume::run(const SeriesContext& context, std::vector<Violation>&
     return;
   }
   std::vector<std::uint8_t> decimals;
+  std::vector<double> traded;  // the volumes of bars that traded
   for (std::size_t i = 0; i < s.size(); ++i) {
     if (std::isfinite(s.close[i])) {
       decimals.push_back(s.close_decimals[i]);
     }
+    if (std::isfinite(s.volume[i]) && s.volume[i] > 0.0) {
+      traded.push_back(s.volume[i]);
+    }
   }
   const double written = written_grid(std::move(decimals));
   // Bars with no volume whose close moved at least half a grid step from the
-  // close before; and how many bars carry a volume at all.
-  std::vector<std::pair<std::size_t, std::size_t>> moves;  // row, previous row
+  // close before, with that step; and how many bars carry a volume at all.
+  struct Move {
+    std::size_t row = 0;
+    std::size_t prev = 0;
+    double grid = 0.0;
+  };
+  std::vector<Move> moves;
+  std::size_t carries = 0;  // bars with no volume that repeat the close: a mark that held
   std::size_t with_volume = 0;
   std::size_t previous = s.size();
   for (std::size_t i = 0; i < s.size(); ++i) {
@@ -424,40 +435,126 @@ void MoveOnZeroVolume::run(const SeriesContext& context, std::vector<Violation>&
                                std::fabs(std::log(c / s.close[previous] / a.price_factor())) < 0.05;
                       });
       if (std::fabs(c - s.close[previous]) >= 0.5 * grid && !split) {
-        moves.emplace_back(i, previous);
+        moves.push_back({i, previous, grid});
+      } else if (!split) {
+        ++carries;
       }
     }
     previous = i;
   }
-  // A healthy feed's rate of such bars, from the others; against an error's prior.
-  constexpr double kErrorPrior = 0.01;
-  const double others = static_cast<double>(moves.size()) - 1.0;
-  const double rate = (others + 0.5) / (static_cast<double>(with_volume) + 1.0);
-  const double p = kErrorPrior / (kErrorPrior + (1.0 - kErrorPrior) * rate);
-  const auto severity = context.thresholds.for_probability(p);
-  if (!severity) {
+  if (moves.empty()) {
     return;
   }
-  const Severity level = *severity;
-  for (const auto& [row, prev] : moves) {
+  // DE-14: a move on zero volume is one of three.
+  // - A lost volume: a traded bar whose volume the feed dropped. An error, of
+  //   prior lost_volume per bar, whose move is an ordinary one.
+  // - An indicative quote: a mark posted on a day with no trade, within about
+  //   quote_steps of the grid of the last close. Its class rate is a floor for a
+  //   series that always trades, plus the chance of a day with no trade,
+  //   e^-(trades a day) at the median traded volume over [coverage] trade_size; at
+  //   most a half. The series' own rate, its other bars with no volume within a
+  //   quote's reach (carry bars, which repeat the close, among them: marks that
+  //   held), is shrunk to it with quote_strength bars.
+  // - The feed's habit: a feed that reports no volume on some days that traded.
+  //   Its moves are ordinary ones. Its rate is the series' other zero-volume moves
+  //   beyond a quote's reach, shrunk to the same floor.
+  const PriceSettings& price = context.price;
+  const double trades = traded.empty() ? 0.0
+                                       : stats::median(std::move(traded)) /
+                                             std::max(context.coverage.trade_size, 1e-9);
+  const double class_rate = std::min(0.5, price.priors.indicative_quote + std::exp(-trades));
+  const double reach = 2.0 * price.quote_steps;  // in grid steps
+  const auto quote_like = [&s, reach](const Move& m) {
+    return std::fabs(s.close[m.row] - s.close[m.prev]) <= reach * m.grid;
+  };
+  const auto small = static_cast<double>(carries) +
+                     static_cast<double>(std::count_if(moves.begin(), moves.end(), quote_like));
+  const double large = static_cast<double>(moves.size()) - (small - static_cast<double>(carries));
+  const double bars = std::max(static_cast<double>(with_volume) - 1.0, 0.0) + price.quote_strength;
+  const double others = static_cast<double>(moves.size()) - 1.0;
+  // An ordinary move's sd at the bar: the price model's, where it scored the bar;
+  // else the series' typical daily move.
+  const PriceAnalysis* analysis = context.price_analysis;
+  std::vector<std::size_t> feature_of(s.size(), s.size());
+  if (analysis != nullptr && analysis->applicable && analysis->features.log_scale) {
+    for (std::size_t t = 0; t < analysis->features.size(); ++t) {
+      feature_of[analysis->features.row[t]] = t;
+    }
+  }
+  std::vector<double> returns;
+  for (std::size_t i = 1; i < s.size(); ++i) {
+    if (std::isfinite(s.volume[i]) && s.volume[i] > 0.0 && s.close[i] > 0.0 &&
+        s.close[i - 1] > 0.0) {
+      returns.push_back(std::fabs(std::log(s.close[i] / s.close[i - 1])));
+    }
+  }
+  const double typical = returns.empty() ? 0.0 : 1.4826 * stats::median(std::move(returns));
+  constexpr double kT4Scale = 0.7071067811865476;  // a Student t with 4 dof of sd 1
+  for (const Move& m : moves) {
+    const double c = s.close[m.row];
+    const double before = s.close[m.prev];
+    if (!(c > 0.0) || !(before > 0.0)) {
+      continue;  // a price of zero or less is DQ102's
+    }
+    const double r = std::log(c / before);
+    const double step = m.grid / before;  // a grid step, on the log scale
+    const std::size_t t = feature_of[m.row];
+    double sd = t < s.size() && analysis->move_sd[t] > 0.0 ? analysis->move_sd[t] : typical;
+    sd = std::max(sd, 0.7 * step);  // an ordinary move includes the bid-ask bounce
+    const bool own_small = quote_like(m);
+    const double quote_rate =
+        (small - (own_small ? 1.0 : 0.0) + price.quote_strength * class_rate) / bars;
+    const double habit_rate =
+        (large - (own_small ? 0.0 : 1.0) + price.quote_strength * price.priors.indicative_quote) /
+        bars;
+    const double ordinary = stats::student_t_log_pdf(r, 4.0, kT4Scale * sd);
+    const double lost = std::log(price.priors.lost_volume) + ordinary;
+    const double habit = std::log(habit_rate) + ordinary;
+    const double quote = std::log(quote_rate) + log_normal_pdf(r, 0.0, price.quote_steps * step);
+    const double p = std::exp(lost - stats::log_add(lost, stats::log_add(habit, quote)));
+    const auto severity = context.thresholds.for_probability(p);
+    if (!severity) {
+      continue;
+    }
+    const double steps = std::fabs(c - before) / m.grid;
+    // The likeliest of the three, and how the message names it.
+    std::string_view hypothesis = "lost_volume";
+    std::string_view verdict = "a lost volume, more than an indicative quote or the feed's habit";
+    if (p < 0.5 && quote >= habit) {
+      hypothesis = "indicative_quote";
+      verdict = "an indicative quote more than a lost volume";
+    } else if (p < 0.5) {
+      hypothesis = "feed_habit";
+      verdict = "the feed's habit more than a lost volume";
+    }
     Violation v;
     v.check = &info();
-    v.severity = level;
+    v.severity = *severity;
+    v.classification = p >= 0.5 ? Classification::kDataError : Classification::kMarketFact;
     v.p_error = p;
-    v.date = s.date[row];
-    v.line = s.line[row];
-    v.message = "close " + significant(s.close[prev], 6) + "→" + significant(s.close[row], 6) +
-                " on zero volume, where " + with_commas(static_cast<long long>(others)) +
-                " other bars of " + with_commas(static_cast<long long>(with_volume)) +
-                " move with no volume: an indicative quote, or a lost volume; P(error) = " +
-                format_probability(p);
-    v.detail = {{"close", s.close[row]},
-                {"previous_close", s.close[prev]},
-                {"other_zero_volume_moves", static_cast<std::int64_t>(others)}};
+    v.date = s.date[m.row];
+    v.line = s.line[m.row];
+    v.message = "close " + significant(before, 6) + "→" + significant(c, 6) + " on zero volume, " +
+                significant(steps, 3) + (significant(steps, 3) == "1" ? " step" : " steps") +
+                " of the " + format_number(m.grid) + " grid where an ordinary move is " +
+                significant(sd * 100.0, 2) + "%: " + std::string{verdict} +
+                ", on a series that trades about " + significant(trades, 2) +
+                " times a day, with " + with_commas(static_cast<long long>(others)) +
+                " other such bars of " + with_commas(static_cast<long long>(with_volume)) +
+                "; P(error) = " + format_probability(p);
+    v.detail = {{"close", c},
+                {"previous_close", before},
+                {"other_zero_volume_moves", static_cast<std::int64_t>(others)},
+                {"grid_steps", steps},
+                {"move_sd", sd},
+                {"trades_a_day", trades},
+                {"quote_rate", quote_rate},
+                {"habit_rate", habit_rate},
+                {"hypothesis", std::string{hypothesis}}};
     SuggestedAction action;
     action.kind = "refetch_bar";
-    action.fields = {{"date", s.date[row].to_string()}, {"field", std::string{"volume"}}};
-    action.text = "re-fetch the bar of " + s.date[row].to_string();
+    action.fields = {{"date", s.date[m.row].to_string()}, {"field", std::string{"volume"}}};
+    action.text = "re-fetch the bar of " + s.date[m.row].to_string();
     v.suggested_action = std::move(action);
     out.push_back(std::move(v));
   }

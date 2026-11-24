@@ -147,26 +147,38 @@ job, on every pull request and push to main):
 3. A change to the bars output since the latest release
    (`tests/data/bars-golden.sha256`) is at least a minor bump.
 4. `README.md`'s install steps name the latest release, or this version (the
-   release's own pull request).
+   release's own pull request), or a release whose pull request has merged and
+   that the release workflow has yet to tag.
 
-To release:
+**A release publishes when its pull request merges**
+([ADR 0007](doc/adr/0007-releases-publish-on-merge.md)):
 
 1. On a branch, `scripts/release.sh prepare` sets `README.md`'s install steps to
    the version `CMakeLists.txt` carries (or `prepare minor` and so on, to choose
    another), checks the rules, and commits `Release vX.Y.Z`. Open a pull request
    and merge it.
-2. On main, `scripts/release.sh tag --push` tags the merge commit `vX.Y.Z` and
-   pushes the tag. It refuses unless main is `origin/main`, clean, above the latest
-   release, and prepared, and unless the tag is new. Without `--push` it tags
-   locally and prints the push.
-3. `.github/workflows/release.yml` builds and tests on Linux x86-64. It checks that
-   the binary reports the tag's version from a clean tree, then publishes the
-   archives and `SHA256SUMS` as a GitHub release. The release notes are generated
-   from the merged PR titles.
+2. The merge runs `.github/workflows/release.yml`. It finds the release that is
+   due (`scripts/release.sh plan`: the install steps name the version
+   `CMakeLists.txt` carries, and no GitHub release `vX.Y.Z` exists), and the commit
+   where the install steps first named it: the merge. It builds and tests that
+   commit on Linux x86-64, checks that the binary reports the version from a clean
+   tree, tags the commit `vX.Y.Z`, and publishes the archives and `SHA256SUMS` as a
+   GitHub release. The release notes are generated from the merged PR titles.
+3. Every other push to main finds nothing due, in a few seconds. A release that
+   failed half-way publishes on the next push to main, or from the Actions tab
+   (`release`, "Run workflow", on main). A tag already there must name the
+   commit built.
 
-If the tag check fails, delete the tag (`git push --delete origin vX.Y.Z`), fix the
-version, and tag again. Never move a tag once a release is published: a checkout
-that already has it will not see the move.
+`scripts/release.sh plan` shows what the next run would release. `scripts/release.sh
+tag --push` is for when the workflow cannot tag (a tag ruleset that does not let
+GitHub Actions create tags): it tags the commit the workflow would, from main at
+`origin/main`, and the pushed tag runs the same workflow.
+
+The workflow only picks a commit whose `CMakeLists.txt` says the release's
+version, so its version check fails only for a tag pushed by hand on another
+commit: delete that tag (`git push --delete origin vX.Y.Z`) and let the workflow
+tag the release. Never move a tag once a release is published: a checkout that
+already has it will not see the move.
 
 **Callers move in lockstep.** fafnir runs dorq and reads its output. A release
 whose output fafnir's code needs is paired with fafnir's change, which raises

@@ -5,12 +5,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <numbers>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include "checks/coverage.hpp"
 #include "core/text.hpp"
 #include "dorq/number.hpp"
 #include "price/tick.hpp"
@@ -429,6 +431,11 @@ struct FlatBarNeighbours {
   // Flat bars among ranged ones are a habit of this stretch (a price only a few
   // ticks wide); a run of flat bars with no ranged bar nearby is not.
   bool habit = false;
+  // Traded bars nearby, bar i left out, the flat ones among them, and their
+  // median volume (DE-14; NaN when none).
+  std::size_t traded = 0;
+  std::size_t flat = 0;
+  double volume = std::numeric_limits<double>::quiet_NaN();
 };
 
 FlatBarNeighbours flat_bar_neighbours(const Series& s, const std::vector<double>& range,
@@ -444,6 +451,7 @@ FlatBarNeighbours flat_bar_neighbours(const Series& s, const std::vector<double>
   double last_close = std::numeric_limits<double>::quiet_NaN();
   std::size_t traded_nearby = 0;
   std::size_t flat_nearby = 0;
+  std::vector<double> volumes;
   for (std::size_t j = from; j < to; ++j) {
     if (!std::isfinite(s.volume[j]) || s.volume[j] <= 0.0) {
       continue;
@@ -458,6 +466,7 @@ FlatBarNeighbours flat_bar_neighbours(const Series& s, const std::vector<double>
       continue;
     }
     ++traded_nearby;
+    volumes.push_back(s.volume[j]);
     if (std::isfinite(range[j])) {
       nearby.push_back(steps(range[j] * s.close[i]));
     } else if (is_flat(s, j)) {
@@ -465,6 +474,11 @@ FlatBarNeighbours flat_bar_neighbours(const Series& s, const std::vector<double>
     }
   }
   FlatBarNeighbours out;
+  out.traded = traded_nearby;
+  out.flat = flat_nearby;
+  if (!volumes.empty()) {
+    out.volume = median(std::move(volumes));
+  }
   if (nearby.size() >= kMinNearby) {
     out.usual = median(nearby);
     out.habit = flat_nearby >= kMinFlatNearby && 10 * flat_nearby >= traded_nearby;
@@ -472,6 +486,30 @@ FlatBarNeighbours flat_bar_neighbours(const Series& s, const std::vector<double>
   if (close_moves.size() >= kMinNearby) {
     out.close_steps = median(std::move(close_moves));
   }
+  return out;
+}
+
+// DQ107 (DE-14): a flat bar's judgement among ranged bars.
+struct CopiedClose {
+  double real_flat = 0.0;  // the chance that a real day like it stays at one price
+  double p_error = 0.0;    // P(a copied close), at [priors] copied_bar
+};
+
+// The chance that a real day of `volume`, among the bars `nearby`, stays at one
+// price, from how many steps of the grid they span, and P(a copied close)
+// (ZeroRangeWithVolume::run); nullopt with no ranged bar nearby to judge by.
+std::optional<CopiedClose> copied_close(const FlatBarNeighbours& nearby, double volume,
+                                        double prior) {
+  if (!std::isfinite(nearby.usual)) {
+    return std::nullopt;
+  }
+  const double days = std::isfinite(nearby.volume) && nearby.volume > 0.0
+                          ? std::max(1.0, volume / nearby.volume)
+                          : 1.0;
+  const double one_day = -std::expm1(-std::numbers::ln2 * std::pow(0.5 / nearby.usual, 2.0));
+  CopiedClose out;
+  out.real_flat = std::pow(one_day, days);
+  out.p_error = prior / (prior + (1.0 - prior) * out.real_flat);
   return out;
 }
 
@@ -587,6 +625,22 @@ void ZeroRangeWithVolume::run(const SeriesContext& context, std::vector<Violatio
     if (usual <= context.integrity.flat_bar_steps || nearby.habit) {
       continue;  // the bars here span a step or two, or flat bars are a habit here
     }
+    // DE-14: a copied close (the bar's open, high and low overwritten with its
+    // close: an error, of prior copied_bar) against a real day at one price. With
+    // ranged bars nearby, a typical day's range is theirs, a median of `usual`
+    // steps; spread like a Rayleigh's, it falls under half a step with chance
+    // 1 - exp(-ln 2 (0.5 / usual)^2). A day of k times the nearby bars' volume is k
+    // typical days of trading, each of which stays at one price: that chance to the
+    // k. With no ranged bar nearby, there is no range to judge by, and the rules
+    // above (pinned, under a lot a day) decide: reported.
+    const std::optional<CopiedClose> judged =
+        copied_close(nearby, volume, context.price.priors.copied_bar);
+    const std::optional<Severity> level = judged
+                                              ? context.thresholds.for_probability(judged->p_error)
+                                              : std::optional<Severity>{Severity::kWarn};
+    if (!level) {
+      continue;
+    }
     std::string message = "open = high = low = close = " + format_number(c) + " on volume " +
                           format_number(volume) + " (median " + format_number(typical) + ")";
     // Two decimals: a median of 3.02 steps is above flat_bar_steps, and must not
@@ -600,11 +654,20 @@ void ZeroRangeWithVolume::run(const SeriesContext& context, std::vector<Violatio
     const bool big_day = volume >= integrity.flat_bar_volume_multiple * typical &&
                          volume >= integrity.flat_bar_min_median_volume &&
                          volume * c >= integrity.flat_bar_min_median_dollar_volume;
-    const Severity severity = thin.thin && !big_day ? Severity::kInfo : Severity::kWarn;
-    if (severity == Severity::kInfo) {
+    const Severity severity = thin.thin && !big_day ? Severity::kInfo : *level;
+    if (judged) {
+      message += ": a copied close more than a day at one price; P(error) = " +
+                 format_probability(judged->p_error);
+    }
+    if (thin.thin && !big_day) {
       message += "; a thin series (" + thin.why + "), where a flat bar is how trading looks";
     }
     Violation v = make_violation(info(), severity, s, i, std::move(message));
+    if (judged) {
+      v.p_error = judged->p_error;
+      v.classification =
+          judged->p_error >= 0.5 ? Classification::kDataError : Classification::kMarketFact;
+    }
     v.detail = {{"close", c},
                 {"volume", volume},
                 {"median_volume", typical},
@@ -612,7 +675,12 @@ void ZeroRangeWithVolume::run(const SeriesContext& context, std::vector<Violatio
                 {"volume_multiple", volume / typical},
                 {"thin_series", thin.thin},
                 {"grid_step", grid},
-                {"ranged_nearby", std::isfinite(usual)}};
+                {"ranged_nearby", std::isfinite(usual)},
+                {"flat_nearby", static_cast<std::int64_t>(nearby.flat)},
+                {"traded_nearby", static_cast<std::int64_t>(nearby.traded)}};
+    if (judged) {
+      v.detail.push_back({"real_flat_chance", judged->real_flat});
+    }
     if (std::isfinite(usual)) {
       v.detail.push_back({"nearby_range_steps", usual});
     }
