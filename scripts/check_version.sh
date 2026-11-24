@@ -13,7 +13,8 @@
 # 4. A change to the bars output since that release (tests/data/bars-golden.sha256)
 #    is at least a minor bump: a change to what a check reports is not a patch.
 # 5. README.md's install steps name the latest release, or this version (in the
-#    pull request that prepares it: scripts/release.sh prepare).
+#    pull request that prepares it: scripts/release.sh prepare), or a release
+#    whose pull request has merged and that the release workflow has yet to tag.
 #
 # It needs the tags. CI checks out with fetch-depth 0; a shallow clone fails here
 # with the command that fetches them.
@@ -87,16 +88,22 @@ if version_lt "${released}" "${version}" &&
   fi
 fi
 
-# 5. README's install steps name a release that exists, or the one being prepared.
+# 5. README's install steps name a release that exists, the one being prepared, or
+# one that has merged and is being published (scripts/release.sh plan: tagged=false).
+publishing=""
+if plan="$(scripts/release.sh plan 2>/dev/null)" && grep -qx 'tagged=false' <<< "${plan}"; then
+  publishing="$(sed -n 's/^version=//p' <<< "${plan}")"
+fi
 mapfile -t pins < <(grep -oE '^version=[0-9]+\.[0-9]+\.[0-9]+|git checkout v[0-9]+\.[0-9]+\.[0-9]+' README.md |
                     sed -E 's/^version=//; s/^git checkout v//')
 if [[ ${#pins[@]} -eq 0 ]]; then
   fail "README.md's install steps name no version (version=X.Y.Z, git checkout vX.Y.Z)"
 fi
 for pin in "${pins[@]}"; do
-  if [[ "${pin}" != "${released}" && "${pin}" != "${version}" ]]; then
+  if [[ "${pin}" != "${released}" && "${pin}" != "${version}" && "${pin}" != "${publishing}" ]]; then
     fail "README.md's install steps name ${pin}: neither the latest release (${released})" \
-         "nor this version (${version}). scripts/release.sh prepare sets them."
+         "nor this version (${version}), nor a merged release being published." \
+         "scripts/release.sh prepare sets them."
   fi
 done
 
@@ -105,5 +112,8 @@ if (( failures > 0 )); then
 fi
 state="unreleased"
 [[ "${version}" == "${released}" ]] && state="released"
+if [[ -n "${publishing}" ]]; then
+  echo "v${publishing} has merged and is not yet tagged: the release workflow publishes it"
+fi
 echo "version ${version} (${state}; latest release ${tag}, ${ahead} commit(s) since," \
      "code $([[ "${code_changed}" == true ]] && echo changed || echo unchanged)): ok"
