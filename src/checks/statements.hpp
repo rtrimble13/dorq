@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+#include <string>
 #include <vector>
 
 #include "checks/check.hpp"
@@ -37,6 +39,17 @@ class PeriodTie final : public Check {
   [[nodiscard]] const CheckInfo& info() const noexcept override;
   void run(const SeriesContext& context, std::vector<Violation>& out) const override;
 };
+
+// How often each identity and tie breaks on a statements series' periods in force
+// (identities.cpp): by identity name, "cash" and "quarter_sum", the periods judged
+// and those that break. What `dorq calibrate` pools across series into
+// [statements.break_rates], the cross-section's rates (DE-11).
+struct BreakCount {
+  std::string name;
+  std::size_t breaks = 0;
+  std::size_t periods = 0;
+};
+[[nodiscard]] std::vector<BreakCount> count_breaks(const SeriesContext& context);
 
 // DQ911, DQ912, DQ913 and DQ919 (values.cpp): the statement value model's findings.
 class BadValue final : public Check {

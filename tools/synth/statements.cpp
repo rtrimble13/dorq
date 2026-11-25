@@ -17,6 +17,7 @@
 #include <numbers>
 #include <optional>
 #include <ostream>
+#include <set>
 #include <span>
 #include <sstream>
 #include <stdexcept>
@@ -314,6 +315,13 @@ struct Company {
   bool nci = false;
   bool temporary_equity = false;
   bool restricted_cash = false;
+  // DE-11: a cash flow the vendor's taxonomy leaves out, in about half its
+  // quarters: in the net change, in none of the identity's terms (hn_unmapped_flow).
+  bool unmapped_flow = false;
+  // DE-11: a cash line that leaves out a component (cash held for sale, say) in
+  // about half its quarters, which the totals keep: the cash tie breaks, no
+  // identity does (hn_cash_definition).
+  bool cash_definition = false;
   bool writedown_ready = false;  // holds enough goodwill for a write-down
   int q_deadline = 45;
   int k_deadline = 90;
@@ -719,8 +727,12 @@ struct Trades {
 // moves the balance sheet's cash (restricted cash aside, from 2018).
 class Simulation {
  public:
-  Simulation(Rng& rng, Company& c)
-      : rng_(rng), c_(c), bank_(c.kind == Kind::kBank), pre_(c.kind == Kind::kPreRevenue) {}
+  Simulation(Rng& rng, Rng& de11, Company& c)
+      : rng_(rng),
+        de11_(de11),
+        c_(c),
+        bank_(c.kind == Kind::kBank),
+        pre_(c.kind == Kind::kPreRevenue) {}
 
   void run() {
     draw_parameters();
@@ -751,6 +763,7 @@ class Simulation {
   void count_shares(std::size_t t, Values& v, const Trades& trades);
 
   Rng& rng_;
+  Rng& de11_;  // DE-11's draws (Universe::de11_)
   Company& c_;
   bool bank_;
   bool pre_;
@@ -1021,8 +1034,14 @@ Trades Simulation::cash_flow(std::size_t t, Values& v, Books& next, double price
   const double fx = c_.currency == "USD" ? 0.0 : r(b.cash * 0.015 * rng_.normal());
   const double deposit_change = bank_ ? next.deposits - b.deposits : 0.0;
   const double preferred = v[kPreferredDividends];
+  // A flow the vendor maps to none of the cash flow's sections (DE-11): the
+  // proceeds of a discontinued operation, say, in some quarters and not others.
+  const double unmapped =
+      c_.unmapped_flow && de11_.chance(0.55)
+          ? r(scale * de11_.uniform(0.003, 0.015) * (de11_.chance(0.5) ? 1.0 : -1.0))
+          : 0.0;
   double cash = b.cash + operating + investing + debt_change + trades.issuance - trades.repurchase -
-                trades.dividends - preferred + deposit_change + fx -
+                trades.dividends - preferred + deposit_change + fx + unmapped -
                 (restricted_in_cash ? restricted_change : 0.0);
   // Short of cash, a company borrows, or a biotech sells shares.
   if (const double floor = r(pre_ ? 4.0 * v[kOperatingExpenses] : scale * 0.15); cash < floor) {
@@ -1049,7 +1068,7 @@ Trades Simulation::cash_flow(std::size_t t, Values& v, Books& next, double price
   v[kDividendsPaid] = -(trades.dividends + preferred);
   v[kFinancingCash] = v[kDebtIssuance] + v[kEquityIssuance] + v[kDividendsPaid] + deposit_change;
   v[kFxEffect] = fx;
-  v[kNetChangeInCash] = v[kOperatingCash] + v[kInvestingCash] + v[kFinancingCash] + fx;
+  v[kNetChangeInCash] = v[kOperatingCash] + v[kInvestingCash] + v[kFinancingCash] + fx + unmapped;
   next.cash = cash;
   next.debt = b.debt + debt_change;
   next.ppe = b.ppe - capex - dep + r(price * 0.25);
@@ -1069,6 +1088,9 @@ void Simulation::close_books(std::size_t t, Values& v, Books& next, double price
   const double debt_current = r(next.debt * p_.debt_current_share);
   const Books& b = next;
   v[kCash] = b.cash;
+  if (c_.cash_definition && de11_.chance(0.5)) {
+    v[kCash] -= r(b.cash * de11_.uniform(0.05, 0.25));
+  }
   v[kReceivables] = b.receivables;
   v[kPpe] = b.ppe;
   v[kIntangibles] = b.goodwill;
@@ -1130,7 +1152,8 @@ void Simulation::count_shares(std::size_t t, Values& v, const Trades& trades) {
 
 class Universe {
  public:
-  explicit Universe(std::uint64_t seed) : rng_(seed + 0x5354415445ULL) {}
+  explicit Universe(std::uint64_t seed)
+      : rng_(seed + 0x5354415445ULL), de11_(seed + 0x44453131ULL) {}
 
   void build();
   void write(const std::filesystem::path& dir) const;
@@ -1168,6 +1191,7 @@ class Universe {
   void absent_as_zero();
   void cumulative_quarters();
   void identity_breaks();
+  void mapping_faults();
   void share_faults();
   void share_count_units();
   void corrected_versions();
@@ -1185,6 +1209,9 @@ class Universe {
   Company* company(const std::string& id);
 
   Rng rng_;
+  // DE-11's cases draw from their own stream, so that the rest of a seed's
+  // universe is what it was before them.
+  Rng de11_;
   dorq::Calendar calendar_{dorq::CalendarKind::kXnys};
   std::vector<Company> companies_;
   std::vector<Label> labels_;
@@ -1283,6 +1310,24 @@ void Universe::add_companies() {
   add("IND", 40, Kind::kIndustrial);
   add("BNK", 8, Kind::kBank);
   add("PRE", 6, Kind::kPreRevenue);
+  // DE-11's hard negatives: two companies whose cash flow has a flow the vendor
+  // leaves unmapped, and two whose cash line leaves out a component, each with no
+  // other structural gap. From their own stream (de11_).
+  for (int unmapped = 0, cash = 0, tries = 0; (unmapped < 2 || cash < 2) && tries < 1000; ++tries) {
+    Company& c = companies_.at(
+        static_cast<std::size_t>(de11_.integer(0, static_cast<int>(companies_.size()) - 1)));
+    if (c.kind != Kind::kIndustrial || c.nci || c.temporary_equity || c.restricted_cash ||
+        c.unmapped_flow || c.cash_definition) {
+      continue;
+    }
+    if (unmapped < 2) {
+      c.unmapped_flow = true;
+      ++unmapped;
+    } else {
+      c.cash_definition = true;
+      ++cash;
+    }
+  }
 
   // Two foreign filers, reporting in euros.
   for (int done = 0; done < 2;) {
@@ -1368,7 +1413,7 @@ void Universe::plan_events(Company& c) {
   }
 }
 
-void Universe::simulate(Company& c) { Simulation(rng_, c).run(); }
+void Universe::simulate(Company& c) { Simulation(rng_, de11_, c).run(); }
 
 // Splits, where the raw price runs high (or a biotech's low): three at most.
 void Universe::plan_splits(Company& c) {
@@ -1875,6 +1920,69 @@ void Universe::identity_breaks() {
     label_row(c, row, kind, row.values.at(eq.total) == 0.0 ? "DQ911|DQ915" : "DQ911",
               std::string{info(eq.total).column});
     ++done;
+  }
+}
+
+// A mapping wrong in every period (DE-11): one company's total assets stored as its
+// current assets, in every version. Both of its asset identities break every
+// period, by a gap that is no one-off: DQ903 reports it once for the series, at
+// warn, as the noncurrent assets are most of the total. Placed last, on a company
+// with no other fault and no hard negative a DQ903 report would answer to (its
+// report spans the series), whose goodwill is within its current assets (no bound
+// breaks) and whose noncurrent assets are over half the total in three periods of
+// four.
+void Universe::mapping_faults() {
+  std::set<std::string> taken;
+  for (const Label& l : labels_) {
+    if (!l.expect.empty() || (!l.codes.empty() && std::string_view{"DQ903"}.starts_with(l.codes) &&
+                              (!l.statement || *l.statement == kBal))) {
+      taken.insert(l.series);
+    }
+  }
+  for (int tries = 0; tries < 200; ++tries) {
+    Company& c = companies_.at(
+        static_cast<std::size_t>(de11_.integer(0, static_cast<int>(companies_.size()) - 1)));
+    if (c.kind != Kind::kIndustrial || taken.contains(c.id) || c.nci || c.temporary_equity ||
+        c.unmapped_flow || c.restricted_cash || c.delisted || c.values.empty()) {
+      continue;
+    }
+    bool fits = true;
+    std::vector<double> shares;
+    for (const Row& row : c.rows) {
+      if (row.statement != kBal || row.removed) {
+        continue;
+      }
+      const double assets = row.values.at(kAssets);
+      const double current = row.values.at(kCurrentAssets);
+      const double goodwill = row.values.at(kIntangibles);
+      if (std::isnan(assets) || std::isnan(current) || assets <= 0.0 ||
+          (!std::isnan(goodwill) && goodwill > current)) {
+        fits = false;
+        break;
+      }
+      // The balance sheet's gap, the noncurrent assets, as a share of its largest
+      // term once the total is the current assets: what DQ903 will see.
+      const double largest = std::max(
+          {current, std::fabs(row.values.at(kLiabilities)), std::fabs(row.values.at(kEquity))});
+      shares.push_back((assets - current) / largest);
+    }
+    if (!fits || shares.empty()) {
+      continue;
+    }
+    std::sort(shares.begin(), shares.end());
+    if (shares.at(shares.size() / 2) < 0.55) {
+      continue;
+    }
+    for (Row& row : c.rows) {
+      if (row.statement == kBal) {
+        row.values.at(kAssets) = row.values.at(kCurrentAssets);
+      }
+    }
+    Label label{
+        c.id, c.quarters.front().end, c.quarters.back().end, "mapping_every_period", "DQ903", ""};
+    label.statement = kBal;
+    labels_.push_back(label);
+    return;
   }
 }
 
@@ -2570,6 +2678,17 @@ void Universe::whole_series_labels() {
       label.identity = "balance_sheet";
       labels_.push_back(label);
     }
+    if (c.cash_definition) {
+      Label label{c.id, first, last, "hn_cash_definition", "", "DQ90"};
+      label.identity = "cash_tie";
+      labels_.push_back(label);
+    }
+    if (c.unmapped_flow) {
+      Label label{c.id, first, last, "hn_unmapped_flow", "", "DQ90"};
+      label.statement = kCfs;
+      label.identity = "cash_flow";
+      labels_.push_back(label);
+    }
     if (c.restricted_cash) {
       std::size_t t = 0;
       while (t < c.quarters.size() && c.quarters[t].end < restricted_cash_rule()) {
@@ -2612,6 +2731,7 @@ void Universe::build() {
   }
   faults();
   whole_series_labels();
+  mapping_faults();
 }
 
 // ---------------------------------------------------------------------------

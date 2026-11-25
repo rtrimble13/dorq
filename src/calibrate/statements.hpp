@@ -90,6 +90,10 @@ struct StatementCalibrationReport {
   double ece_before = 0.0;              // over every family's observations
   double ece_after = 0.0;
   StatementPriors priors;  // the fitted priors, the rest as configured
+  // DE-11: each identity's and tie's breaks on the periods in force, pooled across
+  // the input's series, and the rates that have enough periods to be fitted.
+  std::vector<std::pair<std::string, std::pair<std::size_t, std::size_t>>> break_counts;
+  std::vector<std::pair<std::string, double>> break_rates;
   std::string version;
 };
 

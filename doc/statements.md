@@ -134,6 +134,12 @@ bounds = ["total_current_assets <= total_assets"]  # one item at most another
 cash_tie = ["cash_and_equivalents", "net_change_in_cash"]  # DQ904: cash, and its change
 restricted_cash_from = "2018-01-01"  # from here the cash flow includes restricted cash,
 restricted_cash_share = 0.10         # up to this share of the balance
+break_rate = 0.05             # DQ903, DQ904 (DE-11): the cross-section's rate of breaks that
+break_rate_strength = 8       # are no error, and how many periods of it a series' own is shrunk by
+unexplained_is_error = false  # whether a break nothing explains counts toward p_error
+chronic_share = 0.75          # a break in this share of at least
+chronic_min_periods = 8       # this many periods of a type is chronic: reported once for the
+chronic_warn_share = 0.5      # series, at warn when its median gap is this share of the scale
 
 [statements.identities]       # named equations over items
 balance_sheet = "total_assets = total_liabilities + total_equity_parent"
@@ -141,6 +147,9 @@ cash_flow = "net_change_in_cash = net_cash_operating + net_cash_investing + net_
 
 [statements.explained_by]     # DQ903: items that explain an identity's gap
 balance_sheet = ["net_income_noncontrolling"]
+
+[statements.break_rates]      # DE-11: the cross-section's rate by identity, "cash" and
+balance_sheet = 0.16          # "quarter_sum"; break_rate for the rest. dorq calibrate writes them
 
 [statements.priors]           # the models' priors, which dorq calibrate fits (doc/calibration.md)
 bad_value = 0.001             # the value model (DQ911 to DQ919): the prior that any one
@@ -150,9 +159,9 @@ flow_scale = 0.08             # the class prior on a period's move (asinh scale)
 stock_scale = 0.05            # and stocks
 prior_weight = 6              # in periods, against the item's own residuals
 identity_structural = 0.2465969639416065  # DQ903: the weights of a gap's four explanations,
-identity_reclassification = 0.049787068367863944  # relative to each other
-identity_field_error = 0.3499377491111553  # (e^-1.4, e^-3, e^-1.05, e^-1.05)
-identity_unexplained = 0.3499377491111553
+identity_version_error = 0.049787068367863944  # relative to each other, at break_rate
+identity_field_error = 0.3499377491111553  # (e^-1.4, e^-3, e^-1.05, e^-1.05). Before 0.17.0
+identity_unexplained = 0.3499377491111553  # version_error was reclassification, which still reads
 filing_late = 0.01            # DQ931: the prior that a filing is late, dated too early,
 filing_early = 0.002          # or dated as its amendment
 filing_amendment = 0.002
@@ -215,20 +224,39 @@ negatives follow the plan's §6.
 
 An identity holds within the larger of `identity_share` of its largest term and
 `tie_floor`: fafnir's tolerance. DQ903 judges each version's identities, and
-weighs a gap beyond it as the company's structure (the same gap in the periods
-around it, or on one side of it; the identity failing in every period around it;
-or an `explained_by` item reported), a reclassification (another
-version of the period holds, with the same total), a field error (the gap is a
-term, twice one, or one at a thousand or a million times), or unexplained. The
-first two are filing facts, at info; a field error names the field
-([DQ903](checks/DQ903.md)).
+weighs a gap beyond it against the series' own process (DE-11). A data error is
+a stored value that differs from its source, so a break is one only where
+evidence says so:
+
+- **Filing facts:** the company's structure (the same gap in the periods around
+  it, or on one side of it; the gap the series' other breaks have; the identity
+  failing in every period around it; or an `explained_by` item reported), and a
+  break nothing explains (unexplained). Both come at the series' own rate for the
+  identity and period type: its breaks in its other periods, shrunk toward the
+  cross-section's rate (`break_rate`, or `[statements.break_rates]`).
+- **Data errors:** a field error (the gap is a term, twice one, or one at a
+  thousand or a million times; or the next or last period's gap cancels it; or the
+  series has been clean), and another version of the period holding with the same
+  total (a version error). A term match or a cancelling pair counts against how
+  often the series' other breaks show one by chance.
+
+Unexplained counts as an error only with `unexplained_is_error`. A field error
+names the field ([DQ903](checks/DQ903.md)).
 
 DQ904 ties what an identity within one row cannot: the change in cash between
 two balance sheets in force, within `quarter_spacing` or `year_spacing`, against
 the later period's cash flow; and, for each flow item `--items` lists, a fiscal
 year's four quarters against its one year. It names the row out of line: one
-balance sheet's cash where two ties break and cancel, a quarter, or the year
+balance sheet's cash where two ties break and cancel, a quarter, or the year. It
+weighs a break as DQ903 does, against the series' own rate for the tie
 ([DQ904](checks/DQ904.md)).
+
+A chronic break, an identity or tie that fails in at least `chronic_share` of at
+least `chronic_min_periods` periods of a type, is also reported once for the
+series, keyed on its statement and period type and no period: at warn where its
+median gap is at least `chronic_warn_share` of the scale (an item mapped wrong in
+every period), else at info (the company's structure). Each period's own report is
+then a filing fact.
 
 ## The value model
 

@@ -479,7 +479,7 @@ TEST_CASE("statements: the identity and filing priors and [statements.calibratio
   // new keys judges as before.
   const dorq::StatementPriors defaults;
   CHECK(std::log(defaults.identity_structural) == doctest::Approx(-1.4));
-  CHECK(std::log(defaults.identity_reclassification) == doctest::Approx(-3.0));
+  CHECK(std::log(defaults.identity_version_error) == doctest::Approx(-3.0));
   CHECK(std::log(defaults.identity_field_error) == doctest::Approx(-1.05));
   CHECK(std::log(defaults.identity_unexplained) == doctest::Approx(-1.05));
   CHECK(defaults.filing_late == doctest::Approx(0.01));
@@ -505,6 +505,8 @@ dq93 = [[0.1, 0.05], [0.5, 0.25], [0.9, 0.95]]
                                                  "s.toml", false);
   const dorq::StatementPriors& p = config.statements.priors;
   CHECK(p.identity_structural == doctest::Approx(0.5));
+  // identity_reclassification is identity_version_error's name before 0.17.0 (DE-11).
+  CHECK(p.identity_version_error == doctest::Approx(0.01));
   CHECK(p.identity_field_error == doctest::Approx(1.0));
   CHECK(p.filing_late == doctest::Approx(0.02));
   CHECK(p.filing_amendment == doctest::Approx(0.003));

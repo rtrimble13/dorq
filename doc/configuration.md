@@ -171,10 +171,20 @@ copy_min_items = 5    # DQ914: a copied row repeats at least this many items
 cash_tie = []         # DQ904: [cash item, its change on the cash flow], or none
 restricted_cash_from = "2018-01-01"  # the cash flow includes restricted cash from here,
 restricted_cash_share = 0.1          # up to this share of the balance
+break_rate = 0.05     # DQ903, DQ904 (DE-11): the cross-section's rate of breaks that are no
+                      # error, in (0, 0.99), and the rate the identity priors hold at
+break_rate_strength = 8  # periods of it a series' own break rate is shrunk toward
+unexplained_is_error = false  # a break nothing explains counts toward p_error
+chronic_share = 0.75  # a break in this share of at least chronic_min_periods periods
+chronic_min_periods = 8   # of a type (2 to 1000) is chronic: one report for the series,
+chronic_warn_share = 0.5  # at warn when its median gap is this share of the scale
 
 [statements.identities]  # name = "item = item + item - item"
 
 [statements.explained_by]  # DQ903: identity name = [items that explain its gap]
+
+[statements.break_rates]  # DE-11: identity name, "cash" or "quarter_sum" = its
+                          # cross-section rate, in (0, 0.99); dorq calibrate writes them
 
 [statements.priors]   # the statement models: see doc/statements.md
 bad_value = 0.001     # the value model (DQ911 to DQ919): the prior that any one
@@ -184,7 +194,7 @@ flow_scale = 0.08     # the class prior on a period's move (asinh scale)
 stock_scale = 0.05
 prior_weight = 6
 identity_structural = 0.2465969639416065  # DQ903: relative weights, each in [1e-6, 1]
-identity_reclassification = 0.049787068367863944
+identity_version_error = 0.049787068367863944  # identity_reclassification before 0.17.0
 identity_field_error = 0.3499377491111553
 identity_unexplained = 0.3499377491111553
 filing_late = 0.01    # DQ931: each in [1e-6, 0.5], the three below 0.95 together
@@ -305,7 +315,9 @@ covers:
   `[statements.calibration]`, DE-13's `[price] block_decay` and
   `provisional_severity`, and DE-14's `[price] quote_steps` and `quote_strength`
   and `[priors] lost_volume`, `indicative_quote`, `copied_bar` and
-  `dividend_slip`.
+  `dividend_slip`, and DE-11's `[statements]` `break_rate`,
+  `break_rate_strength`, `unexplained_is_error` and the `chronic_*` keys, and
+  `[statements.break_rates]`.
 
 It does not cover:
 
