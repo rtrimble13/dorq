@@ -621,14 +621,17 @@ void read_statement_priors(const toml::table& table, const std::string& where,
           read_double(node, where, path, 1e-4, 5.0);
     } else if (key == "prior_weight") {
       priors.prior_weight = read_double(node, where, path, 0.0, 1000.0);
-    } else if (key == "identity_structural" || key == "identity_reclassification" ||
-               key == "identity_field_error" || key == "identity_unexplained") {
-      // Relative weights: only their ratios matter.
+    } else if (key == "identity_structural" || key == "identity_version_error" ||
+               key == "identity_reclassification" || key == "identity_field_error" ||
+               key == "identity_unexplained") {
+      // Relative weights: only their ratios matter. identity_reclassification is
+      // identity_version_error's name before 0.17.0 (DE-11), as a calibrated file
+      // may still have it.
       const double w = read_double(node, where, path, 1e-6, 1.0);
       if (key == "identity_structural") {
         priors.identity_structural = w;
-      } else if (key == "identity_reclassification") {
-        priors.identity_reclassification = w;
+      } else if (key == "identity_version_error" || key == "identity_reclassification") {
+        priors.identity_version_error = w;
       } else if (key == "identity_field_error") {
         priors.identity_field_error = w;
       } else {
@@ -776,6 +779,27 @@ void read_statements(const toml::table& table, const std::string& where, Config&
       std::sort(settings.explained_by.begin(), settings.explained_by.end());
     } else if (key == "copy_min_items") {
       settings.copy_min_items = read_int(node, where, path, 2, 1000);
+    } else if (key == "break_rate") {
+      settings.break_rate = read_double(node, where, path, 1e-6, 0.99);
+    } else if (key == "break_rate_strength") {
+      settings.break_rate_strength = read_double(node, where, path, 0.0, 1000.0);
+    } else if (key == "break_rates") {
+      // By identity or tie name: a file adds to those it includes.
+      for (const auto& [name_node, rate] : read_table(node, where, path)) {
+        const std::string name{name_node.str()};
+        std::erase_if(settings.break_rates, [&name](const auto& old) { return old.first == name; });
+        settings.break_rates.emplace_back(
+            name, read_double(rate, where, key_path(path, name), 1e-6, 0.99));
+      }
+      std::sort(settings.break_rates.begin(), settings.break_rates.end());
+    } else if (key == "unexplained_is_error") {
+      settings.unexplained_is_error = read_bool(node, where, path);
+    } else if (key == "chronic_share") {
+      settings.chronic_share = read_double(node, where, path, 0.0, 1.0);
+    } else if (key == "chronic_min_periods") {
+      settings.chronic_min_periods = read_int(node, where, path, 2, 1000);
+    } else if (key == "chronic_warn_share") {
+      settings.chronic_warn_share = read_double(node, where, path, 0.0, 1e6);
     } else if (key == "priors") {
       read_statement_priors(read_table(node, where, path), where, settings.priors);
     } else if (key == "calibration") {
@@ -1162,6 +1186,30 @@ void append_priors_patch(std::string& out, const PricePatch& patch) {
   append_number(out, "dividend_slip", patch.dividend_slip);
 }
 
+// DE-11's [statements] keys, each left out of config_hash at its default.
+void append_break_settings(std::string& out, const StatementSettings& settings, bool all_sections) {
+  const StatementSettings defaults;
+  if (all_sections || settings.break_rate != defaults.break_rate) {
+    out += "\nbreak_rate = " + format_number(settings.break_rate);
+  }
+  if (all_sections || settings.break_rate_strength != defaults.break_rate_strength) {
+    out += "\nbreak_rate_strength = " + format_number(settings.break_rate_strength);
+  }
+  if (all_sections || settings.unexplained_is_error != defaults.unexplained_is_error) {
+    out += std::string{"\nunexplained_is_error = "} +
+           (settings.unexplained_is_error ? "true" : "false");
+  }
+  if (all_sections || settings.chronic_share != defaults.chronic_share) {
+    out += "\nchronic_share = " + format_number(settings.chronic_share);
+  }
+  if (all_sections || settings.chronic_min_periods != defaults.chronic_min_periods) {
+    out += "\nchronic_min_periods = " + std::to_string(settings.chronic_min_periods);
+  }
+  if (all_sections || settings.chronic_warn_share != defaults.chronic_warn_share) {
+    out += "\nchronic_warn_share = " + format_number(settings.chronic_warn_share);
+  }
+}
+
 void append_statements(std::string& out, const StatementSettings& settings, bool all_sections) {
   out += "\n[statements]\nidentity_share = " + format_number(settings.identity_share);
   out += "\ntie_floor = " + format_number(settings.tie_floor);
@@ -1192,6 +1240,7 @@ void append_statements(std::string& out, const StatementSettings& settings, bool
   if (all_sections || settings.copy_min_items != StatementSettings{}.copy_min_items) {
     out += "\ncopy_min_items = " + std::to_string(settings.copy_min_items);
   }
+  append_break_settings(out, settings, all_sections);
   out += "\n";
   if (!settings.identities.empty()) {
     out += "\n[statements.identities]\n";
@@ -1209,6 +1258,12 @@ void append_statements(std::string& out, const StatementSettings& settings, bool
       out += "\n";
     }
   }
+  if (!settings.break_rates.empty()) {
+    out += "\n[statements.break_rates]\n";
+    for (const auto& [name, rate] : settings.break_rates) {
+      out += toml_key(name) + " = " + format_number(rate) + "\n";
+    }
+  }
   // Left out of config_hash where they hold their defaults, so the release that
   // added them changed no hash.
   if (all_sections || settings.priors != StatementPriors{}) {
@@ -1223,12 +1278,12 @@ void append_statements(std::string& out, const StatementSettings& settings, bool
     // value model's keys keeps its hash.
     const StatementPriors d;
     const bool identities = p.identity_structural != d.identity_structural ||
-                            p.identity_reclassification != d.identity_reclassification ||
+                            p.identity_version_error != d.identity_version_error ||
                             p.identity_field_error != d.identity_field_error ||
                             p.identity_unexplained != d.identity_unexplained;
     if (all_sections || identities) {
       out += "\nidentity_structural = " + format_number(p.identity_structural);
-      out += "\nidentity_reclassification = " + format_number(p.identity_reclassification);
+      out += "\nidentity_version_error = " + format_number(p.identity_version_error);
       out += "\nidentity_field_error = " + format_number(p.identity_field_error);
       out += "\nidentity_unexplained = " + format_number(p.identity_unexplained);
     }
@@ -1589,6 +1644,13 @@ std::string parse_item_bound(std::string_view text, ItemBound& out) {
 }
 
 std::string ItemBound::to_string() const { return lesser + " <= " + greater; }
+
+double StatementSettings::break_rate_for(std::string_view name) const noexcept {
+  const auto it = std::lower_bound(break_rates.begin(), break_rates.end(), name,
+                                   [](const std::pair<std::string, double>& entry,
+                                      std::string_view n) { return entry.first < n; });
+  return it != break_rates.end() && it->first == name ? it->second : break_rate;
+}
 
 std::vector<std::pair<std::string, std::string>> StatementSettings::named_items() const {
   std::vector<std::pair<std::string, std::string>> out;

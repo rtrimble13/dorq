@@ -241,7 +241,7 @@ archive, plus a `SHA256SUMS` file:
 | `dorq-<version>-linux-x86_64.tar.gz` | Linux x86-64 with glibc 2.39 or newer (Ubuntu 24.04+). The C++ runtime is linked in |
 
 ```bash
-version=0.16.0
+version=0.17.0
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/dorq-${version}-linux-x86_64.tar.gz"
 curl -LO "https://github.com/rtrimble13/dorq/releases/download/v${version}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
@@ -266,7 +266,7 @@ Clang 18+).
 ```bash
 sudo apt-get install -y build-essential cmake ninja-build git
 git clone https://github.com/rtrimble13/dorq.git && cd dorq
-git checkout v0.16.0                       # or stay on main for the latest
+git checkout v0.17.0                       # or stay on main for the latest
 cmake --workflow --preset release          # configure, build, run the tests
 sudo cmake --install build/release --prefix /opt/dorq
 /opt/dorq/bin/dorq version                 # names the commit it was built from

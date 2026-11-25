@@ -239,12 +239,15 @@ dorq calibrate statements.csv --labels labels.jsonl --items items.csv \
    | Model | Codes | Priors |
    |---|---|---|
    | values | DQ911, DQ912, DQ913, DQ919 | `bad_value`, `unit_error`, `sign_error` (a real change has the rest) |
-   | identities | DQ903 | `identity_structural`, `identity_reclassification`, `identity_field_error`, `identity_unexplained` (relative weights) |
+   | identities | DQ903 | `identity_structural`, `identity_version_error`, `identity_field_error`, `identity_unexplained` (relative weights; `identity_version_error` was `identity_reclassification` before 0.17.0) |
    | filings | DQ931 | `filing_late`, `filing_early`, `filing_amendment` (an ordinary filing has the rest) |
 
    Each observation's evidence under each hypothesis is read from its
    posterior over its prior. A fault label names the error it allows by its
    code: a DQ912 label on a DQ911 candidate is the value model's `unit_error`.
+   DQ903's errors are `field_error` and `version_error`, and `unexplained` too
+   with `[statements] unexplained_is_error` (DE-11). The series' own break rate
+   is part of the evidence, so the weights hold at `break_rate`.
    A row's or an era's DQ912 is left out, since its posterior is not the value
    model's. With 30 held-out observations or more, the penalty's width is
    chosen from {0.25, 0.5, 1, 1.5, 3} e-folds by their log-likelihood.
@@ -269,13 +272,26 @@ dorq calibrate statements.csv --labels labels.jsonl --items items.csv \
    - A sub-family is mapped only with 20 training observations, among them 2
      errors and 2 innocent ones.
 
-The output is a `[statements.priors]` table, with the three models' keys, and
-`[statements.calibration]`, with the fit's summary in comments:
+4. **The cross-section's break rates (DE-11).** Each identity's, and DQ904's
+   cash tie's and quarter sums', breaks on the periods in force, pooled across
+   the input's series: `[statements.break_rates]`, for each with 40 periods or
+   more. A series' own rate is shrunk toward its identity's rate. Labels play no
+   part.
+
+The output is `[statements.break_rates]`, a `[statements.priors]` table, with the
+three models' keys, and `[statements.calibration]`, with the fit's summary in
+comments:
 
 ```toml
 # values: 1110 observations (25 errors, 281 held out), spread 0.5; mean log P(label | evidence) -0.0384 before, -0.0339 after; held out -0.0066 before, -0.0062 after
 # DQ91x: 1141 observations (56 errors); expected calibration error 0.0027 before, 0.0024 after
 # ...
+# balance_sheet: breaks in 428 of 5411 periods in force
+# ...
+
+[statements.break_rates]
+balance_sheet = 0.0791
+...
 
 [statements.priors]
 bad_value = 0.0008877

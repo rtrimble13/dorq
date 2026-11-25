@@ -215,6 +215,14 @@ std::string tie_rows() {
   }
   text += income("QSUM", "annual", "2010-12-31", "2010", "4600000000");
   text += income("QSUM", "annual", "2011-12-31", "2011", "5300000000");
+  // Six years that sum, so that the series' history shows its quarters do (DE-11).
+  for (int year = 2014; year <= 2019; ++year) {
+    const std::string fy = std::to_string(year);
+    for (const char* end : {"-03-31", "-06-30", "-09-30", "-12-31"}) {
+      text += income("QSUM", "quarter", fy + end, fy, "1000000000");
+    }
+    text += income("QSUM", "annual", fy + "-12-31", fy, "4000000000");
+  }
   // fafnir#217's shape: a change of fiscal year leaves FY2012 with two years in
   // force, a transition period and the year. Not judged, though nothing sums.
   for (const char* date : {"2012-03-31", "2012-06-30", "2012-09-30", "2012-12-31"}) {
@@ -246,7 +254,7 @@ std::string quarter_key() { return R"("period_type":"quarter",)"; }
 
 }  // namespace
 
-TEST_CASE("DQ903: a gap is weighed as structural, a reclassification, a field error or none") {
+TEST_CASE("DQ903: a gap is weighed as structural, another version's, a field error or none") {
   const TempDir dir;
   write_file(dir.path() / "s.csv", identity_rows());
   write_file(dir.path() / "st.toml", kIdentityConfig);
@@ -288,8 +296,7 @@ TEST_CASE("DQ903: a gap is weighed as structural, a reclassification, a field er
   CHECK(contains(report(r.out, "DQ903", "SIGN", "2010-06-30"),
                  "the gap is twice total_equity_parent: its sign"));
 
-  // Filing facts are info: the company's structure, with NCI or without, and a
-  // reclassification.
+  // Filing facts are info: the company's structure, with NCI or without.
   for (const std::string& line : lines_with(r.out, R"("series":"STRUCT")")) {
     CHECK(contains(line, "as in the periods around it"));
     CHECK(contains(line, R"("severity":"info")"));
@@ -298,17 +305,40 @@ TEST_CASE("DQ903: a gap is weighed as structural, a reclassification, a field er
   const std::string nci = report(r.out, "DQ903", "NCI", "2010-09-30");
   CHECK(contains(nci, "net_income_noncontrolling is reported in the period"));
   CHECK(contains(nci, R"("severity":"info")"));
+  // Another version of the period holds, with the same total: this version's
+  // stored values are not its source's (DE-11; a reclassification, a filing fact,
+  // before 0.17.0).
   const std::string reclass = report(r.out, "DQ903", "RECLASS", "2010-09-30");
   CHECK(contains(reclass, "another version holds, with the same total_assets"));
-  CHECK(contains(reclass, R"("severity":"info")"));
-  CHECK(contains(reclass, R"("classification":"market_fact")"));
+  CHECK(contains(reclass, R"("severity":"error")"));
+  CHECK(contains(reclass, R"("classification":"data_error")"));
+  CHECK(contains(reclass, R"("version_error":)"));
 
-  // Unexplained: a data error that names no field. The NULL term is not judged.
+  // Unexplained: no term, no cancelling period, too short a history to call the
+  // series clean. No evidence says a stored value differs from its source, so it
+  // is a filing fact by default (DE-11), with what the series' history says. The
+  // NULL term is not judged.
   const std::string unexplained = report(r.out, "DQ903", "UNEXPL", "2010-09-30");
-  CHECK(contains(unexplained, "no term explains it"));
-  CHECK(contains(unexplained, R"("classification":"data_error")"));
+  CHECK(
+      contains(unexplained, "no term explains it, and the series breaks in 0 of 4 other quarters"));
+  CHECK(contains(unexplained, R"("severity":"info")"));
+  CHECK(contains(unexplained, R"("classification":"market_fact")"));
   CHECK(contains(unexplained, R"("suggested_action":null)"));
+  CHECK(contains(unexplained, R"("breaks":0,"periods":4)"));
   CHECK_FALSE(contains(r.out, "2011-06-30"));
+
+  // [statements] unexplained_is_error counts it as an error, as before 0.17.0.
+  write_file(dir.path() / "error.toml",
+             "[statements]\nunexplained_is_error = true\n" +
+                 std::string{kIdentityConfig}.substr(std::string_view{"[statements]\n"}.size()));
+  const std::string error_config = (dir.path() / "error.toml").string();
+  const Result as_error =
+      run_in(dir.path(), {"--config", error_config.c_str(), "--select", "DQ903", "--show-info",
+                          "--format", "jsonl", "--exit-zero", file.c_str()});
+  REQUIRE(as_error.status == 0);
+  const std::string counted = report(as_error.out, "DQ903", "UNEXPL", "2010-09-30");
+  CHECK(contains(counted, R"("classification":"data_error")"));
+  CHECK(contains(counted, R"("severity":"error")"));
 
   // The text line names the identity and the period's version.
   const Result text = run_in(
@@ -387,7 +417,7 @@ TEST_CASE("DQ904: the cash tie, restricted cash, and a year's quarters against t
   const std::string config = (dir.path() / "st.toml").string();
   const Result r =
       run_in(dir.path(), {"--config", config.c_str(), "--items", items.c_str(), "--select", "DQ904",
-                          "--format", "jsonl", "--exit-zero", file.c_str()});
+                          "--show-info", "--format", "jsonl", "--exit-zero", file.c_str()});
   INFO(r.err);
   REQUIRE(r.status == 0);
   const std::vector<std::string> expected{
@@ -406,9 +436,15 @@ TEST_CASE("DQ904: the cash tie, restricted cash, and a year's quarters against t
   // No two reports share a key: fafnir's open-condition index would refuse the second.
   CHECK(std::set<std::string>(got.begin(), got.end()).size() == got.size());
 
-  CHECK(contains(report(r.out, "DQ904", "CASH", "2010-06-30"),
+  // A lone break with nothing to say a value is wrong, in a history too short to
+  // call the series clean, is a filing fact at info (DE-11).
+  const std::string lone = report(r.out, "DQ904", "CASH", "2010-06-30");
+  CHECK(contains(lone,
                  "the change in cash_and_equivalents since 2010-03-31 is not net_change_in_cash: "
-                 "off by -200000000 (tolerance 24000000)"));
+                 "off by -200000000 (tolerance 24000000); it breaks in 0 of 3 other quarters"));
+  CHECK(contains(lone, R"("severity":"info")"));
+  CHECK(contains(lone, R"("classification":"market_fact")"));
+  // Two that cancel are one balance sheet's cash wrong: an error.
   const std::string pair = report(r.out, "DQ904", "PAIR", "2010-06-30");
   CHECK(contains(pair,
                  "cash_and_equivalents is out of line with the cash flows either side: off "
@@ -424,7 +460,9 @@ TEST_CASE("DQ904: the cash tie, restricted cash, and a year's quarters against t
   CHECK(contains(quarter,
                  "the quarters of FY2010 do not sum to the year: revenue by 1200000000; "
                  "this quarter is out of line"));
-  CHECK(contains(quarter, R"("hypotheses":{"quarter_error":0.9,"unexplained":0.1})"));
+  CHECK(contains(quarter, R"("quarter_error":)"));
+  CHECK(contains(quarter, R"("classification":"data_error")"));
+  CHECK(contains(quarter, R"("clear":true)"));
   CHECK(contains(quarter, R"("year_fiscal_date":"2010-12-31")"));
   CHECK(contains(report(r.out, "DQ904", "QSUM", "2011-12-31"),
                  "the year is out of line with its quarters"));
@@ -432,8 +470,9 @@ TEST_CASE("DQ904: the cash tie, restricted cash, and a year's quarters against t
   CHECK_FALSE(contains(r.out, "FY2013"));
 
   // Without --items no item is known to be a flow: the cash tie alone.
-  const Result cash_only = run_in(dir.path(), {"--config", config.c_str(), "--select", "DQ904",
-                                               "--format", "jsonl", "--exit-zero", file.c_str()});
+  const Result cash_only =
+      run_in(dir.path(), {"--config", config.c_str(), "--select", "DQ904", "--show-info",
+                          "--format", "jsonl", "--exit-zero", file.c_str()});
   CHECK(reports_of(cash_only.out, "DQ904").size() == 3);
   CHECK_FALSE(contains(cash_only.out, "quarter_sum"));
   // And without cash_tie, nothing.
@@ -483,6 +522,180 @@ balance_sheet = ["net_income_noncontrolling", "temporary_equity"]
         "[statements]\nrestricted_cash_share = 1.5\n",
         "[statements]\nrestricted_cash_from = \"2018\"\n",
         "[statements.explained_by]\nbalance_sheet = [1]\n", "[statements]\nexplained_by = 3\n"}) {
+    CAPTURE(bad);
+    CHECK_THROWS_AS((void)dorq::parse_config(bad, "bad.toml", false), dorq::ConfigError);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// DE-11: the series' own process
+
+namespace {
+
+// The first `count` quarter ends from 2010.
+std::vector<std::string> quarter_ends(int count) {
+  std::vector<std::string> ends;
+  for (int q = 0; q < count; ++q) {
+    const int year = 2010 + q / 4;
+    const std::array<const char*, 4> month_day{"-03-31", "-06-30", "-09-30", "-12-31"};
+    ends.push_back(std::to_string(year) + month_day.at(static_cast<std::size_t>(q % 4)));
+  }
+  return ends;
+}
+
+std::string history_rows() {
+  std::string text = kIdentityHeader;
+  const std::vector<std::string> ends = quarter_ends(40);
+  for (std::size_t q = 0; q < ends.size(); ++q) {
+    // CLEAN holds in 39 quarters; in one, a gap no term gives.
+    text +=
+        sheet("CLEAN", ends[q], "10000000000", "6000000000", q == 20 ? "3700000000" : "4000000000");
+    // IRREG breaks in every other quarter, by a gap that varies: a vendor's
+    // mapping that leaves an item out now and then.
+    const std::array<const char*, 4> equity{"3800000000", "3650000000", "3750000000", "3550000000"};
+    text += sheet("IRREG", ends[q], "10000000000", "6000000000",
+                  q % 2 == 0 ? equity.at((q / 2) % 4) : "4000000000");
+    // MAPPED: total_liabilities stored as its current part in every quarter.
+    text += sheet("MAPPED", ends[q], "10000000000", "400000000", "4000000000");
+  }
+  return text;
+}
+
+}  // namespace
+
+TEST_CASE("DQ903 (DE-11): a break is weighed against the series' own history") {
+  const TempDir dir;
+  write_file(dir.path() / "s.csv", history_rows());
+  write_file(dir.path() / "st.toml", kIdentityConfig);
+  const std::string file = (dir.path() / "s.csv").string();
+  const std::string config = (dir.path() / "st.toml").string();
+  const Result r =
+      run_in(dir.path(), {"--config", config.c_str(), "--select", "DQ903", "--show-info",
+                          "--format", "jsonl", "--exit-zero", file.c_str()});
+  INFO(r.err);
+  REQUIRE(r.status == 0);
+
+  // A gap no term gives, where the series holds in every other quarter: a break
+  // where it has been clean is evidence of a stored value wrong.
+  const std::string clean = report(r.out, "DQ903", "CLEAN", "2015-03-31");
+  CHECK(contains(clean,
+                 "no term explains it, where the series holds: it breaks in 0 of 39 other "
+                 "quarters"));
+  CHECK(contains(clean, R"("classification":"data_error")"));
+  CHECK(contains(clean, R"("severity":"warn")"));
+
+  // The same kind of gap where the series breaks in every other quarter: its own
+  // process, a filing fact at info. No one quarter is persistent, but its gaps
+  // are the series'.
+  for (const std::string& line : lines_with(r.out, R"("series":"IRREG")")) {
+    CHECK(contains(line, R"("severity":"info")"));
+    CHECK(contains(line, R"("classification":"market_fact")"));
+  }
+  CHECK(contains(report(r.out, "DQ903", "IRREG", "2015-03-31"), "the series' own gap"));
+  // Half its quarters break: not chronic, so no report for the series.
+  CHECK_FALSE(contains(r.out, R"("series":"IRREG","label":null,"source")"
+                              R"(.*"chronic":true)"));
+
+  // A mapping wrong in every quarter: each quarter's gap is the series' own (info),
+  // and one report for the series keeps it in view, at warn as the gap is over
+  // half the scale. Its key has no fiscal period or version.
+  std::size_t chronic = 0;
+  for (const std::string& line : lines_with(r.out, R"("series":"MAPPED")")) {
+    if (contains(line, R"("chronic":true)")) {
+      ++chronic;
+      CHECK(contains(line, R"("severity":"warn")"));
+      CHECK(contains(line,
+                     "balance_sheet fails in 40 of 40 quarters in force, by a median 56% of the "
+                     "scale"));
+      CHECK(contains(line, R"("record_key":{"statement":"balance_sheet","period_type":"quarter",)"
+                           R"("fiscal_date":"2010-03-31","identity":"balance_sheet"})"));
+    } else {
+      CHECK(contains(line, R"("severity":"info")"));
+    }
+  }
+  CHECK(chronic == 1);
+  for (const std::string& line : lines_with(r.out, R"("series":"IRREG")")) {
+    CHECK_FALSE(contains(line, R"("chronic":true)"));
+  }
+
+  // The cross-section's rate for an identity ([statements.break_rates]): where
+  // balance sheets often break across the input, CLEAN's one break is weaker
+  // evidence, but its own clean history still says it is no habit of its own.
+  write_file(dir.path() / "rates.toml",
+             std::string{kIdentityConfig} + "[statements.break_rates]\nbalance_sheet = 0.5\n");
+  const std::string rates = (dir.path() / "rates.toml").string();
+  const Result shrunk =
+      run_in(dir.path(), {"--config", rates.c_str(), "--select", "DQ903", "--show-info", "--format",
+                          "jsonl", "--exit-zero", file.c_str()});
+  REQUIRE(shrunk.status == 0);
+  // (0 + 8 x 0.5) / (39 + 8): the cross-section's rate, shrunk by the series' 39.
+  CHECK(contains(report(shrunk.out, "DQ903", "CLEAN", "2015-03-31"), R"("break_rate":0.085)"));
+}
+
+TEST_CASE("DQ904 (DE-11): a lone cash break where the series' cash has always tied") {
+  const TempDir dir;
+  std::string text = kTieHeader;
+  const std::vector<std::string> ends = quarter_ends(40);
+  text += cash("LONG", "2009-12-31", "1000000000");
+  for (std::size_t q = 0; q < ends.size(); ++q) {
+    text += cash("LONG", ends[q], std::to_string(1000000000 + 100000000 * (q + 1)));
+    text += flow("LONG", ends[q], q == 20 ? "300000000" : "100000000");
+  }
+  write_file(dir.path() / "s.csv", text);
+  write_file(dir.path() / "st.toml", kTieConfig);
+  const std::string file = (dir.path() / "s.csv").string();
+  const std::string config = (dir.path() / "st.toml").string();
+  const Result r = run_in(dir.path(), {"--config", config.c_str(), "--select", "DQ904", "--format",
+                                       "jsonl", "--exit-zero", file.c_str()});
+  REQUIRE(r.status == 0);
+  // The flow is off by 200M in the one quarter: reported, as the series has never
+  // broken (0 of 39 other quarters).
+  const std::vector<std::string> got = reports_of(r.out, "DQ904");
+  REQUIRE(got.size() == 1);
+  CHECK(contains(r.out, R"("severity":"warn")"));
+  CHECK(contains(r.out, R"("breaks":0,"periods":39)"));
+}
+
+TEST_CASE("statements: DE-11's settings parse and round-trip, and keep the hash at defaults") {
+  const dorq::Config config = dorq::parse_config(R"(
+[statements]
+break_rate = 0.1
+break_rate_strength = 4
+unexplained_is_error = true
+chronic_share = 0.8
+chronic_min_periods = 12
+chronic_warn_share = 0.3
+
+[statements.break_rates]
+balance_sheet = 0.16
+cash = 0.02
+
+[statements.priors]
+identity_reclassification = 0.2
+)",
+                                                 "s.toml", false);
+  const dorq::StatementSettings& s = config.statements;
+  CHECK(s.break_rate == doctest::Approx(0.1));
+  CHECK(s.break_rate_strength == doctest::Approx(4.0));
+  CHECK(s.unexplained_is_error);
+  CHECK(s.chronic_share == doctest::Approx(0.8));
+  CHECK(s.chronic_min_periods == 12);
+  CHECK(s.chronic_warn_share == doctest::Approx(0.3));
+  CHECK(s.break_rate_for("balance_sheet") == doctest::Approx(0.16));
+  CHECK(s.break_rate_for("cash") == doctest::Approx(0.02));
+  CHECK(s.break_rate_for("cash_flow") == doctest::Approx(0.1));  // break_rate
+  // The name before 0.17.0 still reads.
+  CHECK(s.priors.identity_version_error == doctest::Approx(0.2));
+  const std::string canonical = dorq::to_toml(config);
+  CHECK(contains(canonical, "unexplained_is_error = true"));
+  CHECK(contains(canonical, "[statements.break_rates]\nbalance_sheet = 0.16\ncash = 0.02"));
+  const dorq::Config again = dorq::parse_config(canonical, "again.toml", false);
+  CHECK(again.statements == config.statements);
+  // At their defaults the new keys leave config_hash as it was.
+  CHECK(dorq::config_hash(dorq::Config{}) == "803c581d98ba409a");
+  for (const char* bad :
+       {"[statements]\nbreak_rate = 0\n", "[statements]\nbreak_rate = 1\n",
+        "[statements.break_rates]\ncash = 1.5\n", "[statements]\nchronic_min_periods = 1\n"}) {
     CAPTURE(bad);
     CHECK_THROWS_AS((void)dorq::parse_config(bad, "bad.toml", false), dorq::ConfigError);
   }

@@ -342,6 +342,9 @@ has one.
 | `hn_real_zero` | - | every biotech, all its rows (DQ91) |
 | `hn_bank_nulls` | - | every bank, all its rows (DQ9) |
 | `hn_structural_gap` | - | the noncontrolling and temporary equity outside the balance sheet's identity (`identity` `balance_sheet`), and restricted cash from 2018 (`cash_tie`) (DQ90) |
+| `hn_unmapped_flow` | - | (DE-11) 2 industrials whose cash flow has a flow the vendor maps to no section, in 55% of quarters, 0.3–1.5% of their scale either way: the `cash_flow` identity breaks now and then by gaps that vary, the series' own process (`identity` `cash_flow`; DQ90) |
+| `hn_cash_definition` | - | (DE-11) 2 industrials whose cash line leaves out 5–25% of the cash in half their quarters (cash held for sale, say), which the totals keep: the cash tie breaks now and then, no identity does (`identity` `cash_tie`; DQ90) |
+| `mapping_every_period` | DQ903 | (DE-11) one industrial's total assets stored as its current assets in every version, its balance-sheet gap a median 55% or more of its largest term: DQ903 reports it once for the series, at warn. Placed last, on a company with no other fault and no hard negative a series-level report would overlap, so on the seeds where one fits (7 and 8 of 1–8) |
 | `hn_reclassification`, `hn_restatement` | - | each restatement's year and statement (DQ9) |
 | `hn_split_on_file` | - | every other split, from the last period known before it to the first after (DQ92) |
 | `hn_delisted` | - | each delisted company, from its last period (DQ94) |
@@ -372,6 +375,14 @@ DQ903 and DQ904 are marked the same way:
 
 Restricted cash is 1–4% of the cash balance and moves a little each quarter, so
 that its change stays within the 10% that DQ904 allows from 2018.
+
+DE-11's cases draw from a random stream of their own, so that the rest of each
+seed's universe is the same as before them. On seeds 1–8, against 0.16.0's rules
+on the same universes, DQ903 and DQ904 report 595 times at warn or above where
+0.16.0 reports 2,119; DQ903's precision is 0.99 (0.29 before), with every
+identity fault found (66 of 66, against 64), and DQ904's 1.00 (0.46). The hard
+negatives drew 1,267 reports from 0.16.0 and 3 from 0.17.0: one each where a
+chance term match and a chance cancelling pair coincide.
 
 A label's `first` and `last` are fiscal dates. `labels.csv` adds the columns
 `statement`, `period_type`, `version_no`, `item` and `identity`; an empty one covers

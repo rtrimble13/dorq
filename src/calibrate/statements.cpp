@@ -17,9 +17,12 @@
 #include <vector>
 
 #include "calibrate/calibrate.hpp"
+#include "checks/check.hpp"
+#include "checks/statements.hpp"
 #include "dorq/build_info.hpp"
 #include "dorq/number.hpp"
 #include "engine/engine.hpp"
+#include "statements/views.hpp"
 #include "stats/special.hpp"
 
 namespace dorq {
@@ -53,23 +56,35 @@ struct ModelSpec {
   std::array<std::string_view, 4> expect{};  // a fault label's code naming each hypothesis
 };
 
-constexpr std::array<ModelSpec, 3> kModels{{
-    {"values",
-     {"DQ911", "DQ912", "DQ913", "DQ919"},
-     {"real_change", "bad_value", "unit_error", "sign_error"},
-     {false, true, true, true},
-     {"", "DQ911", "DQ912", "DQ913"}},
-    {"identities",
-     {"DQ903", "", "", ""},
-     {"structural", "reclassification", "field_error", "unexplained"},
-     {false, false, true, true},
-     {"", "", "DQ903", "DQ903"}},
-    {"filings",
-     {"DQ931", "", "", ""},
-     {"ordinary", "late_filing", "misdated_early", "misdated_amendment"},
-     {false, false, true, true},
-     {"", "", "DQ931", "DQ931"}},
-}};
+// DE-11: "version_error" (another version of the period holds) was
+// "reclassification", a filing fact, until 0.17.0; "unexplained" is an error only
+// with [statements] unexplained_is_error.
+constexpr std::array<ModelSpec, 3> make_models(bool unexplained_is_error) {
+  return {{
+      {"values",
+       {"DQ911", "DQ912", "DQ913", "DQ919"},
+       {"real_change", "bad_value", "unit_error", "sign_error"},
+       {false, true, true, true},
+       {"", "DQ911", "DQ912", "DQ913"}},
+      {"identities",
+       {"DQ903", "", "", ""},
+       {"structural", "version_error", "field_error", "unexplained"},
+       {false, true, true, unexplained_is_error},
+       {"", "DQ903", "DQ903", "DQ903"}},
+      {"filings",
+       {"DQ931", "", "", ""},
+       {"ordinary", "late_filing", "misdated_early", "misdated_amendment"},
+       {false, false, true, true},
+       {"", "", "DQ931", "DQ931"}},
+  }};
+}
+constexpr std::array<ModelSpec, 3> kModels = make_models(false);
+constexpr std::array<ModelSpec, 3> kModelsUnexplainedError = make_models(true);
+
+// The models as the settings judge them: which hypotheses are errors.
+const std::array<ModelSpec, 3>& models_for(const StatementSettings& settings) {
+  return settings.unexplained_is_error ? kModelsUnexplainedError : kModels;
+}
 
 using Vec = std::array<double, 4>;
 
@@ -79,9 +94,9 @@ Vec priors_of(std::size_t model, const StatementPriors& p) {
       return {1.0 - p.bad_value - p.unit_error - p.sign_error, p.bad_value, p.unit_error,
               p.sign_error};
     case 1: {
-      const double sum = p.identity_structural + p.identity_reclassification +
-                         p.identity_field_error + p.identity_unexplained;
-      return {p.identity_structural / sum, p.identity_reclassification / sum,
+      const double sum = p.identity_structural + p.identity_version_error + p.identity_field_error +
+                         p.identity_unexplained;
+      return {p.identity_structural / sum, p.identity_version_error / sum,
               p.identity_field_error / sum, p.identity_unexplained / sum};
     }
     default:
@@ -117,7 +132,7 @@ void set_priors(std::size_t model, const Vec& q, StatementPriors& p) {
   const double top = *std::max_element(q.begin(), q.end());
   const auto weight = [&](double x) { return std::clamp(x / top, 1e-6, 1.0); };
   p.identity_structural = weight(q[0]);
-  p.identity_reclassification = weight(q[1]);
+  p.identity_version_error = weight(q[1]);
   p.identity_field_error = weight(q[2]);
   p.identity_unexplained = weight(q[3]);
 }
@@ -687,7 +702,8 @@ Observations observe(const std::vector<Candidate>& candidates, const LabelIndex&
                       static_cast<double>(fnv(c.series) % 1000) < options.holdout * 1000.0;
     const std::vector<const Label*> own = index.of(c);
     const int model = model_of(c);
-    const ModelSpec* spec = model >= 0 ? &kModels.at(static_cast<std::size_t>(model)) : nullptr;
+    const ModelSpec* spec =
+        model >= 0 ? &models_for(config.statements).at(static_cast<std::size_t>(model)) : nullptr;
     Judgement j = judge(c, own, spec);
     for (const Label* l : own) {
       if (covers(*l, c, kSlackDays) &&
@@ -808,7 +824,8 @@ void fit_family(std::size_t f, const Observations& obs, const std::array<Vec, 3>
     double refit = p.p;
     if (p.model >= 0) {
       const auto m = static_cast<std::size_t>(p.model);
-      refit = p_error_of(obs.models.at(m).at(p.index), kModels.at(m), w_after.at(m));
+      refit = p_error_of(obs.models.at(m).at(p.index), models_for(config.statements).at(m),
+                         w_after.at(m));
     }
     ++fam.observations;
     fam.errors += p.error ? 1 : 0;
@@ -843,7 +860,8 @@ void fit_family(std::size_t f, const Observations& obs, const std::array<Vec, 3>
 // score), with its calibration error as configured and after.
 void fit_code(const std::string& code, const std::vector<Point>& points, const Observations& obs,
               const std::array<Vec, 3>& w_after, bool held_out, std::size_t min_observations,
-              const StatementCalibrateOptions& options, StatementCodeFit& fit) {
+              const std::array<ModelSpec, 3>& models, const StatementCalibrateOptions& options,
+              StatementCodeFit& fit) {
   fit.code = code;
   fit.scored = StatementCalibration::scored(code);
   Pairs train;
@@ -853,7 +871,7 @@ void fit_code(const std::string& code, const std::vector<Point>& points, const O
     double x = p.p;
     if (p.model >= 0) {
       const auto m = static_cast<std::size_t>(p.model);
-      x = p_error_of(obs.models.at(m).at(p.index), kModels.at(m), w_after.at(m));
+      x = p_error_of(obs.models.at(m).at(p.index), models.at(m), w_after.at(m));
     }
     ++fit.observations;
     fit.errors += p.error ? 1 : 0;
@@ -914,6 +932,41 @@ StatementCalibrationReport calibrate_statements(const std::vector<Series>& serie
   }
   report.statement_labels = statement_labels.size();
 
+  // The cross-section's break rates (DE-11): each identity's and tie's breaks on
+  // the periods in force, pooled across the series. A rate needs this many periods.
+  constexpr std::size_t kMinBreakPeriods = 40;
+  std::map<std::string, std::pair<std::size_t, std::size_t>, std::less<>> pooled;
+  for (const Series& s : series) {
+    if (s.kind != SeriesKind::kStatements) {
+      continue;
+    }
+    const StatementViews views = build_statement_views(s, options.as_of);
+    const SeriesContext series_context{
+        .series = s,
+        .integrity = config.integrity,
+        .coverage = config.coverage,
+        .calendar = calendar,
+        .thresholds = config.severity,
+        .price = config.price,
+        .statements = &views,
+        .statement_settings = &config.statements,
+        .items = context.have_items ? &context.items : nullptr,
+        .as_of = options.as_of,
+    };
+    for (const BreakCount& count : count_breaks(series_context)) {
+      auto& [breaks, periods] = pooled[count.name];
+      breaks += count.breaks;
+      periods += count.periods;
+    }
+  }
+  for (const auto& [name, count] : pooled) {
+    report.break_counts.emplace_back(name, count);
+    if (count.second >= kMinBreakPeriods) {
+      const double rate = static_cast<double>(count.first) / static_cast<double>(count.second);
+      report.break_rates.emplace_back(name, std::clamp(rate, 1e-4, 0.9));
+    }
+  }
+
   const std::vector<Candidate> candidates =
       collect_candidates(series, config, calendar, context, options);
   report.candidates = candidates.size();
@@ -944,7 +997,7 @@ StatementCalibrationReport calibrate_statements(const std::vector<Series>& serie
   for (const auto& [code, points] : obs.codes) {
     StatementCodeFit fit;
     fit_code(code, points, obs, w_after, held_out, config.calibration.min_code_observations,
-             options, fit);
+             models_for(config.statements), options, fit);
     report.codes.push_back(std::move(fit));
   }
   report.ece_before = expected_calibration_error(checked[0]);
@@ -999,13 +1052,26 @@ std::string statements_toml(const StatementCalibrationReport& r) {
                 : "") +
            "\n";
   }
+  // DE-11: the cross-section's rates, each identity's and tie's breaks on the
+  // periods in force across the input's series. One with too few periods to fit
+  // keeps [statements] break_rate.
+  for (const auto& [name, count] : r.break_counts) {
+    out += "# " + name + ": breaks in " + std::to_string(count.first) + " of " +
+           std::to_string(count.second) + " periods in force\n";
+  }
+  if (!r.break_rates.empty()) {
+    out += "\n[statements.break_rates]\n";
+    for (const auto& [name, rate] : r.break_rates) {
+      out += name + " = " + format_number(rate) + "\n";
+    }
+  }
   const StatementPriors& p = r.priors;
   out += "\n[statements.priors]\n";
   out += "bad_value = " + weight(p.bad_value) + "\n";
   out += "unit_error = " + weight(p.unit_error) + "\n";
   out += "sign_error = " + weight(p.sign_error) + "\n";
   out += "identity_structural = " + weight(p.identity_structural) + "\n";
-  out += "identity_reclassification = " + weight(p.identity_reclassification) + "\n";
+  out += "identity_version_error = " + weight(p.identity_version_error) + "\n";
   out += "identity_field_error = " + weight(p.identity_field_error) + "\n";
   out += "identity_unexplained = " + weight(p.identity_unexplained) + "\n";
   out += "filing_late = " + weight(p.filing_late) + "\n";

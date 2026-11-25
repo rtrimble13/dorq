@@ -338,10 +338,12 @@ struct StatementPriors {
   double flow_scale = 0.08;
   double stock_scale = 0.05;
   double prior_weight = 6.0;  // in periods, against the item's own residuals
-  // DQ903: the prior weights of a gap's four explanations, relative to each other
-  // (exp of the log weights the model shipped with: -1.4, -3, -1.05, -1.05).
+  // DQ903: the prior weights of a gap's four explanations, relative to each other,
+  // for a series that breaks at [statements] break_rate (exp of the log weights the
+  // model shipped with: -1.4, -3, -1.05, -1.05). Until 0.17.0 identity_version_error
+  // was identity_reclassification, a filing fact; the old key still reads.
   double identity_structural = 0.2465969639416065;
-  double identity_reclassification = 0.049787068367863944;
+  double identity_version_error = 0.049787068367863944;
   double identity_field_error = 0.3499377491111553;
   double identity_unexplained = 0.3499377491111553;
   // DQ931: the prior probability that a filing is late, recorded too early (the
@@ -435,12 +437,33 @@ struct StatementSettings {
   // the balance sheet's need not: a gap within this share of the balance is that.
   Date restricted_cash_from = Date::from_ymd(2018, 1, 1);
   double restricted_cash_share = 0.10;
+  // DQ903 and DQ904 (DE-11). A break that is no error, a filing fact, comes at a
+  // series' own rate for the identity or tie and period type: its breaks in the
+  // other periods, shrunk toward the cross-section's rate by break_rate_strength
+  // periods of it. The cross-section's rate is break_rates' for the name ("cash"
+  // and "quarter_sum" for DQ904's ties), else break_rate, which is also the rate
+  // the identity priors are weighed at.
+  double break_rate = 0.05;
+  double break_rate_strength = 8.0;
+  std::vector<std::pair<std::string, double>> break_rates;  // sorted by name
+  // Whether a break nothing explains counts toward p_error. By default it does not:
+  // a data error is a stored value that differs from its source, and only evidence
+  // says one does (a term, a cancelling pair, a clean history, another version).
+  bool unexplained_is_error = false;
+  // A chronic break, in at least chronic_share of at least chronic_min_periods
+  // periods of a type, is also reported once for the series: at warn when its
+  // median gap is at least chronic_warn_share of the scale, else at info.
+  double chronic_share = 0.75;
+  int chronic_min_periods = 8;
+  double chronic_warn_share = 0.5;
   StatementPriors priors;
   StatementCalibration calibration;
   // Set by `dorq calibrate` alone, never by a file: report every candidate the
   // value model judges, a real change too, so that the fit sees the innocent ones.
   bool report_all = false;
 
+  // The cross-section's rate of breaks that are no error, for an identity or tie.
+  [[nodiscard]] double break_rate_for(std::string_view name) const noexcept;
   // Each line item the settings name, with where: ("identities.balance_sheet",
   // "total_assets"), for checking them against --items.
   [[nodiscard]] std::vector<std::pair<std::string, std::string>> named_items() const;

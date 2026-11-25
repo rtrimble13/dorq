@@ -157,10 +157,10 @@ Keys follow the caller's plan, so one key means one item in both repositories.
 |---|---|---|---|---|
 | 0 Measurement | [DE-01](https://github.com/rtrimble13/dorq/issues/41) | Survey-weighted evaluation: labels carry an optional `weight` (1/inclusion probability) and `sample` id; dorq-eval and `calibrate` use them; dorq-eval compares two engines on one label set with a paired test and intervals | M | merged: [#56](https://github.com/rtrimble13/dorq/pull/56) |
 | | [DE-02](https://github.com/rtrimble13/dorq/issues/42) | Calibration honours `verified` (weight or exclude, configurable); one p_error map per code; the fixed-p rules emit a raw score the map can take | M | merged: [#57](https://github.com/rtrimble13/dorq/pull/57) |
-| 1 Precision | [DE-11](https://github.com/rtrimble13/dorq/issues/43) | A series-level structural model for identities and ties (DQ903, DQ904): per (series, identity or tie, period type) a break rate shrunk to the cross-section, and a gap distribution; "unexplained" no longer counts as error by default (`[statements] unexplained_is_error`); DQ904 gets a posterior; chronic breaks become one series-level report | L | ⬜ |
+| 1 Precision | [DE-11](https://github.com/rtrimble13/dorq/issues/43) | A series-level structural model for identities and ties (DQ903, DQ904): per (series, identity or tie, period type) a break rate shrunk to the cross-section, and a gap distribution; "unexplained" no longer counts as error by default (`[statements] unexplained_is_error`); DQ904 gets a posterior; chronic breaks become one series-level report | L | 🔄 on branch `claude/wizardly-einstein-pgcegr`, for 0.17.0 (§4.1) |
 | | [DE-12](https://github.com/rtrimble13/dorq/issues/44) | One condition, one report: fold versions with the same gap or value, identities broken by one field, and basic and diluted counts. Record keys change; a minor version | M | ⬜ |
-| | [DE-13](https://github.com/rtrimble13/dorq/issues/45) | Provisional means pending: with the evidence after a bar missing, report at info unless the posterior without those terms reaches the error band and an independent term agrees (OHLC inconsistency, zero volume on a liquid series, an implausible level, peers). `kBlockDecay` and `revert_max_bars` become calibratable | M | merged: [#59](https://github.com/rtrimble13/dorq/pull/59), in 0.15.0 (§4.1) |
-| | [DE-14](https://github.com/rtrimble13/dorq/issues/46) | DQ403, DQ107 and DQ705 become models (pooled rates across class, move size against the grid, an indicative-quote hypothesis) or default to info; their priors move to config | M | 🔄 on branch `claude/wizardly-einstein-pgcegr`, for 0.16.0 (§4.1) |
+| | [DE-13](https://github.com/rtrimble13/dorq/issues/45) | Provisional means pending: with the evidence after a bar missing, report at info unless the posterior without those terms reaches the error band and an independent term agrees (OHLC inconsistency, zero volume on a liquid series, an implausible level, peers). `kBlockDecay` and `revert_max_bars` become calibratable | M | merged: [#59](https://github.com/rtrimble13/dorq/pull/59), released in 0.16.0 (§4.1) |
+| | [DE-14](https://github.com/rtrimble13/dorq/issues/46) | DQ403, DQ107 and DQ705 become models (pooled rates across class, move size against the grid, an indicative-quote hypothesis) or default to info; their priors move to config | M | merged: [#61](https://github.com/rtrimble13/dorq/pull/61), released in 0.16.0 (§4.1) |
 | 2 Recall | [DE-21](https://github.com/rtrimble13/dorq/issues/47) | Cross-sectional evidence in both directions: (a) a latent "load failed on date d for group g" from every series' own miss probability, thin ones included, with group keys configurable from `--meta` (`[coverage] cohort_by`), feeding each member's DQ301 posterior both ways; (b) DQ601 takes provisional moves; (c) the sibling term enters the posterior before severity | L | ⬜ |
 | | [DE-22](https://github.com/rtrimble13/dorq/issues/48) | Optional per-bar `source` and `known_from`/`loaded_on` columns: a source-seam evidence term on the scale, segment and bad-print hypotheses (as `precision_term`, model.cpp:1017); a load cohort for bars, as DQ951's | L | ⬜ |
 | | [DE-23](https://github.com/rtrimble13/dorq/issues/49) | DQ916's recall on quarters stored year to date: partial storage, one quarter at a time, mixed vintages | M | ⬜ |
@@ -223,6 +223,44 @@ is re-measured. The next phase starts from that evidence, not from this table.
     the slipped amount).
   - **Effect on the audit: not yet measured**, as for DE-13. On fafnir's 15
     nights DQ403, DQ107 and DQ705 were 35% of the bars' warn+, none judged.
+
+- **2026-11-24 (correction).** 0.15.0 was never published. Its tag could not be
+  pushed from the session that prepared it, and by the time releases published
+  themselves on merge (rtrimble13/dorq#63, [ADR 0008](../adr/0008-every-version-on-main-is-a-release.md))
+  main carried 0.16.0. **0.16.0 is the first release with Phase 0 and 1's dorq
+  items: DE-01, DE-02, DE-13 and DE-14.** The baseline stays dorq 0.14.0 as
+  deployed, and the Phase 1 re-measure installs 0.16.0, or 0.17.0 with DE-11.
+- **2026-11-25.** DE-11 is implemented on `claude/wizardly-einstein-pgcegr`, for
+  0.17.0. DQ903 and DQ904 weigh a break against the series' own process: its
+  rate of breaks for the identity or tie and period type, shrunk toward the
+  cross-section's (`[statements] break_rate`, 5%, or `[statements.break_rates]`,
+  which `dorq calibrate` now writes from the input's series), and the gaps of its
+  other breaks.
+  - A data error is a stored value that differs from its source. "Unexplained" is
+    a filing fact unless `[statements] unexplained_is_error`.
+  - Evidence of an error: a term match, a cancelling pair (each counted against
+    how often the series' other breaks show one by chance), a break where the
+    series has been clean, and another version of the period holding with its gap
+    gone. The last was a reclassification, a filing fact, before; the prior is
+    `identity_version_error` (`identity_reclassification` still reads).
+  - DQ904 gets the same posterior, its cash tie's tolerance scales with the
+    period's largest flow, and a chronic identity or tie is reported once for the
+    series (at warn where its median gap is half the scale or more).
+  - dorq-synth adds a vendor's irregular processes as hard negatives (a cash
+    flow left unmapped in some quarters, a cash line that leaves out a component
+    in some) and a mapping wrong in every period.
+  - Synthetic effect (seeds 1-8, against 0.16.0 on the same universes): DQ903
+    and DQ904 at warn+ from 2,119 to 595 (DQ903 `cash_flow` 572 to 17, DQ904's
+    lone cash ties 676 to 30, pairs 287 to 49, quarter sums 368 to 282); DQ903's
+    precision 0.29 to 0.99, its recall 64 to 66 of 66; DQ904's precision 0.46 to
+    1.00; reports on hard negatives 1,267 to 3. Gates hold on 7 of 8 seeds (the
+    eighth, a DQ911 on a bank, fails under 0.16.0 too). DQ904 reports fewer of
+    the ties other faults break (61 of 1,818 against 179), which their own codes
+    find; its recall was never held.
+  - **Effect on the audit: not yet measured.** On fafnir's data DQ903 and DQ904
+    are 61% of statements at warn+, and DQ904's precision on EDGAR-verified
+    conditions was 0.21. With `dorq calibrate`'s `[statements.break_rates]` from
+    the host, the cross-section's rates are fafnir's own.
 
 ## 5. Generality rules for this plan
 
