@@ -13,7 +13,7 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET
 # scripts/release.sh sets it. See CONTRIBUTING.md.
 project(
   dorq
-  VERSION 0.17.0
+  VERSION 0.18.0
   DESCRIPTION "Bayesian data-quality linter for financial time series"
   HOMEPAGE_URL "https://github.com/rtrimble13/dorq"
   LANGUAGES CXX)

@@ -1911,12 +1911,30 @@ void Universe::identity_breaks() {
       continue;
     }
     const bool doubled = done % 2 == 1;
+    // The other identities the total enters that hold on the row: the wrong total
+    // breaks them too.
+    std::vector<const Equation*> also;
+    for (const Equation& other : equations()) {
+      const bool enters =
+          std::any_of(other.terms.begin(), other.terms.end(),
+                      [&eq](const auto& entry) { return entry.first == eq.total; }) ||
+          other.total == eq.total;
+      if (&other != &eq && enters && equation_gap(row.values, other) &&
+          !identity_breaks_on(row, other)) {
+        also.push_back(&other);
+      }
+    }
     row.values.at(eq.total) += (doubled ? 1.0 : -1.0) * sign * value;
-    // The gap equals the term: the field DQ903 should name. The total is the value
-    // that is wrong, which DQ911 can see where the term is a large part of it.
+    const bool folds = std::any_of(also.begin(), also.end(), [&row](const Equation* other) {
+      return identity_breaks_on(row, *other);
+    });
     const char* kind = doubled ? "identity_doubled_field" : "identity_dropped_field";
-    label_row(c, row, kind, "DQ903", std::string{info(term).column});
-    // A total left at 0 is DQ915's to see.
+    // DQ903's label: the gap equals the term, the field it names. Where the total
+    // breaks another identity too, one change of it repairs both, and DQ903 names
+    // the total, the value that is wrong (DE-12).
+    label_row(c, row, kind, "DQ903", std::string{info(folds ? eq.total : term).column});
+    // DQ911's: the total is wrong, which it sees where the term is a large part of
+    // it. A total left at 0 is DQ915's to see.
     label_row(c, row, kind, row.values.at(eq.total) == 0.0 ? "DQ911|DQ915" : "DQ911",
               std::string{info(eq.total).column});
     ++done;

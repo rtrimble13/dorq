@@ -700,3 +700,131 @@ identity_reclassification = 0.2
     CHECK_THROWS_AS((void)dorq::parse_config(bad, "bad.toml", false), dorq::ConfigError);
   }
 }
+
+// ---------------------------------------------------------------------------
+// DE-12: one condition, one report
+
+namespace {
+
+constexpr const char* kSplitHeader =
+    "security_id,statement,period_type,fiscal_date,fiscal_year,fiscal_period,version_no,"
+    "known_from,known_to,knowledge_source,filing_date,total_assets,total_liabilities,"
+    "total_equity_parent,total_current_assets,total_noncurrent_assets\n";
+
+constexpr const char* kSplitConfig =
+    "[statements.identities]\n"
+    "balance_sheet = \"total_assets = total_liabilities + total_equity_parent\"\n"
+    "assets_split = \"total_assets = total_current_assets + total_noncurrent_assets\"\n";
+
+// A quarter's balance sheet, which holds both identities (10bn = 6bn + 4bn = 3bn +
+// 7bn) unless `assets` or `liabilities` say otherwise; version 1, known 40 days on,
+// unless `version` says otherwise ("2,2013-01-01,").
+std::string split_sheet(const std::string& id, const std::string& date,
+                        const std::string& assets = "10000000000",
+                        const std::string& liabilities = "6000000000",
+                        const std::string& version = "1,2011-06-01,") {
+  return id + ",balance_sheet,quarter," + date + "," + date.substr(0, 4) + "," + quarter_of(date) +
+         "," + version + ",,," + assets + "," + liabilities + ",4000000000,3000000000,7000000000\n";
+}
+
+}  // namespace
+
+TEST_CASE("DE-12: DQ903 folds one field's breaks, a period's versions, and chronic breaks") {
+  const TempDir dir;
+  std::string text = kSplitHeader;
+  const std::vector<std::string> ends = quarter_ends(10);
+  for (std::size_t q = 0; q < 5; ++q) {
+    // SHARED: total_assets counts the noncurrent assets twice in Q3 2010. It breaks
+    // both identities by 7bn, and 10bn repairs both: one report, on total_assets.
+    text += split_sheet("SHARED", ends[q], q == 2 ? "17000000000" : "10000000000");
+    // REPEAT: total_liabilities in thousands in Q3 2010, in v1 and in v2, its
+    // restatement: one report, on v1.
+    if (q == 2) {
+      text += split_sheet("REPEAT", ends[q], "10000000000", "6000000", "1,2010-11-09,");
+      text += split_sheet("REPEAT", ends[q], "10000000000", "6000000", "2,2012-03-01,");
+    } else {
+      text += split_sheet("REPEAT", ends[q]);
+    }
+    // BOTH: SHARED's fault in v1 and in v2, its restatement: one report (doc/output.md).
+    if (q == 2) {
+      text += split_sheet("BOTH", ends[q], "17000000000", "6000000000", "1,2010-11-09,");
+      text += split_sheet("BOTH", ends[q], "17000000000", "6000000000", "2,2012-03-01,");
+    } else {
+      text += split_sheet("BOTH", ends[q]);
+    }
+    // DIFFER: v2 restates the same period with another wrong value: two conditions.
+    if (q == 2) {
+      text += split_sheet("DIFFER", ends[q], "10000000000", "6000000", "1,2010-11-09,");
+      text += split_sheet("DIFFER", ends[q], "10000000000", "60000000000", "2,2012-03-01,");
+    } else {
+      text += split_sheet("DIFFER", ends[q]);
+    }
+  }
+  // MAPPED: total_assets stored as the current assets in every quarter: one chronic
+  // break for the series, on total_assets, and one report a quarter.
+  for (const std::string& end : ends) {
+    text += split_sheet("MAPPED", end, "3000000000");
+  }
+  write_file(dir.path() / "s.csv", text);
+  write_file(dir.path() / "st.toml", kSplitConfig);
+  const std::string file = (dir.path() / "s.csv").string();
+  const std::string config = (dir.path() / "st.toml").string();
+  const Result r =
+      run_in(dir.path(), {"--config", config.c_str(), "--select", "DQ903", "--show-info",
+                          "--format", "jsonl", "--exit-zero", file.c_str()});
+  INFO(r.err);
+  REQUIRE(r.status == 0);
+
+  const std::string sheet_key = R"({"statement":"balance_sheet",)" + quarter_key();
+  const std::string q3 = R"("fiscal_date":"2010-09-30",)";
+  std::vector<std::string> expected{
+      "SHARED " + sheet_key + q3 + R"("version_no":1,"item":"total_assets"})",
+      "BOTH " + sheet_key + q3 + R"("version_no":1,"item":"total_assets"})",
+      "REPEAT " + sheet_key + q3 +
+          R"("version_no":1,"identity":"balance_sheet","item":"total_liabilities"})",
+      "DIFFER " + sheet_key + q3 +
+          R"("version_no":1,"identity":"balance_sheet","item":"total_liabilities"})",
+      "DIFFER " + sheet_key + q3 + R"("version_no":2,"identity":"balance_sheet"})",
+      // The chronic break, keyed on the field, with the first quarter's date.
+      "MAPPED " + sheet_key + R"("fiscal_date":"2010-03-31","item":"total_assets"})",
+  };
+  for (const std::string& end : ends) {
+    std::string key = "MAPPED " + sheet_key;
+    key += R"("fiscal_date":")" + end + R"(","version_no":1,"item":"total_assets"})";
+    expected.push_back(std::move(key));
+  }
+  std::sort(expected.begin(), expected.end());
+  CHECK(reports_of(r.out, "DQ903") == expected);
+
+  // The shared field: what it is, what repairs it, and the identities it breaks.
+  const std::string shared = report(r.out, "DQ903", "SHARED", "2010-09-30");
+  CHECK(contains(shared,
+                 "total_assets (17000000000) is off by 7000000000: assets_split and "
+                 "balance_sheet fail by it, and hold at 10000000000; in assets_split, "
+                 "the gap equals total_noncurrent_assets"));
+  CHECK(contains(shared, R"("identities":"assets_split,balance_sheet","field":"total_assets",)"
+                         R"("value":1.7e+10,"should_be":1e+10,"identity":"assets_split")"));
+  // The term the strongest identity's gap equals stays in the detail.
+  CHECK(contains(shared, R"("term":"total_noncurrent_assets")"));
+  CHECK(contains(shared, R"("severity":"error")"));
+  CHECK(contains(shared, R"("suggested_action":{"kind":"check_item","item":"total_assets")"));
+  CHECK(contains(shared, R"({"feature":"shared_field","value":"total_assets")"));
+  // The versions that carry one gap: on the first, both listed.
+  const std::string repeat = report(r.out, "DQ903", "REPEAT", "2010-09-30");
+  CHECK(contains(repeat,
+                 "the gap is total_liabilities stored at x0.001; v1 and v2 carry the "
+                 "same gap"));
+  CHECK(contains(repeat, R"("version_nos":"1,2")"));
+  CHECK_FALSE(contains(report(r.out, "DQ903", "DIFFER", R"("version_no":2)"), "version_nos"));
+  const std::string both = report(r.out, "DQ903", "BOTH", "2010-09-30");
+  CHECK(contains(both, R"("identities":"assets_split,balance_sheet","field":"total_assets")"));
+  CHECK(contains(both, R"("version_nos":"1,2")"));
+  // The chronic break: one, at warn, on the field.
+  const std::string chronic = report(r.out, "DQ903", "MAPPED", R"(2010-03-31","item)");
+  CHECK(contains(chronic,
+                 "total_assets, in assets_split and balance_sheet, fails in 10 of 10 "
+                 "quarters in force"));
+  CHECK(contains(chronic, R"("severity":"warn")"));
+  CHECK(contains(chronic, R"("identities":"assets_split,balance_sheet","field":"total_assets")"));
+  CHECK(count_matching(r.out, R"("chronic":true)") == 1);
+}

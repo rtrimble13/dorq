@@ -4,9 +4,11 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <numeric>
 #include <optional>
 #include <span>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -26,6 +28,15 @@ namespace {
 // A bound fails beyond rounding when the lesser item is above the greater by more
 // than this share of the greater (doc/checks/DQ902.md).
 constexpr double kBoundSlack = 0.001;
+
+// A value exactly, for a condition: two versions carry the same one only when
+// every digit agrees.
+std::string exact_text(double x) {
+  std::ostringstream out;
+  out.precision(17);
+  out << x;
+  return out.str();
+}
 
 // The rows of a series by period, then version: indexes into its rows. The
 // engine sorts a series this way; the check does not rely on it.
@@ -283,6 +294,7 @@ void ImpossibleValue::run(const SeriesContext& context, std::vector<Violation>& 
     }
     typical.push_back(median);
   }
+  std::vector<RowReport> reports;
   for (std::size_t i = 0; i < st.size(); ++i) {
     for (std::size_t n = 0; n < nonnegative.size(); ++n) {
       const auto& [item, column] = nonnegative[n];
@@ -297,7 +309,7 @@ void ImpossibleValue::run(const SeriesContext& context, std::vector<Violation>& 
       v.key.push_back({"item", *item});
       const double m = typical[n];
       scored(v, m > 0.0 ? std::fabs(x) / (std::fabs(x) + m) : 1.0);
-      out.push_back(std::move(v));
+      reports.push_back({std::move(v), i, "nonnegative=" + *item, x, 0.0});
     }
     for (const Bound& b : bounds) {
       const double lesser = (*b.lesser)[i];
@@ -317,9 +329,18 @@ void ImpossibleValue::run(const SeriesContext& context, std::vector<Violation>& 
       v.key.push_back({"bound", b.bound->greater});
       const double excess = greater != 0.0 ? (lesser - greater) / std::fabs(greater) : 0.0;
       scored(v, greater != 0.0 ? excess / (1.0 + excess) : 1.0);
-      out.push_back(std::move(v));
+      // The same value is the same pair of values: the greater's is in the
+      // condition, exactly.
+      reports.push_back(
+          {std::move(v), i,
+           "bound=" + b.bound->lesser + "<=" + b.bound->greater + "@" + exact_text(greater), lesser,
+           0.0});
     }
   }
+  // A value a later version repeats is one report, on the first version (DE-12).
+  std::vector<Violation> folded = fold_versions(s, std::move(reports), "value");
+  out.insert(out.end(), std::make_move_iterator(folded.begin()),
+             std::make_move_iterator(folded.end()));
 }
 
 }  // namespace dorq

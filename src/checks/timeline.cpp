@@ -764,6 +764,73 @@ Violation revision_violation(const CheckInfo& info, const SeriesContext& context
   return v;
 }
 
+// Where a report sits: its fiscal date, statement, period type and version.
+std::tuple<Date, Statement, PeriodType, std::int32_t> place_of(const Violation& v) {
+  const StatementPeriod p = v.period.value_or(StatementPeriod{});
+  return {v.date.value_or(Date{}), p.statement, p.period_type, p.version.value_or(0)};
+}
+
+// "balance_sheet quarter 2015-06-30 v2": a period's version, for a list.
+std::string member_text(const Violation& v) {
+  const auto [date, statement, type, version] = place_of(v);
+  std::string text = std::string{to_string(statement)} + " " + std::string{to_string(type)} + " " +
+                     date.to_string();
+  if (version > 0) {
+    text += " " + version_text(version);
+  }
+  return text;
+}
+
+// DQ932 by the day the new version became known (DE-12): a vendor's batch that
+// restates several periods wrong, or corrects several wrong ones, is one condition.
+// One report: the strongest's model, on the first period of the day (its date,
+// line and period), keyed with the day as `known_from`, the others in its message
+// and detail.restated.
+Violation fold_day(Date day, std::vector<Violation> found) {
+  std::stable_sort(found.begin(), found.end(), [](const Violation& a, const Violation& b) {
+    return place_of(a) < place_of(b);
+  });
+  std::size_t best = 0;
+  std::optional<Date> known;
+  std::vector<const Violation*> members;
+  for (std::size_t k = 0; k < found.size(); ++k) {
+    if (found[k].p_error > found[best].p_error) {
+      best = k;
+    }
+    known = std::max(known, found[k].known);  // an absent date orders first
+    members.push_back(&found[k]);
+  }
+  std::vector<std::string> others;
+  std::string listing;
+  for (std::size_t k = 0; k < found.size(); ++k) {
+    const std::string text = member_text(found[k]);
+    listing += (listing.empty() ? "" : ",") + text;
+    if (k != best) {
+      others.push_back(text);
+    }
+  }
+  const std::uint32_t covers = covers_of(members, known);
+  const std::optional<Date> date = found.front().date;
+  const std::uint32_t line = found.front().line;
+  const std::optional<StatementPeriod> period = found.front().period;
+  Violation v = std::move(found[best]);
+  v.date = date;
+  v.line = line;
+  v.period = period;
+  v.known = known;
+  v.covers = covers;
+  v.key.push_back({"known_from", day.to_string()});
+  v.detail.push_back({"known_from", day.to_string()});
+  if (!others.empty()) {
+    v.message += "; so do " + std::to_string(others.size()) + " other period" +
+                 (others.size() == 1 ? "" : "s") + " restated on " + day.to_string() + ": " +
+                 and_list(others);
+    v.detail.push_back({"periods", static_cast<std::int64_t>(members.size())});
+    v.detail.push_back({"restated", listing});
+  }
+  return v;
+}
+
 }  // namespace
 
 const CheckInfo& FilingDateImplausible::info() const noexcept {
@@ -857,6 +924,9 @@ void RestatementImplausible::run(const SeriesContext& context, std::vector<Viola
   }
   std::optional<Lines> first;
   std::optional<Lines> in_force;
+  // DE-12: the reports by the day their new version became known, and whether the
+  // old version or the new one is wrong.
+  std::map<std::pair<Date, bool>, std::vector<Violation>> by_day;
   for (auto& [key, versions] : periods) {
     if (versions.size() < 2) {
       continue;
@@ -886,8 +956,13 @@ void RestatementImplausible::run(const SeriesContext& context, std::vector<Viola
       }
       Violation v = revision_violation(info(), context, a, b, rev, fit, p, *severity);
       v.p_error = p_error;
-      out.push_back(std::move(v));
+      // It names both versions: it is news when the newer became known.
+      v.known = std::max(known_of(s, a), known_of(s, b));
+      by_day[{st.known_from[b], p[2] > p[1]}].push_back(std::move(v));
     }
+  }
+  for (auto& [key, found] : by_day) {
+    out.push_back(fold_day(key.first, std::move(found)));
   }
 }
 

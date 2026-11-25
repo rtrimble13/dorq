@@ -109,6 +109,10 @@ struct Violation {
   // versions it names. --since keeps a statement finding unless this is before
   // the date (ADR 0005); one without it is always kept.
   std::optional<Date> known;
+  // Statements: the reports this one stands for that are known on `known`, at warn
+  // or above (DE-12). One condition is one report; DQ951 still counts a day's
+  // findings by what they cover.
+  std::uint32_t covers = 1;
 };
 
 }  // namespace dorq

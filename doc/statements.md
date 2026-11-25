@@ -403,6 +403,14 @@ v1`, in the JSON formats as `statement`, `period_type`, `fiscal_year`,
 `identity` where the condition is per item. The `fafnir` format files it under its
 statement's table (`[fafnir.tables]`). [output.md](output.md) has each format.
 
+**One condition, one report** (DE-12, since 0.18.0). Every version is judged, but a
+condition several versions carry is reported once, on the first that carries it,
+which keeps its key when a later version repeats it: DQ902's value, DQ903's gap,
+DQ922's counts. DQ903 reports the identities one wrong field breaks as one report
+on the field; DQ922 a period's basic and diluted counts as one; and DQ932 a
+series' restatements of one day, wrong the same way, as one.
+[output.md](output.md#record-keys-in-0180) maps the keys from before 0.18.0.
+
 ## `--since` and `--as-of`
 
 - **`--since D`** keeps a statement finding unless every version it names was
