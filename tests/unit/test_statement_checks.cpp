@@ -265,3 +265,51 @@ TEST_CASE("DQ902: fafnir's impossible negatives, and bounds, per version and ite
       run_in(dir.path(), {"--isolated", "--select", "DQ902", "--exit-zero", file.c_str()});
   CHECK(count_matching(none.out, "DQ902") == 0);
 }
+
+TEST_CASE("DE-12: DQ902 folds the versions of a period that carry the same value") {
+  const TempDir dir;
+  // VAL's 2010 revenue: -5 in v1 and in its restatement v2, then -7 in v3; its total
+  // current assets above total assets by the same amounts in v1 and v2.
+  write_file(
+      dir.path() / "s.csv",
+      std::string{kHeader} +
+          "VAL,income,annual,2010-12-31,2010,FY,1,2011-02-01,2012-03-01,filed,2011-02-01,-5,,,,,,\n"
+          "VAL,income,annual,2010-12-31,2010,FY,2,2012-03-01,2013-03-01,observed,,-5,,,,,,\n"
+          "VAL,income,annual,2010-12-31,2010,FY,3,2013-03-01,,observed,,-7,,,,,,\n"
+          "VAL,balance_sheet,annual,2010-12-31,2010,FY,1,2011-02-01,2012-03-01,filed,2011-02-01,"
+          ",,,1000,,1200,\n"
+          "VAL,balance_sheet,annual,2010-12-31,2010,FY,2,2012-03-01,,observed,,,,,1000,,1200,\n");
+  write_file(dir.path() / "st.toml",
+             "[statements]\n"
+             "nonnegative = [\"revenue\"]\n"
+             "bounds = [\"total_current_assets <= total_assets\"]\n");
+  const std::string file = (dir.path() / "s.csv").string();
+  const std::string config = (dir.path() / "st.toml").string();
+  const Result r = run_in(dir.path(), {"--config", config.c_str(), "--select", "DQ902", "--format",
+                                       "jsonl", "--exit-zero", file.c_str()});
+  INFO(r.err);
+  REQUIRE(r.status == 0);
+  // One report for the value v1 and v2 share, keyed on v1 (the key its own report
+  // has, which v2 repeating it does not change), and one for v3's.
+  std::vector<std::string> keys = keys_of(r.out, "DQ902");
+  std::sort(keys.begin(), keys.end());
+  const std::string annual = R"("period_type":"annual","fiscal_date":"2010-12-31",)";
+  const std::vector<std::string> expected{
+      R"({"statement":"balance_sheet",)" + annual +
+          R"("version_no":1,"item":"total_current_assets","bound":"total_assets"})",
+      R"({"statement":"income",)" + annual + R"("version_no":1,"item":"revenue"})",
+      R"({"statement":"income",)" + annual + R"("version_no":3,"item":"revenue"})",
+  };
+  CHECK(keys == expected);
+  const auto v1 = lines_with(r.out, R"("version_no":1,"item":"revenue")");
+  REQUIRE(v1.size() == 1);
+  CHECK(contains(v1.front(),
+                 "revenue is -5, and cannot be negative; v1 and v2 carry the same value"));
+  CHECK(contains(v1.front(), R"("version_nos":"1,2")"));
+  const auto v3 = lines_with(r.out, R"("version_no":3,"item":"revenue")");
+  REQUIRE(v3.size() == 1);
+  CHECK_FALSE(contains(v3.front(), "version_nos"));
+  CHECK(contains(r.out,
+                 "total_current_assets (1200) is above total_assets (1000); v1 and v2 "
+                 "carry the same value"));
+}

@@ -3,11 +3,16 @@
 
 #include "statements/shares.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <variant>
 #include <vector>
 
 #include "checks/statement_rows.hpp"
@@ -149,10 +154,12 @@ Violation mismatch_violation(const CheckInfo& info, const SeriesContext& context
   return v;
 }
 
-void report(const CheckInfo& info, const SeriesContext& context, ShareFinding::Kind kind,
-            std::vector<Violation>& out) {
+// Each finding of `kind` reported, with its row.
+std::vector<RowReport> report(const CheckInfo& info, const SeriesContext& context,
+                              ShareFinding::Kind kind) {
+  std::vector<RowReport> out;
   if (context.series.kind != SeriesKind::kStatements || context.shares == nullptr) {
-    return;
+    return out;
   }
   for (const ShareFinding& f : context.shares->findings) {
     if (f.kind != kind) {
@@ -173,8 +180,75 @@ void report(const CheckInfo& info, const SeriesContext& context, ShareFinding::K
                       ? step_violation(info, context, f, *severity)
                       : mismatch_violation(info, context, f, *severity);
     v.p_error = p_error;
-    out.push_back(std::move(v));
+    // A mismatch's condition is its pair of counts, exactly.
+    const StatementRows& st = context.series.statements;
+    std::string pair = st.item_names[f.item] + "=" + amount_text(f.value);
+    if (kind == ShareFinding::Kind::kMismatch) {
+      pair += "/" + st.item_names[f.other] + "=" + amount_text(f.other_value);
+    }
+    out.push_back({std::move(v), f.row, std::move(pair), 0.0, 0.0});
   }
+  return out;
+}
+
+// A text field of a report's detail, or empty.
+std::string text_of(const Violation& v, std::string_view key) {
+  for (const DetailField& d : v.detail) {
+    if (const auto* text = std::get_if<std::string>(&d.value); text != nullptr && d.key == key) {
+      return *text;
+    }
+  }
+  return {};
+}
+
+// DQ922 once per period (DE-12): a period's weighted-average counts, basic and
+// diluted, against its outstanding counts, are one condition. One report on the
+// income statement's version, keyed with no item: the strongest pair's model, the
+// others in its message and detail.items. A later version that repeats the counts
+// folds into the first.
+std::vector<Violation> fold_counts(const Series& s, std::vector<RowReport> found) {
+  std::map<std::size_t, std::vector<std::size_t>> by_row;
+  for (std::size_t k = 0; k < found.size(); ++k) {
+    by_row[found[k].row].push_back(k);
+  }
+  std::vector<RowReport> reports;
+  reports.reserve(by_row.size());
+  for (const auto& [row, members] : by_row) {
+    std::size_t best = members.front();
+    std::vector<const Violation*> folded;
+    std::vector<std::string> pairs;
+    for (const std::size_t k : members) {
+      if (found[k].v.p_error > found[best].v.p_error) {
+        best = k;
+      }
+      folded.push_back(&found[k].v);
+      pairs.push_back(found[k].condition);
+    }
+    std::vector<std::string> items;
+    std::vector<std::string> others;
+    for (const std::size_t k : members) {
+      const Violation& v = found[k].v;
+      const std::string item = text_of(v, "item");
+      if (std::find(items.begin(), items.end(), item) == items.end()) {
+        items.push_back(item);
+      }
+      if (k != best) {
+        others.push_back(item + " and " + text_of(v, "other") + " by " + text_of(v, "ratio"));
+      }
+    }
+    std::sort(pairs.begin(), pairs.end());
+    const std::uint32_t covers = covers_of(folded, found[best].v.known);
+    Violation v = std::move(found[best].v);
+    v.covers = covers;
+    std::erase_if(v.key, [](const DetailField& d) { return d.key == "item"; });
+    if (members.size() > 1) {
+      v.message += "; so do " + and_list(others);
+      v.detail.push_back({"items", join(items, ",")});
+      v.detail.push_back({"pairs", static_cast<std::int64_t>(members.size())});
+    }
+    reports.push_back({std::move(v), row, join(pairs, ";"), 0.0, 0.0});
+  }
+  return fold_versions(s, std::move(reports), "counts");
 }
 
 }  // namespace
@@ -194,7 +268,9 @@ const CheckInfo& ShareTermsStep::info() const noexcept {
 }
 
 void ShareTermsStep::run(const SeriesContext& context, std::vector<Violation>& out) const {
-  report(info(), context, ShareFinding::Kind::kStep, out);
+  for (RowReport& r : report(info(), context, ShareFinding::Kind::kStep)) {
+    out.push_back(std::move(r.v));
+  }
 }
 
 const CheckInfo& ShareCountMismatch::info() const noexcept {
@@ -211,7 +287,10 @@ const CheckInfo& ShareCountMismatch::info() const noexcept {
 }
 
 void ShareCountMismatch::run(const SeriesContext& context, std::vector<Violation>& out) const {
-  report(info(), context, ShareFinding::Kind::kMismatch, out);
+  for (Violation& v :
+       fold_counts(context.series, report(info(), context, ShareFinding::Kind::kMismatch))) {
+    out.push_back(std::move(v));
+  }
 }
 
 }  // namespace dorq

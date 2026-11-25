@@ -27,7 +27,7 @@ namespace {
 
 // DQ951's part of a statements series: the days it had new observed versions known,
 // its rows known each day, and its rows with a finding at warn or above, by day and
-// code.
+// code. A report that folds several (DE-12) counts what it covers.
 void summarize_revisions(const Series& series, const std::vector<Violation>& violations,
                          CrossSummary& summary) {
   const StatementRows& st = series.statements;
@@ -49,7 +49,7 @@ void summarize_revisions(const Series& series, const std::vector<Violation>& vio
   std::map<std::pair<Date, std::string>, std::int64_t> found;
   for (const Violation& v : violations) {
     if (v.period && v.known && v.severity >= Severity::kWarn) {
-      found[{*v.known, std::string{v.check->code}}] += 1;
+      found[{*v.known, std::string{v.check->code}}] += v.covers;
     }
   }
   for (const auto& [key, count] : found) {

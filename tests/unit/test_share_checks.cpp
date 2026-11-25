@@ -362,3 +362,42 @@ TEST_CASE("DQ922: a weighted-average count at a power of ten against the outstan
     }
   }
 }
+
+TEST_CASE("DE-12: DQ922 reports a period once, across basic and diluted") {
+  const TempDir dir;
+  // Both weighted-average counts of 2013 Q1 at x0.001: one condition, one report.
+  Company both;
+  both.id = "BOTH";
+  both.edit = [](int q, Counts& counts) {
+    if (q == 12) {
+      counts.weighted = std::round(counts.weighted * 0.001);
+      counts.diluted = std::round(counts.diluted * 0.001);
+    }
+  };
+  // Only the basic count of 2013 Q1: one report too, keyed the same way.
+  Company basic;
+  basic.id = "BASIC";
+  basic.edit = [](int q, Counts& counts) {
+    if (q == 12) {
+      counts.weighted = std::round(counts.weighted * 0.001);
+    }
+  };
+  const Result r = check(dir, company(both) + company(basic), nullptr);
+  INFO(r.err);
+  REQUIRE(r.status == 0);
+  const std::string key =
+      R"("record_key":{"statement":"income","period_type":"quarter","fiscal_date":"2013-03-31",)"
+      R"("version_no":1})";
+  const std::vector<std::string> b = reports(r.out, "DQ922", "BOTH");
+  REQUIRE(b.size() == 1);
+  CHECK(contains(b.front(), key));
+  CHECK(contains(b.front(), "disagree by x0.001, which no split on file explains; so do "));
+  CHECK(contains(b.front(), " and shares_outstanding by x0.001"));
+  CHECK(contains(b.front(),
+                 R"("items":"weighted_average_shares,weighted_average_shares_diluted","pairs":2)"));
+  const std::vector<std::string> one = reports(r.out, "DQ922", "BASIC");
+  REQUIRE(one.size() == 1);
+  CHECK(contains(one.front(), key));
+  CHECK(contains(one.front(), R"("item":"weighted_average_shares")"));
+  CHECK_FALSE(contains(one.front(), R"("pairs")"));
+}

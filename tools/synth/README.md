@@ -317,7 +317,7 @@ has one.
 | `absent_as_zero` | DQ915 | 6 items, reported in the quarters either side, set to 0 |
 | `cumulative_quarters` | DQ916 | 3 fiscal years whose Q2 to Q4 hold the year to date (flows) |
 | `annual_in_quarter` | DQ916 | 3 quarters holding their fiscal year's flows |
-| `identity_dropped_field`, `identity_doubled_field` | DQ903, DQ911 | 4 totals missing one of their terms, and 4 counting one twice. The term's label expects DQ903, which names it; a second, on the total, DQ911, which sees the total off its series where the term is a large part of it (and DQ915, where the total is left at 0) |
+| `identity_dropped_field`, `identity_doubled_field` | DQ903, DQ911 | 4 totals missing one of their terms, and 4 counting one twice. A label expects DQ903, which names the term; or, where the total breaks another identity that holds on the row, the total (DE-12: one change of it repairs both, so the two breaks are one report on it). A second, on the total, expects DQ911, which sees the total off its series where the term is a large part of it (and DQ915, where the total is left at 0) |
 | `split_missing` | DQ921 | 3 splits that are not on file (a context gap). A split whose quarters an event already holds is always on file and its counts right |
 | `counts_wrong_terms` | DQ921 | 3 quarters, the first known after a split on file, whose share counts are left in the old terms |
 | `share_count_unit` | DQ922, DQ921 | 4 runs of 1–3 quarters whose weighted-average shares are at ×1,000 or ×0.001, against the outstanding count of the same filings |

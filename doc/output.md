@@ -133,11 +133,47 @@ A price check's record carries its model (wrapped the same way):
 | `suggested_action` | What would fix it: `kind` (`delete_bars`, `refetch_bar`, `add_split`, `rescale`, `rescale_volume`, `split_history`, `redate_split`, `check_split`, `delete_split`, `fix_split_ratio`, `fix_dividend`, `check_dividend_frequency`, `check_distribution`) and its fields, or `null`. dorq never changes data |
 | `provisional` | `true` when the violation was judged with fewer bars after it than the model needs; a later run may change it. Its severity is at most `warn`. A price finding (DQ201 to DQ205) that is provisional also carries `detail.pending`: `true` when the bar alone does not settle it, and it is then at most `[price] provisional_severity`, info by default ([DQ201](checks/DQ201.md#the-newest-bars)) |
 | `record_key` | `{"trade_date": "..."}`, or `{"line": N}` when there is no date. A check that can report two rows for one series and date adds what tells them apart: DQ601 adds `"ratio"` (`{"trade_date": "2026-10-06", "ratio": "2:1"}`), since one date can hold a 2:1 cohort and a 3:2 one. A statement finding is keyed by its period: `{"statement": "income", "period_type": "quarter", "fiscal_date": "2024-06-30", "version_no": 1}`, with no `version_no` for a finding on the whole period and an `"item"`, `"identity"` or `"tie"` for one on an item, identity or tie, or a
-`"scope"` (`"row"`, `"era"`) for one on a whole row or a run of rows (DQ912). One whose statement could not be read is keyed `{"fiscal_date": ...}`, or by its line |
+`"scope"` (`"row"`, `"era"`) for one on a whole row or a run of rows (DQ912). One whose statement could not be read is keyed `{"fiscal_date": ...}`, or by its line. One condition is one report, and so one key: versions that carry the same value or gap, the identities one field breaks, a period's basic and diluted counts, and a day's restatements fold ([below](#record-keys-in-0180)) |
 | `dorq` | The version (`0.15.0`, or `0.15.0-dev` from a build that is not the tagged release: [CONTRIBUTING.md](../CONTRIBUTING.md#versioning-and-releasing)), and the hash of the settings that can change what is reported. `dorq config show`, given the run's options, prints it; [configuration.md](configuration.md#what-config_hash-covers) lists what it covers. A reference calendar counts by its content, not its path |
 
 Numbers are written in their shortest exact form. A value that is not a finite
 number is written as `null`.
+
+### Record keys in 0.18.0
+
+From 0.18.0 one condition is one report (DE-12), so four checks' keys change. A
+caller that keys conditions on `record_key`, as fafnir's `condition_key` does,
+maps a key from an earlier version to the report that now holds it. Every other
+check's key is as it was, and a DQ902 or DQ903 condition on one version only
+keeps its key.
+
+| Check | Before 0.18.0 | From 0.18.0 | An old key maps to |
+|---|---|---|---|
+| DQ902 | a report a version and `item` (and `bound`) | a period's versions that carry the same value are one report, keyed on the first of them (in the order they became known); `detail.version_nos` lists them | the period's report with the same `item` (and `bound`) whose `version_no` is the old key's, or whose `detail.version_nos` holds it |
+| DQ903 | a report a version and `identity`, with `item` for a field error | a row's identities that one change of one field repairs are one report, with `item` (the field) and no `identity`, and `detail.identities`; then a period's versions that carry the same gap are one, keyed on the first, with `detail.version_nos` | the period's report that names the old key's `identity`, in `record_key` or in `detail.identities`, on its version (`version_no`, or in `detail.version_nos`) |
+| DQ903, chronic | a report an `identity` and period type | the chronic breaks one field folds are one, with `item` and no `identity` | the period type's chronic report that names the `identity`, in `record_key` or in `detail.identities` |
+| DQ922 | a report an income row and `item` (each weighted average, basic and diluted) | a report an income row, with no `item`; `detail.items` lists the weighted averages. A version that repeats the same counts folds into the first | the old key without `item`, or the report whose `detail.version_nos` holds its version |
+| DQ932 | a report a pair of versions, keyed on the version reported | a report a series, day the new version became known and side found wrong (new or old), keyed on the day's first period's version, with `known_from` (the day) | the report whose key is the old key with a `known_from`, or whose `detail.restated` lists the old key's period and version (`income quarter 2014-06-30 v2`) |
+
+For example, before 0.18.0 a total assets that counts the noncurrent assets twice,
+in v1 and in its restatement v2, was four DQ903 reports:
+
+```
+{"statement":"balance_sheet","period_type":"quarter","fiscal_date":"2010-09-30","version_no":1,"identity":"assets_split","item":"total_noncurrent_assets"}
+{"statement":"balance_sheet","period_type":"quarter","fiscal_date":"2010-09-30","version_no":1,"identity":"balance_sheet"}
+{"statement":"balance_sheet","period_type":"quarter","fiscal_date":"2010-09-30","version_no":2,"identity":"assets_split","item":"total_noncurrent_assets"}
+{"statement":"balance_sheet","period_type":"quarter","fiscal_date":"2010-09-30","version_no":2,"identity":"balance_sheet"}
+```
+
+From 0.18.0 it is one, whose detail holds `"identities":"assets_split,balance_sheet"`
+and `"version_nos":"1,2"`:
+
+```
+{"statement":"balance_sheet","period_type":"quarter","fiscal_date":"2010-09-30","version_no":1,"item":"total_assets"}
+```
+
+A report that folds several counts them for DQ951: the reports it folds that are
+known on its knowledge date, at warn or above.
 
 ## json
 
@@ -196,7 +232,9 @@ One JSON object per line, shaped as a row of fafnir's `ops.data_quality_flag`:
 - `record_key` keeps fafnir's `{"trade_date": ...}` shape, so fafnir's
   once-per-condition deduplication works unchanged. A statement finding's names
   its statement, period and version, the shape fafnir's own statement checks use,
-  so two items, statements or versions of one period are two conditions. Cross-sectional rows have a
+  so two items, statements or versions of one period are two conditions, unless
+  they carry one: from 0.18.0 that is one report
+  ([record keys in 0.18.0](#record-keys-in-0180)). Cross-sectional rows have a
   `null` `security_id`, so their key must tell one condition from another on its
   own: DQ601's adds the cohort's `ratio` (from 0.10.0; two cohorts on one date
   were merged before). DQ303 and DQ602 report at most one row a date, and DQ304

@@ -12,7 +12,9 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "checks/statement_rows.hpp"
@@ -587,7 +589,19 @@ std::string explanation(Gap best, const GapEvidence& e, const Terms& terms, Peri
   return "no term explains it, and the series breaks in " + history_text(e.rate, type);
 }
 
-Violation report_gap(const CheckInfo& info, const SeriesContext& context, const Terms& terms,
+// A row's DQ903 report, before the folds (DE-12): its gap and tolerance, the
+// identity it is on (an index into the run's identities), and what its winning
+// explanation says.
+struct GapReport {
+  Violation v;
+  std::size_t row = 0;
+  std::size_t identity = 0;
+  double gap = 0.0;
+  double tolerance = 0.0;
+  std::string explanation;
+};
+
+GapReport report_gap(const CheckInfo& info, const SeriesContext& context, const Terms& terms,
                      const Judged& j, const GapEvidence& e, std::size_t i) {
   const Series& s = context.series;
   const StatementSettings& settings = context.statement_config();
@@ -605,8 +619,9 @@ Violation report_gap(const CheckInfo& info, const SeriesContext& context, const 
   v.classification = p_error >= 0.5 ? Classification::kDataError : Classification::kMarketFact;
   v.severity = context.thresholds.for_probability(p_error).value_or(Severity::kInfo);
   const std::string& name = terms.identity->name;
+  std::string why = explanation(best, e, terms, type);
   v.message = name + " is off by " + amount_text(j.gap) + " (tolerance " +
-              amount_text(j.tolerance) + "): " + explanation(best, e, terms, type);
+              amount_text(j.tolerance) + "): " + why;
   v.key.push_back({"identity", name});
   v.detail.push_back({"identity", name});
   v.detail.push_back({"equation", terms.identity->to_string()});
@@ -662,7 +677,7 @@ Violation report_gap(const CheckInfo& info, const SeriesContext& context, const 
     v.evidence.push_back({"gap_fits_series", *e.gap_fits, *e.gap_fits ? kGapFits : kGapApart,
                           "the series' other gaps, as a share of the largest term"});
   }
-  return v;
+  return GapReport{std::move(v), i, 0, j.gap, j.tolerance, std::move(why)};
 }
 
 // A chronic break (DE-11): the identity or tie fails in most periods of a type.
@@ -726,8 +741,24 @@ Violation chronic_finding(const CheckInfo& info, const SeriesContext& context,
   return v;
 }
 
-void judge_identity(const CheckInfo& info, const SeriesContext& context, const Terms& terms,
-                    std::vector<Violation>& out) {
+// A chronic break's report, with its numbers and the line it spans.
+struct ChronicReport {
+  Violation v;
+  Chronic c;
+  std::vector<std::size_t> line;
+};
+
+// One identity's reports: one for each row it fails on, and its chronic breaks by
+// period type, with the rows in force that fail.
+struct IdentityReports {
+  std::vector<GapReport> rows;
+  std::array<std::optional<ChronicReport>, 2> chronic;
+  std::array<std::vector<std::size_t>, 2> broken;
+};
+
+IdentityReports judge_identity(const CheckInfo& info, const SeriesContext& context,
+                               const Terms& terms, std::size_t identity) {
+  IdentityReports out;
   const Series& s = context.series;
   const StatementRows& st = s.statements;
   const StatementSettings& settings = *context.statement_settings;
@@ -774,26 +805,298 @@ void judge_identity(const CheckInfo& info, const SeriesContext& context, const T
     }
     e.match_bf = chance_evidence(matched, others, kChanceMatch, kMatchPower, kMatch);
     e.cancel_bf = chance_evidence(cancelled, others, kChanceCancel, kCancelPower, kCancel);
-    out.push_back(report_gap(info, context, terms, judged[i], e, i));
+    out.rows.push_back(report_gap(info, context, terms, judged[i], e, i));
+    out.rows.back().identity = identity;
   }
   for (const PeriodType type : {PeriodType::kQuarter, PeriodType::kAnnual}) {
-    const auto& line = lines.at(type == PeriodType::kAnnual ? 1 : 0);
-    std::size_t breaks = 0;
+    const std::size_t t = type == PeriodType::kAnnual ? 1 : 0;
+    const auto& line = lines.at(t);
     std::vector<double> shares;
     for (const std::size_t r : line) {
       if (judged[r].broken()) {
-        ++breaks;
+        out.broken.at(t).push_back(r);
         shares.push_back(judged[r].gap / judged[r].scale);
       }
     }
-    if (const std::optional<Chronic> c = chronic_of(breaks, line.size(), shares, settings)) {
+    if (const std::optional<Chronic> c =
+            chronic_of(out.broken.at(t).size(), line.size(), shares, settings)) {
       const std::string& name = terms.identity->name;
       Violation v =
           chronic_finding(info, context, line, *c, st.statement[line.front()], type, name);
       v.key.insert(v.key.begin(), {"identity", name});
       v.detail.insert(v.detail.begin(), {"identity", name});
       v.detail.push_back({"equation", terms.identity->to_string()});
-      out.push_back(std::move(v));
+      out.chronic.at(t) = ChronicReport{std::move(v), *c, line};
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// DE-12: one field's breaks, one report
+
+// The term of an identity that is `item`, or nullopt.
+std::optional<std::size_t> term_of(const Terms& terms, const std::string& item) {
+  for (std::size_t k = 0; k < terms.names.size(); ++k) {
+    if (*terms.names[k] == item) {
+      return k;
+    }
+  }
+  return std::nullopt;
+}
+
+// A field of a row one change of which repairs identities it fails: each one's gap
+// is the field's sign in it times the change, within the larger tolerance.
+struct FieldFold {
+  std::string field;
+  std::vector<std::size_t> members;  // indexes into the row's reports
+  double value = 0.0;                // the field's stored value
+  double change = 0.0;               // the stored value less the one that repairs them
+  bool fits = false;                 // the repaired value sits with the field's neighbours better
+  bool total = false;                // the field is the total of one of them
+};
+
+// The field that folds the most of a row's reports, if one folds two: where two
+// fields fold as many, the one whose repaired value sits with its neighbours, then
+// one that is a total. `line` is the row's statement and period type in force.
+std::optional<FieldFold> best_fold(const Series& s, const std::vector<Terms>& terms,
+                                   const std::vector<const GapReport*>& reports,
+                                   const std::vector<std::size_t>& line) {
+  std::optional<FieldFold> best;
+  const auto rank = [](const FieldFold& f) {
+    return std::tuple{f.members.size(), f.fits, f.total};
+  };
+  for (std::size_t a = 0; a < reports.size(); ++a) {
+    const Terms& ta = terms[reports[a]->identity];
+    const std::size_t row = reports[a]->row;
+    for (std::size_t q = 0; q < ta.names.size(); ++q) {
+      const double x = (*ta.columns[q])[row];
+      if (std::isnan(x)) {
+        continue;  // a null_is_zero term read as 0: no stored value to be wrong
+      }
+      FieldFold f;
+      f.field = *ta.names[q];
+      f.value = x;
+      f.change = reports[a]->gap / ta.signs[q];
+      f.members.push_back(a);
+      f.total = ta.left[q];
+      for (std::size_t b = 0; b < reports.size(); ++b) {
+        const Terms& tb = terms[reports[b]->identity];
+        const std::optional<std::size_t> qb = b == a ? std::nullopt : term_of(tb, f.field);
+        if (qb && std::fabs(reports[b]->gap / tb.signs[*qb] - f.change) <=
+                      std::max(reports[a]->tolerance, reports[b]->tolerance)) {
+          f.members.push_back(b);
+          f.total = f.total || tb.left[*qb];
+        }
+      }
+      if (f.members.size() < 2) {
+        continue;
+      }
+      std::vector<double> around;
+      for (const std::size_t r : neighbours_of(s, line, row)) {
+        if (!std::isnan((*ta.columns[q])[r])) {
+          around.push_back((*ta.columns[q])[r]);
+        }
+      }
+      const double usual =
+          around.size() >= 2 ? median(around) : std::numeric_limits<double>::quiet_NaN();
+      f.fits = std::isnan(usual) || std::fabs(x - f.change - usual) < std::fabs(x - usual);
+      if (!best || rank(*best) < rank(f)) {
+        best = std::move(f);
+      }
+    }
+  }
+  return best;
+}
+
+// A row's reports one field folds, as one report keyed on the field: the
+// strongest's model, the identities in its detail, and the value that repairs
+// them.
+RowReport merge_reports(const std::vector<Terms>& terms, std::vector<GapReport*> members,
+                        const FieldFold& f) {
+  std::sort(members.begin(), members.end(),
+            [](const GapReport* a, const GapReport* b) { return a->identity < b->identity; });
+  GapReport* rep = members.front();
+  std::vector<std::string> names;
+  std::vector<const Violation*> folded;
+  double tolerance = 0.0;
+  for (GapReport* m : members) {
+    if (m->v.p_error > rep->v.p_error) {
+      rep = m;
+    }
+    names.push_back(terms[m->identity].identity->name);
+    folded.push_back(&m->v);
+    tolerance = std::max(tolerance, m->tolerance);
+  }
+  const std::uint32_t covers = covers_of(folded, rep->v.known);
+  const std::string list = and_list(names);
+  const std::string identities = join(names, ",");
+  const double should_be = f.value - f.change;
+  Violation v = std::move(rep->v);
+  v.covers = covers;
+  v.key.clear();
+  v.key.push_back({"item", f.field});
+  std::vector<DetailField> detail{
+      {"identities", identities}, {"field", f.field}, {"value", f.value}, {"should_be", should_be}};
+  for (DetailField& d : v.detail) {
+    if (d.key == "field") {
+      // The term the strongest's gap names, where it is not the field.
+      if (const auto* term = std::get_if<std::string>(&d.value);
+          term != nullptr && *term != f.field) {
+        detail.push_back({"term", *term});
+      }
+      continue;
+    }
+    detail.push_back(std::move(d));
+  }
+  v.detail = std::move(detail);
+  v.message = f.field + " (" + amount_text(f.value) + ") is off by " + amount_text(f.change) +
+              ": " + list + " fail by it, and hold at " + amount_text(should_be) + "; in " +
+              terms[rep->identity].identity->name + ", " + rep->explanation;
+  if (v.classification == Classification::kDataError) {
+    v.suggested_action = SuggestedAction{
+        "check_item",
+        {{"item", f.field}},
+        "check " + f.field + ": at " + amount_text(should_be) + " " + list + " hold"};
+  }
+  v.evidence.push_back({"shared_field", f.field, 0.0, "one change of it repairs " + list});
+  return RowReport{std::move(v), rep->row, "field=" + f.field + ";identities=" + identities,
+                   f.change, tolerance};
+}
+
+RowReport single_report(const std::vector<Terms>& terms, GapReport& g) {
+  return RowReport{std::move(g.v), g.row, "identity=" + terms[g.identity].identity->name, g.gap,
+                   g.tolerance};
+}
+
+// The identities' chronic breaks of a period type that one field folds in most of
+// their periods: one report, keyed on the field.
+Violation merge_chronic(const CheckInfo& info, const SeriesContext& context,
+                        const std::vector<Terms>& terms,
+                        const std::vector<std::pair<std::size_t, ChronicReport*>>& members,
+                        const std::string& field, PeriodType type) {
+  const ChronicReport* rep = members.front().second;
+  std::vector<std::string> names;
+  std::vector<const Violation*> folded;
+  for (const auto& [identity, c] : members) {
+    if (std::tuple{c->v.severity, c->c.median_share} >
+        std::tuple{rep->v.severity, rep->c.median_share}) {
+      rep = c;
+    }
+    names.push_back(terms[identity].identity->name);
+    folded.push_back(&c->v);
+  }
+  const Series& s = context.series;
+  Violation v =
+      chronic_finding(info, context, rep->line, rep->c, s.statements.statement[rep->line.front()],
+                      type, field + ", in " + and_list(names) + ",");
+  v.covers = covers_of(folded, v.known);
+  v.key.insert(v.key.begin(), {"item", field});
+  v.detail.insert(v.detail.begin(), {{"identities", join(names, ",")}, {"field", field}});
+  return v;
+}
+
+// DQ903's reports, folded (DE-12): a row's breaks that one field repairs are one
+// report on the field; a period's versions that carry one condition are one, on the
+// first; and the chronic breaks one field makes are one.
+void fold_identities(const CheckInfo& info, const SeriesContext& context,
+                     const std::vector<Terms>& terms, std::vector<IdentityReports>& judged,
+                     std::vector<Violation>& out) {
+  const Series& s = context.series;
+  const StatementRows& st = s.statements;
+  const StatementSettings& settings = context.statement_config();
+  std::map<std::pair<Statement, PeriodType>, std::vector<std::size_t>> lines;
+  std::vector<bool> in_force(st.size(), false);
+  for (const std::size_t r : context.statements->in_force) {
+    lines[{st.statement[r], st.period_type[r]}].push_back(r);
+    in_force[r] = true;
+  }
+  std::vector<GapReport*> all;
+  for (IdentityReports& j : judged) {
+    for (GapReport& g : j.rows) {
+      all.push_back(&g);
+    }
+  }
+  std::stable_sort(all.begin(), all.end(),
+                   [](const GapReport* a, const GapReport* b) { return a->row < b->row; });
+  // The rows in force each field folds, by period type and identity: for the
+  // chronic breaks.
+  std::array<std::map<std::string, std::map<std::size_t, std::size_t>>, 2> by_field;
+  std::vector<RowReport> rows;
+  for (std::size_t a = 0; a < all.size();) {
+    std::size_t b = a;
+    while (b < all.size() && all[b]->row == all[a]->row) {
+      ++b;
+    }
+    const std::size_t row = all[a]->row;
+    std::vector<GapReport*> here(all.begin() + static_cast<std::ptrdiff_t>(a),
+                                 all.begin() + static_cast<std::ptrdiff_t>(b));
+    while (here.size() >= 2) {
+      const std::optional<FieldFold> f = best_fold(s, terms, {here.begin(), here.end()},
+                                                   lines[{st.statement[row], st.period_type[row]}]);
+      if (!f) {
+        break;
+      }
+      std::vector<GapReport*> members;
+      for (const std::size_t m : f->members) {
+        members.push_back(here[m]);
+        if (in_force[row]) {
+          const std::size_t t = st.period_type[row] == PeriodType::kAnnual ? 1 : 0;
+          ++by_field.at(t)[f->field][here[m]->identity];
+        }
+      }
+      std::erase_if(here, [&members](const GapReport* g) {
+        return std::find(members.begin(), members.end(), g) != members.end();
+      });
+      rows.push_back(merge_reports(terms, std::move(members), *f));
+    }
+    for (GapReport* g : here) {
+      rows.push_back(single_report(terms, *g));
+    }
+    a = b;
+  }
+  std::vector<Violation> folded = fold_versions(s, std::move(rows), "gap");
+  out.insert(out.end(), std::make_move_iterator(folded.begin()),
+             std::make_move_iterator(folded.end()));
+  // A chronic break folds into a field's where the field folds at least
+  // chronic_share of the identity's breaks in force; the field that folds the most
+  // first.
+  for (const PeriodType type : {PeriodType::kQuarter, PeriodType::kAnnual}) {
+    const std::size_t t = type == PeriodType::kAnnual ? 1 : 0;
+    std::vector<std::pair<std::size_t, const std::string*>> fields;
+    for (const auto& [field, counts] : by_field.at(t)) {
+      std::size_t total = 0;
+      for (const auto& [identity, n] : counts) {
+        total += n;
+      }
+      fields.emplace_back(total, &field);
+    }
+    std::stable_sort(fields.begin(), fields.end(),
+                     [](const auto& x, const auto& y) { return x.first > y.first; });
+    std::vector<bool> used(judged.size(), false);
+    for (const auto& [total, field] : fields) {
+      std::vector<std::pair<std::size_t, ChronicReport*>> members;
+      for (const auto& [identity, n] : by_field.at(t).at(*field)) {
+        std::optional<ChronicReport>& c = judged[identity].chronic.at(t);
+        if (c && !used[identity] &&
+            static_cast<double>(n) >=
+                settings.chronic_share *
+                    static_cast<double>(judged[identity].broken.at(t).size())) {
+          members.emplace_back(identity, &*c);
+        }
+      }
+      if (members.size() < 2) {
+        continue;
+      }
+      out.push_back(merge_chronic(info, context, terms, members, *field, type));
+      for (const auto& member : members) {
+        used[member.first] = true;
+      }
+    }
+    for (std::size_t k = 0; k < judged.size(); ++k) {
+      if (judged[k].chronic.at(t) && !used[k]) {
+        out.push_back(std::move(judged[k].chronic.at(t)->v));
+      }
     }
   }
 }
@@ -1447,11 +1750,18 @@ void IdentityBreak::run(const SeriesContext& context, std::vector<Violation>& ou
   if (s.kind != SeriesKind::kStatements || settings == nullptr || context.statements == nullptr) {
     return;
   }
+  std::vector<Terms> terms;
   for (const Identity& identity : settings->identities) {
-    if (const std::optional<Terms> terms = terms_of(s, identity, *settings)) {
-      judge_identity(info(), context, *terms, out);
+    if (std::optional<Terms> t = terms_of(s, identity, *settings)) {
+      terms.push_back(std::move(*t));
     }
   }
+  std::vector<IdentityReports> judged;
+  judged.reserve(terms.size());
+  for (std::size_t k = 0; k < terms.size(); ++k) {
+    judged.push_back(judge_identity(info(), context, terms[k], k));
+  }
+  fold_identities(info(), context, terms, judged, out);
 }
 
 const CheckInfo& PeriodTie::info() const noexcept {

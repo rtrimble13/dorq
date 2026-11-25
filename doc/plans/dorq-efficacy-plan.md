@@ -157,8 +157,8 @@ Keys follow the caller's plan, so one key means one item in both repositories.
 |---|---|---|---|---|
 | 0 Measurement | [DE-01](https://github.com/rtrimble13/dorq/issues/41) | Survey-weighted evaluation: labels carry an optional `weight` (1/inclusion probability) and `sample` id; dorq-eval and `calibrate` use them; dorq-eval compares two engines on one label set with a paired test and intervals | M | merged: [#56](https://github.com/rtrimble13/dorq/pull/56) |
 | | [DE-02](https://github.com/rtrimble13/dorq/issues/42) | Calibration honours `verified` (weight or exclude, configurable); one p_error map per code; the fixed-p rules emit a raw score the map can take | M | merged: [#57](https://github.com/rtrimble13/dorq/pull/57) |
-| 1 Precision | [DE-11](https://github.com/rtrimble13/dorq/issues/43) | A series-level structural model for identities and ties (DQ903, DQ904): per (series, identity or tie, period type) a break rate shrunk to the cross-section, and a gap distribution; "unexplained" no longer counts as error by default (`[statements] unexplained_is_error`); DQ904 gets a posterior; chronic breaks become one series-level report | L | 🔄 on branch `claude/wizardly-einstein-pgcegr`, for 0.17.0 (§4.1) |
-| | [DE-12](https://github.com/rtrimble13/dorq/issues/44) | One condition, one report: fold versions with the same gap or value, identities broken by one field, and basic and diluted counts. Record keys change; a minor version | M | ⬜ |
+| 1 Precision | [DE-11](https://github.com/rtrimble13/dorq/issues/43) | A series-level structural model for identities and ties (DQ903, DQ904): per (series, identity or tie, period type) a break rate shrunk to the cross-section, and a gap distribution; "unexplained" no longer counts as error by default (`[statements] unexplained_is_error`); DQ904 gets a posterior; chronic breaks become one series-level report | L | merged: [#64](https://github.com/rtrimble13/dorq/pull/64), released in 0.17.0 (§4.1) |
+| | [DE-12](https://github.com/rtrimble13/dorq/issues/44) | One condition, one report: fold versions with the same gap or value, identities broken by one field, and basic and diluted counts. Record keys change; a minor version | M | 🔄 on branch `claude/wizardly-einstein-pgcegr`, for 0.18.0 (§4.1) |
 | | [DE-13](https://github.com/rtrimble13/dorq/issues/45) | Provisional means pending: with the evidence after a bar missing, report at info unless the posterior without those terms reaches the error band and an independent term agrees (OHLC inconsistency, zero volume on a liquid series, an implausible level, peers). `kBlockDecay` and `revert_max_bars` become calibratable | M | merged: [#59](https://github.com/rtrimble13/dorq/pull/59), released in 0.16.0 (§4.1) |
 | | [DE-14](https://github.com/rtrimble13/dorq/issues/46) | DQ403, DQ107 and DQ705 become models (pooled rates across class, move size against the grid, an indicative-quote hypothesis) or default to info; their priors move to config | M | merged: [#61](https://github.com/rtrimble13/dorq/pull/61), released in 0.16.0 (§4.1) |
 | 2 Recall | [DE-21](https://github.com/rtrimble13/dorq/issues/47) | Cross-sectional evidence in both directions: (a) a latent "load failed on date d for group g" from every series' own miss probability, thin ones included, with group keys configurable from `--meta` (`[coverage] cohort_by`), feeding each member's DQ301 posterior both ways; (b) DQ601 takes provisional moves; (c) the sibling term enters the posterior before severity | L | ⬜ |
@@ -261,6 +261,36 @@ is re-measured. The next phase starts from that evidence, not from this table.
     are 61% of statements at warn+, and DQ904's precision on EDGAR-verified
     conditions was 0.21. With `dorq calibrate`'s `[statements.break_rates]` from
     the host, the cross-section's rates are fafnir's own.
+- **2026-11-25.** DE-11 merged ([#64](https://github.com/rtrimble13/dorq/pull/64)) and
+  published itself as 0.17.0. DE-12 is implemented on `claude/wizardly-einstein-pgcegr`,
+  for 0.18.0: one condition, one report.
+  - DQ902, DQ903 and DQ922 fold a period's versions that carry the same value, gap
+    or counts into one report, placed on the first version that carries it. Its
+    key is that version's own, so a restatement repeating a condition no longer
+    changes or adds a key. The issue asked for one keyed "on the period"; keying it
+    on its first version keeps the key a single version's report already has, and
+    keeps two conditions of one period apart without another field.
+  - DQ903 reports the identities one change of one field repairs as one report on
+    the field (`item`, `detail.identities`, the value that repairs them), and the
+    chronic breaks one field makes as one. DQ922 reports a period's basic and
+    diluted counts once, keyed with no `item`. DQ932 is one report a series, day
+    the new version became known and side found wrong, keyed with `known_from`;
+    its knowledge date is the newer version's, so `--since` keeps an old version
+    found wrong on the night its correction arrives.
+  - A report records what it folds (`covers`), and DQ951 counts a day's findings
+    by it, as before. doc/output.md maps every old key to its report (fafnir DE-16,
+    fafnir#272).
+  - dorq-synth: where a dropped or doubled term's total breaks a second identity
+    that holds, DQ903's label is on the total, the value DQ903 now names.
+  - Synthetic effect (seeds 1-8, against 0.17.0 on the same universes): DQ903 at
+    warn+ from 234 to 192 reports, its 66 labels all found; DQ932 from 47 to 45;
+    every other code as before; no fault 0.17.0 found is lost, and DQ911 finds 104
+    of its 128 labels against 100. Gates hold on 7 of 8 seeds (the eighth as under
+    0.17.0). The synthetic universe keeps faults clear of restatements, so the
+    version folds and DQ922's are held by golden tests.
+  - **Effect on the audit: not yet measured.** The review found one report per
+    version, per identity and per share type (§3.2); the re-measure counts how many
+    of fafnir's conditions fold on 0.18.0, once fafnir maps the keys (DE-16).
 
 ## 5. Generality rules for this plan
 

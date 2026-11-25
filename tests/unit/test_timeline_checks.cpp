@@ -1,6 +1,7 @@
 // M9, DR-0909: the knowledge timeline and revisions, DQ931 filing-date-implausible,
 // DQ932 restatement-implausible and DQ951 revision-cohort, through the CLI.
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -353,4 +354,67 @@ TEST_CASE("DQ951: a backfill is one cohort at info; a night's load at x1000 one 
   }
   // An ordinary restatement in the backfill is no DQ932 at all.
   CHECK(reports(r.out, "DQ932", "C100", true).empty());
+}
+
+TEST_CASE("DE-12: DQ932 is one report a series, day the new version became known, and side") {
+  const TempDir dir;
+  const Date day = Date::from_ymd(2016, 3, 1);
+  const Date later = Date::from_ymd(2016, 6, 1);
+  Company batch;
+  batch.id = "BATCH";
+  // On 2016-03-01 a batch restates 2014's first three quarters' income at x1000 (the
+  // new versions wrong), and corrects 2013 Q1's balance sheet, filed at x0.001 (the
+  // old version wrong); on 2016-06-01 another restates 2014 Q4's at x1000.
+  batch.first_edit = [](int q, const std::string& s, Values& v) {
+    if (q == 12 && s == "balance_sheet") {
+      times(v, 0.001);
+    }
+  };
+  const auto thousand = [](Values& v) { times(v, 1000); };
+  batch.restated = {{16, "income", day, thousand},
+                    {17, "income", day, thousand},
+                    {18, "income", day, thousand},
+                    {12, "balance_sheet", day, [](Values&) {}},
+                    {19, "income", later, thousand}};
+  const Result r = check(dir, company(batch));
+  INFO(r.err);
+  REQUIRE(r.status == 0);
+  std::vector<std::string> keys;
+  for (const std::string& line : reports(r.out, "DQ932", "BATCH", true)) {
+    const auto at = line.find(R"("record_key":)");
+    keys.push_back(line.substr(at + 13, line.find('}', at) - at - 12));
+  }
+  std::sort(keys.begin(), keys.end());
+  const std::vector<std::string> expected{
+      R"({"statement":"balance_sheet","period_type":"quarter","fiscal_date":"2013-03-31",)"
+      R"("version_no":1,"known_from":"2016-03-01"})",
+      R"({"statement":"income","period_type":"quarter","fiscal_date":"2014-03-31",)"
+      R"("version_no":2,"known_from":"2016-03-01"})",
+      R"({"statement":"income","period_type":"quarter","fiscal_date":"2014-12-31",)"
+      R"("version_no":2,"known_from":"2016-06-01"})",
+  };
+  CHECK(keys == expected);
+  const std::vector<std::string> income = reports(r.out, "DQ932", "BATCH");
+  const auto batch_report = std::find_if(income.begin(), income.end(), [](const std::string& l) {
+    return contains(l, R"("fiscal_date":"2014-03-31")");
+  });
+  REQUIRE(batch_report != income.end());
+  CHECK(contains(*batch_report,
+                 "the new version is wrong; so do 2 other periods restated on "
+                 "2016-03-01: income quarter 2014-"));
+  CHECK(contains(*batch_report, R"("periods":3,"restated":"income quarter 2014-03-31 v2,)"
+                                R"(income quarter 2014-06-30 v2,income quarter 2014-09-30 v2")"));
+  CHECK(contains(*batch_report, R"("known_from":"2016-03-01")"));
+
+  // The corrected old version is news on the day the new one became known: --since
+  // that day keeps it.
+  const std::string file = (dir.path() / "s.csv").string();
+  const std::string items = (dir.path() / "items.csv").string();
+  const std::string config = (dir.path() / "st.toml").string();
+  const Result since = run_in(
+      dir.path(), {"--config", config.c_str(), "--items", items.c_str(), "--select", "DQ932",
+                   "--since", "2016-03-01", "--format", "jsonl", "--exit-zero", file.c_str()});
+  REQUIRE(since.status == 0);
+  CHECK(contains(since.out,
+                 R"("fiscal_date":"2013-03-31","version_no":1,"known_from":"2016-03-01")"));
 }
